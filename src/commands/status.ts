@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { c, log, spinner } from '../utils/log';
+import { c, log } from '../utils/log';
+import { loader } from '../utils/loader';
 import { loadRuntime } from '../utils/store';
 import { SyncStateFile, STATE_VERSION } from '../sync/stateFile';
 import { CliError, ExitCode } from '../utils/exit';
@@ -18,7 +19,7 @@ export function registerStatusCommand(program: Command): void {
             let connectError: string | null = null;
             const counts = { pages: 0, components: 0, scripts: 0, assets: 0 };
 
-            const spin = opts.json ? null : spinner(`Checking ${rt.config.apiUrl}…`);
+            const spin = opts.json ? null : loader('Checking connection');
             try {
                 try {
                     connected = await api.ping(rt.config.brandId);

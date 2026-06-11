@@ -94,21 +94,25 @@ your-project/
 ├── .ef/
 │   ├── config.json   # api url, brand id, sync root, save mode
 │   └── auth          # API key (chmod 600)
-├── elasticfunnels/   # default sync root
-│   └── 123/          # brand id
-│       ├── pages/
-│       │   ├── home.ef
-│       │   └── pricing.ef
-│       ├── components/
-│       │   └── header.ef
-│       ├── scripts/
-│       │   └── welcome-email.js
-│       ├── assets/
-│       │   └── images/logo.png
-│       ├── variables.json
-│       └── .ef-state.json   # baselines (content hashes, revisions)
+├── elasticfunnels/   # default sync root (brand id lives in config, not the path)
+│   ├── pages/
+│   │   ├── home.ef
+│   │   └── pricing.ef
+│   ├── components/
+│   │   └── header.ef
+│   ├── scripts/
+│   │   └── welcome-email.js
+│   ├── assets/
+│   │   └── images/logo.png
+│   ├── variables.json
+│   └── .ef-state.json   # baselines (content hashes, revisions)
 └── .gitignore        # `.ef` added automatically by `ef init`
 ```
+
+This is the default **flat** layout — identical to the VS Code extension, so
+the same folder is interchangeable between the two tools. If you'd rather keep
+several brands side by side under one sync root, pass `--sync-layout nested`
+and each brand's files land under `elasticfunnels/<brandId>/…` instead.
 
 ## Auth model
 
@@ -287,13 +291,14 @@ a `.ef` file in either, save it, and the meta line round-trips cleanly.
 
 ### Where they differ
 
-The CLI is **multi-brand-aware**; the extension binds one VS Code workspace
-to exactly one brand. As a result the on-disk layouts diverge:
+By default the on-disk file layout is **identical** — both bind one folder to
+one brand and write `elasticfunnels/pages/…`, `components/…`, etc. The two
+differences are where credentials live and the `.ef-state.json` schema:
 
 | Concern | VS Code extension | CLI |
 | --- | --- | --- |
 | Config storage | `.vscode/settings.json` (workspace) | `.ef/config.json` + `.ef/auth` |
-| Brand root | `<workspace>/elasticfunnels/` | `<project>/elasticfunnels/<brandId>/` |
+| Brand root | `<workspace>/elasticfunnels/` | `<project>/elasticfunnels/` (same; `…/<brandId>/` only with `--sync-layout nested`) |
 | `.ef-state.json` location | brand root | brand root |
 | `.ef-state.json` schema | `pagesById`, `pathToPageId`, … (`version: 2`) | `pages`, `components`, … keyed by path (`version: 1`) |
 

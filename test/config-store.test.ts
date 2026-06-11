@@ -35,7 +35,7 @@ test('persistLogin writes config + auth, sets perms, gitignores .ef', async () =
         assert.equal(cfg.apiUrl, 'https://example.test');
         assert.equal(cfg.brandId, 99);
         assert.equal(cfg.syncRoot, 'elasticfunnels');
-        assert.equal(cfg.syncLayout, 'nested');
+        assert.equal(cfg.syncLayout, 'flat');
         assert.equal(cfg.saveMode, 'draft');
 
         const authBody = await fs.promises.readFile(path.join(root, '.ef', 'auth'), 'utf8');
@@ -68,6 +68,26 @@ test('loadRuntime walks up from a subdirectory to find .ef/', async () => {
         assert.equal(rt.projectRoot, root);
         assert.equal(rt.config.brandId, 7);
         assert.equal(rt.apiKey, 'k');
+        // Default layout is flat: brand root is the sync root, no brand-id folder.
+        assert.equal(rt.config.syncLayout, 'flat');
+        assert.equal(rt.brandRoot, path.join(root, 'elasticfunnels'));
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('loadRuntime syncLayout nested puts brand root under the brand id', async () => {
+    const root = await tmpDir();
+    try {
+        await persistLogin({
+            projectRoot: root,
+            apiUrl: 'https://example.test',
+            apiKey: 'k',
+            brandId: 7,
+            syncLayout: 'nested',
+        });
+        const rt = await loadRuntime({ startDir: root });
+        assert.equal(rt.config.syncLayout, 'nested');
         assert.equal(rt.brandRoot, path.join(root, 'elasticfunnels', '7'));
     } finally {
         await fs.promises.rm(root, { recursive: true, force: true });
@@ -125,8 +145,8 @@ test('clearLogin removes config + auth without touching synced files', async () 
     const root = await tmpDir();
     try {
         await persistLogin({ projectRoot: root, apiUrl: 'https://x', apiKey: 'k', brandId: 1 });
-        // Pretend the user has a synced page on disk.
-        const synced = path.join(root, 'elasticfunnels', '1', 'pages', 'home.ef');
+        // Pretend the user has a synced page on disk (flat default layout).
+        const synced = path.join(root, 'elasticfunnels', 'pages', 'home.ef');
         await fs.promises.mkdir(path.dirname(synced), { recursive: true });
         await fs.promises.writeFile(synced, '<p>hello</p>');
 

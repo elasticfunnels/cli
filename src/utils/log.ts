@@ -40,31 +40,3 @@ export const log = {
         process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     },
 };
-
-/**
- * Lightweight stderr spinner for commands that do network work before they can
- * print anything (e.g. `status`), so the terminal shows activity instead of
- * appearing to hang. On a non-TTY (CI, pipes) it prints a single static line
- * and the returned stop() is a no-op, keeping logs clean.
- */
-export function spinner(label: string): { stop: (final?: string) => void } {
-    if (!useColor) {
-        process.stderr.write(`${label}\n`);
-        return { stop: (final?: string) => { if (final) process.stderr.write(`${final}\n`); } };
-    }
-    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let i = 0;
-    process.stderr.write(`${ESC}[?25l`); // hide cursor
-    const timer = setInterval(() => {
-        i = (i + 1) % frames.length;
-        process.stderr.write(`\r${c.cyan(frames[i])} ${label}`);
-    }, 80);
-    timer.unref?.();
-    return {
-        stop: (final?: string) => {
-            clearInterval(timer);
-            process.stderr.write(`\r${ESC}[K${ESC}[?25h`); // clear line, restore cursor
-            if (final) process.stderr.write(`${final}\n`);
-        },
-    };
-}

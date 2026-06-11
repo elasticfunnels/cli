@@ -32,8 +32,10 @@ export interface EfConfig {
     syncRoot: string;
     /**
      * Disk layout under `syncRoot`:
-     * - `nested` (default): `syncRoot/<brandId>/pages/…` — matches older `ef init` behaviour.
-     * - `flat`: `syncRoot/pages/…` — matches the VS Code extension default (`syncToDisk.root` only; brand id is in settings + `.ef-state.json`).
+     * - `flat` (default): `syncRoot/pages/…` — matches the VS Code extension
+     *   (brand id lives in config + `.ef-state.json`, not in the path).
+     * - `nested`: `syncRoot/<brandId>/pages/…` — keeps several brands' files
+     *   apart under one sync root (opt-in via `--sync-layout nested`).
      */
     syncLayout: 'nested' | 'flat';
     /** Save mode mirroring the extension. `direct` publishes immediately. */
@@ -114,7 +116,7 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         apiUrl: typeof parsed.apiUrl === 'string' && parsed.apiUrl.trim() !== '' ? parsed.apiUrl.trim() : DEFAULT_API_URL,
         brandId: parsed.brandId,
         syncRoot: typeof parsed.syncRoot === 'string' && parsed.syncRoot.trim() !== '' ? parsed.syncRoot.trim() : DEFAULT_SYNC_ROOT,
-        syncLayout: parsed.syncLayout === 'flat' ? 'flat' : 'nested',
+        syncLayout: parsed.syncLayout === 'nested' ? 'nested' : 'flat',
         saveMode: parsed.saveMode === 'direct' ? 'direct' : DEFAULT_SAVE_MODE,
         lastPulledAt: typeof parsed.lastPulledAt === 'string' ? parsed.lastPulledAt : null,
     };
@@ -180,7 +182,7 @@ export async function persistLogin(args: {
         apiUrl: args.apiUrl,
         brandId: args.brandId,
         syncRoot: args.syncRoot ?? DEFAULT_SYNC_ROOT,
-        syncLayout: args.syncLayout === 'flat' ? 'flat' : 'nested',
+        syncLayout: args.syncLayout === 'nested' ? 'nested' : 'flat',
         saveMode: args.saveMode ?? DEFAULT_SAVE_MODE,
         lastPulledAt: null,
     };

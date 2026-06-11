@@ -6,6 +6,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, findProjectRoot, loadConfig, persistLogin } from '../utils/store';
+import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 
 interface InitOptions {
@@ -73,9 +74,9 @@ export function registerInitCommand(program: Command): void {
         .option('--brand-id <id>', 'Numeric brand id the key belongs to (shown next to the key on the API page).')
         .option('--sync-root <dir>', `Folder under the project root where pages/components/assets/scripts live (default "${Defaults.syncRoot}").`, Defaults.syncRoot)
         .option(
-            '--sync-layout <nested|flat>',
-            'Disk layout: nested = syncRoot/brandId/pages (default); flat = syncRoot/pages (same as VS Code extension).',
-            'nested',
+            '--sync-layout <flat|nested>',
+            'Disk layout: flat = syncRoot/pages (default, matches VS Code); nested = syncRoot/brandId/pages.',
+            'flat',
         )
         .option('--save-mode <mode>', 'Default save mode for `ef push`: "draft" or "direct".', Defaults.saveMode)
         .option('--non-interactive', 'Fail rather than prompt. Use with --api-key and --brand-id.')
@@ -181,11 +182,11 @@ async function runInit(opts: InitOptions): Promise<void> {
 
     const saveMode = (opts.saveMode === 'direct' ? 'direct' : 'draft') as 'draft' | 'direct';
     const syncRoot = (opts.syncRoot || Defaults.syncRoot).trim() || Defaults.syncRoot;
-    const layoutRaw = (opts.syncLayout ?? 'nested').trim().toLowerCase();
+    const layoutRaw = (opts.syncLayout ?? 'flat').trim().toLowerCase();
     if (layoutRaw !== 'nested' && layoutRaw !== 'flat') {
-        throw new CliError(ExitCode.Validation, `--sync-layout must be "nested" or "flat", got "${opts.syncLayout ?? ''}".`);
+        throw new CliError(ExitCode.Validation, `--sync-layout must be "flat" or "nested", got "${opts.syncLayout ?? ''}".`);
     }
-    const syncLayout = layoutRaw === 'flat' ? ('flat' as const) : ('nested' as const);
+    const syncLayout = layoutRaw === 'nested' ? ('nested' as const) : ('flat' as const);
 
     const runtime = await persistLogin({
         projectRoot,
@@ -206,9 +207,15 @@ async function runInit(opts: InitOptions): Promise<void> {
     let pulled: { pages: number; components: number; scripts: number; assets: number } | null = null;
     if (opts.pull !== false) {
         if (!opts.json) log.info('');
+        const ld = opts.json ? null : loader('Syncing');
         try {
-            pulled = await runFullSync(runtime, { json: opts.json });
+            pulled = await runFullSync(runtime, { json: opts.json, silent: true });
+            ld?.stop();
+            if (pulled && !opts.json) {
+                log.success(`Synced ${pulled.pages} pages, ${pulled.components} components, ${pulled.scripts} scripts, ${pulled.assets} assets → ${runtime.brandRoot}`);
+            }
         } catch (err) {
+            ld?.stop();
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`Bound OK, but the initial sync failed: ${msg}. Run "ef pull" to retry.`);
         }

@@ -28,11 +28,13 @@ interface PullOpts {
  * update the baseline + lastPulledAt. Shared by `ef pull` (no target) and
  * `ef init` (the post-bind sync). Streams a ✓ line per kind unless `json`.
  */
-export async function runFullSync(rt: EfRuntime, opts: { json?: boolean } = {}): Promise<{
+export async function runFullSync(rt: EfRuntime, opts: { json?: boolean; silent?: boolean } = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
 }> {
     const ctx = await buildSyncContext(rt);
-    const log_ = (msg: string) => { if (!opts.json) log.info(msg); };
+    // `silent` suppresses the per-kind streaming so a caller (e.g. `ef init`)
+    // can show its own loader instead.
+    const log_ = (msg: string) => { if (!opts.json && !opts.silent) log.info(msg); };
     log_(`${c.bold('Full sync')} → ${ctx.rt.brandRoot}`);
     const pages = await pullAllPages(ctx);
     log_(`${c.green('✓')} ${pages.length} pages`);

@@ -23,7 +23,7 @@ async function setupBrand(root: string): Promise<string> {
         JSON.stringify({ apiUrl: 'https://example.test', brandId: 7, syncRoot: 'elasticfunnels', saveMode: 'draft' }),
     );
     await fs.promises.writeFile(path.join(root, '.ef', 'auth'), 'fake-key\n');
-    const brandRoot = path.join(root, 'elasticfunnels', '7');
+    const brandRoot = path.join(root, 'elasticfunnels'); // flat default layout
     await fs.promises.mkdir(path.join(brandRoot, 'pages'), { recursive: true });
     return brandRoot;
 }

@@ -17,6 +17,7 @@ import { registerAssetsCommand } from './commands/assets';
 import { registerVariablesCommand } from './commands/variables';
 import { registerDiffCommand } from './commands/diff';
 import { registerAskCommand } from './commands/ask';
+import { registerClaudeCommand } from './commands/claude';
 
 function getVersion(): string {
     try {
@@ -62,6 +63,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerVariablesCommand(program);
     registerDiffCommand(program);
     registerAskCommand(program);
+    registerClaudeCommand(program);
 
     return program;
 }

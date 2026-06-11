@@ -48,21 +48,23 @@ function frame(progress: number, label: string, tick: number): string {
     return out.join('\n');
 }
 
-export function loader(label = 'Syncing'): { stop: (final?: string) => void } {
+export function loader(label = 'Syncing'): { update: (label: string) => void; stop: (final?: string) => void } {
+    let current = label;
     if (!animate) {
-        process.stderr.write(`${label}…\n`);
-        return { stop: (final?: string) => { if (final) process.stderr.write(`${final}\n`); } };
+        process.stderr.write(`${current}…\n`);
+        return { update: () => {}, stop: (final?: string) => { if (final) process.stderr.write(`${final}\n`); } };
     }
     let tick = 0;
     process.stderr.write(`${ESC}[?25l${'\n'.repeat(ROWS + 1)}`); // hide cursor, reserve rows
     const draw = () => {
-        process.stderr.write(`${ESC}[${ROWS + 1}A\r${frame((tick % 25) / 24, label, tick)}\n`);
+        process.stderr.write(`${ESC}[${ROWS + 1}A\r${frame((tick % 25) / 24, current, tick)}\n`);
         tick++;
     };
     draw();
     const timer = setInterval(draw, 55);
     timer.unref?.();
     return {
+        update: (l: string) => { current = l; },
         stop: (final?: string) => {
             clearInterval(timer);
             // Back to the top of the block, clear it, restore the cursor.

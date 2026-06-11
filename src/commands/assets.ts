@@ -6,6 +6,8 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { buildSyncContext, pullAsset } from '../sync/sync';
+import { relPathForAsset } from '../sync/paths';
+import { removeLocalEntity } from './shared';
 import { sha256 } from '../utils/fs';
 
 export function registerAssetsCommand(program: Command): void {
@@ -71,8 +73,10 @@ export function registerAssetsCommand(program: Command): void {
                 if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
             await api.deleteAssetByPath(rt.config.brandId, remotePath);
-            if (opts.json) { log.json({ ok: true, deleted: remotePath }); return; }
-            log.success(`Deleted asset "${remotePath}".`);
+            const rel = relPathForAsset({ file_path: remotePath, file_name: remotePath, id: 0 });
+            const fileRemoved = await removeLocalEntity(rt, 'asset', rel);
+            if (opts.json) { log.json({ ok: true, deleted: remotePath, localFileRemoved: fileRemoved }); return; }
+            log.success(`Deleted asset "${remotePath}".${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
 
     cmd.command('pull <remotePath>')

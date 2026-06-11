@@ -4,6 +4,7 @@ import { c, log } from '../utils/log';
 import { CliError, ExitCode } from '../utils/exit';
 import { EfRuntime, loadRuntime, saveConfig } from '../utils/store';
 import {
+    SyncContext,
     buildSyncContext,
     pullAllAssets,
     pullAllComponents,
@@ -28,10 +29,15 @@ interface PullOpts {
  * update the baseline + lastPulledAt. Shared by `ef pull` (no target) and
  * `ef init` (the post-bind sync). Streams a ✓ line per kind unless `json`.
  */
-export async function runFullSync(rt: EfRuntime, opts: { json?: boolean; silent?: boolean } = {}): Promise<{
+export async function runFullSync(rt: EfRuntime, opts: {
+    json?: boolean;
+    silent?: boolean;
+    onProgress?: SyncContext['onProgress'];
+} = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
 }> {
     const ctx = await buildSyncContext(rt);
+    ctx.onProgress = opts.onProgress;
     // `silent` suppresses the per-kind streaming so a caller (e.g. `ef init`)
     // can show its own loader instead.
     const log_ = (msg: string) => { if (!opts.json && !opts.silent) log.info(msg); };

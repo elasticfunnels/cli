@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
@@ -6,6 +5,8 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { buildSyncContext, pullScript, pushScriptFile } from '../sync/sync';
+import { relPathForScript } from '../sync/paths';
+import { removeLocalEntity } from './shared';
 import { fileExists } from '../utils/fs';
 
 export function registerScriptsCommand(program: Command): void {
@@ -98,12 +99,9 @@ export function registerScriptsCommand(program: Command): void {
                 if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
             await api.deleteBackendScript(rt.config.brandId, s.id);
-            if (opts.json) { log.json({ ok: true, deleted: { id: s.id, code: s.code } }); return; }
-            log.success(`Deleted backend script #${s.id}.`);
-            // Best-effort: remove the local file if we know its path.
-            try {
-                const localPath = path.join(rt.brandRoot, 'scripts', `${s.code}.js`);
-                if (await fileExists(localPath)) await fs.promises.unlink(localPath);
-            } catch { /* tolerated */ }
+            const rel = relPathForScript(s);
+            const fileRemoved = await removeLocalEntity(rt, 'script', rel);
+            if (opts.json) { log.json({ ok: true, deleted: { id: s.id, code: s.code }, localFileRemoved: fileRemoved }); return; }
+            log.success(`Deleted backend script #${s.id}.${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
 }

@@ -1,6 +1,39 @@
+import * as fs from 'fs';
 import { ApiClient } from '../api/client';
 import { Component, Page } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
+import { EfRuntime } from '../utils/store';
+import { SyncStateFile, StateEntry } from '../sync/stateFile';
+import { safeJoinBrandRoot } from '../sync/paths';
+import { fileExists } from '../utils/fs';
+
+/**
+ * After a server-side delete, remove the local file and its `.ef-state.json`
+ * entry so disk and drift detection stay consistent. Best-effort — never
+ * throws — and returns whether a local file was actually removed.
+ */
+export async function removeLocalEntity(
+    rt: EfRuntime,
+    kind: StateEntry['type'],
+    relPath: string,
+): Promise<boolean> {
+    let removed = false;
+    try {
+        const abs = safeJoinBrandRoot(rt.brandRoot, relPath);
+        if (await fileExists(abs)) {
+            await fs.promises.unlink(abs);
+            removed = true;
+        }
+    } catch { /* tolerated — server delete already succeeded */ }
+    try {
+        const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);
+        if (!state.isVersionTooNew()) {
+            state.deleteEntry(kind, relPath);
+            await state.save();
+        }
+    } catch { /* tolerated */ }
+    return removed;
+}
 
 /** Preview URL uses GET /editor revision_id when present — same as the VS Code extension. */
 export async function fetchPagePreviewBundle(

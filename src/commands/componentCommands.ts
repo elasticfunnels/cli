@@ -4,7 +4,8 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { buildSyncContext, pullComponent } from '../sync/sync';
-import { resolveComponentByCodeOrName } from './shared';
+import { removeLocalEntity, resolveComponentByCodeOrName } from './shared';
+import { relPathForComponent } from '../sync/paths';
 
 export function registerComponentsCommand(program: Command): void {
     const cmd = program
@@ -49,7 +50,9 @@ export function registerComponentsCommand(program: Command): void {
                 if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
             await api.deleteComponent(rt.config.brandId, comp.id, { force: opts.force });
-            if (opts.json) { log.json({ ok: true, deleted: { id: comp.id, code: comp.code } }); return; }
-            log.success(`Deleted component #${comp.id}.`);
+            const rel = relPathForComponent(comp);
+            const fileRemoved = await removeLocalEntity(rt, 'component', rel);
+            if (opts.json) { log.json({ ok: true, deleted: { id: comp.id, code: comp.code }, localFileRemoved: fileRemoved }); return; }
+            log.success(`Deleted component #${comp.id}.${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
 }

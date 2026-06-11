@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
+import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
@@ -32,6 +33,21 @@ function parseBrandId(raw: string, label: string): number {
         throw new CliError(ExitCode.Validation, `Invalid ${label} — expected a positive numeric brand id.`);
     }
     return n;
+}
+
+/** Ask for the brand id when auto-detection didn't yield a single brand. */
+async function promptBrandId(opts: InitOptions, choices: number): Promise<number> {
+    if (opts.nonInteractive) {
+        throw new CliError(ExitCode.Validation, '--brand-id is required in --non-interactive mode.');
+    }
+    if (process.stdin.isTTY !== true) {
+        throw new CliError(ExitCode.Validation, 'No brand id provided and stdin is not a TTY. Pass --brand-id.');
+    }
+    const hint = choices > 1
+        ? ' (this key maps to multiple brands — enter the one you want)'
+        : ' (Settings → All Settings → API)';
+    const answer = (await ask(`Enter the brand id this key belongs to${hint}`)).trim();
+    return parseBrandId(answer, `brand id "${answer}"`);
 }
 
 /**
@@ -153,19 +169,22 @@ async function runInit(opts: InitOptions): Promise<void> {
 
     const api = new ApiClient(apiUrl, apiKey);
 
-    // The API key is scoped to a single brand, so we ask for the brand id
-    // directly rather than listing every brand on the account. Both the key and
-    // the brand id are shown on the same page: Settings → All Settings → API.
+    // The API key is scoped to a single brand. When the server supports
+    // key-scoping, GET /brands/all returns just that brand, so we can detect it
+    // automatically. Otherwise (older server, or shared key) we ask, and an
+    // explicit --brand-id always wins.
     let brandId: number;
     if (opts.brandId != null) {
         brandId = parseBrandId(opts.brandId, `--brand-id "${opts.brandId}"`);
-    } else if (opts.nonInteractive) {
-        throw new CliError(ExitCode.Validation, '--brand-id is required in --non-interactive mode.');
-    } else if (process.stdin.isTTY !== true) {
-        throw new CliError(ExitCode.Validation, 'No brand id provided and stdin is not a TTY. Pass --brand-id.');
     } else {
-        const answer = (await ask('Enter the brand id this key belongs to (shown next to the key on the API page)')).trim();
-        brandId = parseBrandId(answer, `brand id "${answer}"`);
+        let brands: Brand[] = [];
+        try { brands = await api.listBrands(); } catch { /* offline / unsupported — fall back to asking */ }
+        if (brands.length === 1) {
+            brandId = brands[0].id;
+            log.info(`Detected brand ${brands[0].name} (#${brandId}).`);
+        } else {
+            brandId = await promptBrandId(opts, brands.length);
+        }
     }
 
     // Verify the key actually works for this brand. The per-brand BrandAccess
@@ -209,7 +228,15 @@ async function runInit(opts: InitOptions): Promise<void> {
         if (!opts.json) log.info('');
         const ld = opts.json ? null : loader('Syncing');
         try {
-            pulled = await runFullSync(runtime, { json: opts.json, silent: true });
+            pulled = await runFullSync(runtime, {
+                json: opts.json,
+                silent: true,
+                onProgress: (kind, label, done, total) => {
+                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                    const name = label.split('/').pop() || label;
+                    ld?.update(`${kind}s ${done}/${total} (${pct}%) · ${name}`);
+                },
+            });
             ld?.stop();
             if (pulled && !opts.json) {
                 log.success(`Synced ${pulled.pages} pages, ${pulled.components} components, ${pulled.scripts} scripts, ${pulled.assets} assets → ${runtime.brandRoot}`);

@@ -3,7 +3,8 @@ import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
-import { fetchPagePreviewBundle, resolvePageBySlug } from './shared';
+import { fetchPagePreviewBundle, removeLocalEntity, resolvePageBySlug } from './shared';
+import { relPathForPage } from '../sync/paths';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
 
@@ -99,8 +100,10 @@ export function registerPagesCommand(program: Command): void {
                 if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
             await api.deletePage(rt.config.brandId, page.id);
-            if (opts.json) { log.json({ ok: true, deleted: { id: page.id, slug: page.slug } }); return; }
-            log.success(`Deleted page #${page.id}.`);
+            const rel = relPathForPage(page);
+            const fileRemoved = await removeLocalEntity(rt, 'page', rel);
+            if (opts.json) { log.json({ ok: true, deleted: { id: page.id, slug: page.slug }, localFileRemoved: fileRemoved }); return; }
+            log.success(`Deleted page #${page.id}.${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
 }
 

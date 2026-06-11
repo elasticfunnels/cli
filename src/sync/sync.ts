@@ -68,6 +68,42 @@ export interface SyncContext {
     rt: EfRuntime;
     api: ApiClient;
     state: SyncStateFile;
+    /** Optional per-item progress hook for full syncs (label = brand-root-relative path). */
+    onProgress?: (kind: 'page' | 'component' | 'script' | 'asset', label: string, done: number, total: number) => void;
+}
+
+/**
+ * Pull a list of entities with bounded concurrency, tolerating per-item
+ * failures (a single 404 from a stale entity must not abort the whole sync).
+ * Emits progress and warns once about any skipped items.
+ */
+async function pullEach<T>(
+    ctx: SyncContext,
+    kind: 'page' | 'component' | 'script' | 'asset',
+    items: T[],
+    pull: (item: T) => Promise<{ rel: string } | null>,
+): Promise<Array<{ rel: string }>> {
+    const total = items.length;
+    let done = 0;
+    const failures: string[] = [];
+    const out = await mapWithConcurrency(items, DEFAULT_PULL_CONCURRENCY, async (item) => {
+        try {
+            const r = await pull(item);
+            done++;
+            if (r) ctx.onProgress?.(kind, r.rel, done, total);
+            return r;
+        } catch (err) {
+            done++;
+            failures.push(err instanceof Error ? err.message : String(err));
+            ctx.onProgress?.(kind, `(skipped a ${kind})`, done, total);
+            return null;
+        }
+    });
+    if (failures.length) {
+        const { log } = await import('../utils/log');
+        log.warn(`Skipped ${failures.length} ${kind}${failures.length === 1 ? '' : 's'} that failed to pull (e.g. deleted on the server). First error: ${failures[0]}`);
+    }
+    return out.filter((r): r is { rel: string } => r != null).map((r) => ({ rel: r.rel }));
 }
 
 /**
@@ -130,11 +166,10 @@ export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel:
 
 export async function pullAllPages(ctx: SyncContext): Promise<Array<{ rel: string }>> {
     const pages = await ctx.api.listPages(ctx.rt.config.brandId);
-    const results = await mapWithConcurrency(pages, DEFAULT_PULL_CONCURRENCY, async (p) => {
+    return await pullEach(ctx, 'page', pages, async (p) => {
         const { rel } = await pullPage(ctx, p.id);
         return { rel };
     });
-    return results;
 }
 
 // ── Components ───────────────────────────────────────────────────────
@@ -172,7 +207,7 @@ export async function pullComponent(ctx: SyncContext, componentId: number): Prom
 
 export async function pullAllComponents(ctx: SyncContext): Promise<Array<{ rel: string }>> {
     const list = await ctx.api.listComponents(ctx.rt.config.brandId);
-    return await mapWithConcurrency(list, DEFAULT_PULL_CONCURRENCY, async (c) => {
+    return await pullEach(ctx, 'component', list, async (c) => {
         const { rel } = await pullComponent(ctx, c.id);
         return { rel };
     });
@@ -213,7 +248,7 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
 
 export async function pullAllScripts(ctx: SyncContext): Promise<Array<{ rel: string }>> {
     const list = await ctx.api.listBackendScripts(ctx.rt.config.brandId);
-    return await mapWithConcurrency(list, DEFAULT_PULL_CONCURRENCY, async (s) => {
+    return await pullEach(ctx, 'script', list, async (s) => {
         const { rel } = await pullScript(ctx, s.id);
         return { rel };
     });
@@ -254,10 +289,7 @@ export async function pullAsset(ctx: SyncContext, assetId: number): Promise<{ re
 
 export async function pullAllAssets(ctx: SyncContext): Promise<Array<{ rel: string }>> {
     const assets = await ctx.api.listAssets(ctx.rt.config.brandId);
-    const results = await mapWithConcurrency(assets, DEFAULT_PULL_CONCURRENCY, async (a) => {
-        return await pullAsset(ctx, a.id);
-    });
-    return results.filter((r): r is NonNullable<typeof r> => r != null).map(r => ({ rel: r.rel }));
+    return await pullEach(ctx, 'asset', assets, async (a) => await pullAsset(ctx, a.id));
 }
 
 // ── Variables ────────────────────────────────────────────────────────

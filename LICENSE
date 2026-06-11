@@ -1,0 +1,36 @@
+ElasticFunnels Source-Available License (v1, 2026)
+
+Copyright (c) 2026 ElasticFunnels
+
+This source code is published by ElasticFunnels for transparency and
+independent security review. All rights are reserved.
+
+You MAY:
+
+  - Read, study, and reference this source code.
+  - Install the published `@elasticfunnels/cli` npm package from the
+    official npm registry and use it against your own ElasticFunnels
+    account.
+  - Build the CLI locally from this source for your own use against your
+    own ElasticFunnels account.
+  - Submit security reports or bug reports through the channels described
+    in README.md.
+
+You MAY NOT, without prior written permission from ElasticFunnels:
+
+  - Redistribute this source code, in original or modified form, to any
+    third party.
+  - Publish derivative works (including forks, ports, or repackaged
+    binaries) on npm, GitHub Releases, Homebrew, or any other public
+    registry.
+  - Use this source code, in whole or in part, to operate a competing
+    hosted service or a competing API-compatible client.
+  - Remove or alter this license notice.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

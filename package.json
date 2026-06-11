@@ -1,0 +1,66 @@
+{
+  "name": "@elasticfunnels/cli",
+  "version": "0.2.0",
+  "description": "ElasticFunnels command-line tool. Folder-scoped auth and full sync, designed to be used by humans, scripts, Claude Code, and any other automation.",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": false,
+  "author": {
+    "name": "ElasticFunnels",
+    "url": "https://elasticfunnels.io"
+  },
+  "homepage": "https://github.com/elasticfunnels/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elasticfunnels/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/elasticfunnels/cli/issues",
+    "email": "support@elasticfunnels.io"
+  },
+  "keywords": [
+    "elasticfunnels",
+    "cli",
+    "cms",
+    "landing-pages",
+    "sync"
+  ],
+  "bin": {
+    "ef": "./bin/ef.js"
+  },
+  "main": "./out/extension.js",
+  "types": "./out/extension.d.ts",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "out/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -p ./ -w",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf out out-test",
+    "test": "npm run clean && tsc -p ./ && tsc -p tsconfig.test.json && node --test 'out-test/test/*.test.js'",
+    "ef": "node ./bin/ef.js",
+    "prepublishOnly": "npm run lint && npm run test && tsc -p ./",
+    "release:dry": "npm pack --dry-run",
+    "release:publish": "npm publish --access public"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0"
+  }
+}

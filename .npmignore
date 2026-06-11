@@ -1,0 +1,14 @@
+src/
+test/
+out-test/
+tsconfig.json
+tsconfig.test.json
+.eslintrc.json
+.eslintcache
+node_modules/
+package-lock.json
+.DS_Store
+*.log
+.git
+.gitignore
+.npmignore

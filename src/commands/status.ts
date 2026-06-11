@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { c, log } from '../utils/log';
+import { c, log, spinner } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { SyncStateFile, STATE_VERSION } from '../sync/stateFile';
 import { CliError, ExitCode } from '../utils/exit';
@@ -16,27 +16,33 @@ export function registerStatusCommand(program: Command): void {
 
             let connected = false;
             let connectError: string | null = null;
-            try {
-                connected = await api.ping(rt.config.brandId);
-            } catch (err) {
-                connectError = err instanceof Error ? err.message : String(err);
-                if (err instanceof CliError && err.code === ExitCode.Auth) {
-                    connectError = `Auth rejected: ${err.message}`;
-                }
-            }
-
             const counts = { pages: 0, components: 0, scripts: 0, assets: 0 };
-            if (connected) {
-                const [pages, components, scripts, assets] = await Promise.all([
-                    api.listPages(rt.config.brandId).catch(() => []),
-                    api.listComponents(rt.config.brandId).catch(() => []),
-                    api.listBackendScripts(rt.config.brandId).catch(() => []),
-                    api.listAssets(rt.config.brandId).catch(() => []),
-                ]);
-                counts.pages = pages.length;
-                counts.components = components.length;
-                counts.scripts = scripts.length;
-                counts.assets = assets.length;
+
+            const spin = opts.json ? null : spinner(`Checking ${rt.config.apiUrl}…`);
+            try {
+                try {
+                    connected = await api.ping(rt.config.brandId);
+                } catch (err) {
+                    connectError = err instanceof Error ? err.message : String(err);
+                    if (err instanceof CliError && err.code === ExitCode.Auth) {
+                        connectError = `Auth rejected: ${err.message}`;
+                    }
+                }
+
+                if (connected) {
+                    const [pages, components, scripts, assets] = await Promise.all([
+                        api.listPages(rt.config.brandId).catch(() => []),
+                        api.listComponents(rt.config.brandId).catch(() => []),
+                        api.listBackendScripts(rt.config.brandId).catch(() => []),
+                        api.listAssets(rt.config.brandId).catch(() => []),
+                    ]);
+                    counts.pages = pages.length;
+                    counts.components = components.length;
+                    counts.scripts = scripts.length;
+                    counts.assets = assets.length;
+                }
+            } finally {
+                spin?.stop();
             }
 
             const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);

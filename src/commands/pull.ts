@@ -2,7 +2,7 @@ import * as path from 'path';
 import { Command } from 'commander';
 import { c, log } from '../utils/log';
 import { CliError, ExitCode } from '../utils/exit';
-import { loadRuntime, saveConfig } from '../utils/store';
+import { EfRuntime, loadRuntime, saveConfig } from '../utils/store';
 import {
     buildSyncContext,
     pullAllAssets,
@@ -21,6 +21,33 @@ import { classifyAbsPath } from '../sync/sync';
 interface PullOpts {
     json?: boolean;
     since?: string;
+}
+
+/**
+ * Pull every entity (pages, components, scripts, assets, variables) to disk and
+ * update the baseline + lastPulledAt. Shared by `ef pull` (no target) and
+ * `ef init` (the post-bind sync). Streams a ✓ line per kind unless `json`.
+ */
+export async function runFullSync(rt: EfRuntime, opts: { json?: boolean } = {}): Promise<{
+    pages: number; components: number; scripts: number; assets: number;
+}> {
+    const ctx = await buildSyncContext(rt);
+    const log_ = (msg: string) => { if (!opts.json) log.info(msg); };
+    log_(`${c.bold('Full sync')} → ${ctx.rt.brandRoot}`);
+    const pages = await pullAllPages(ctx);
+    log_(`${c.green('✓')} ${pages.length} pages`);
+    const components = await pullAllComponents(ctx);
+    log_(`${c.green('✓')} ${components.length} components`);
+    const scripts = await pullAllScripts(ctx);
+    log_(`${c.green('✓')} ${scripts.length} scripts`);
+    const assets = await pullAllAssets(ctx);
+    log_(`${c.green('✓')} ${assets.length} assets`);
+    const variables = await pullVariables(ctx);
+    log_(`${c.green('✓')} variables → ${variables.rel}`);
+    await ctx.state.save();
+    rt.config.lastPulledAt = new Date().toISOString();
+    await saveConfig(rt.projectRoot, rt.config);
+    return { pages: pages.length, components: components.length, scripts: scripts.length, assets: assets.length };
 }
 
 export function registerPullCommand(program: Command): void {
@@ -44,8 +71,6 @@ With <target>, pulls one entity. Examples:
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
 
-            const log_ = (msg: string) => { if (!opts.json) log.info(msg); };
-
             // Validate --since up front so a typo doesn't silently disable the filter.
             const sinceIso = opts.since ? validateIso(opts.since) : null;
 
@@ -58,31 +83,9 @@ With <target>, pulls one entity. Examples:
             }
 
             if (!target) {
-                // Full sync.
-                log_(`${c.bold('Full sync')} → ${ctx.rt.brandRoot}`);
-                const pages = await pullAllPages(ctx);
-                log_(`${c.green('✓')} ${pages.length} pages`);
-                const components = await pullAllComponents(ctx);
-                log_(`${c.green('✓')} ${components.length} components`);
-                const scripts = await pullAllScripts(ctx);
-                log_(`${c.green('✓')} ${scripts.length} scripts`);
-                const assets = await pullAllAssets(ctx);
-                log_(`${c.green('✓')} ${assets.length} assets`);
-                const variables = await pullVariables(ctx);
-                log_(`${c.green('✓')} variables → ${variables.rel}`);
-                await ctx.state.save();
-                const now = new Date().toISOString();
-                rt.config.lastPulledAt = now;
-                await saveConfig(rt.projectRoot, rt.config);
+                const r = await runFullSync(rt, opts);
                 if (opts.json) {
-                    log.json({
-                        ok: true,
-                        brandRoot: rt.brandRoot,
-                        pulled: {
-                            pages: pages.length, components: components.length,
-                            scripts: scripts.length, assets: assets.length, variables: 1,
-                        },
-                    });
+                    log.json({ ok: true, brandRoot: rt.brandRoot, pulled: { ...r, variables: 1 } });
                 }
                 return;
             }

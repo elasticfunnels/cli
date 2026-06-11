@@ -3,9 +3,10 @@ import * as fs from 'fs';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
-import { log, c } from '../utils/log';
-import { ask, confirm, pickOne } from '../utils/prompt';
+import { log } from '../utils/log';
+import { ask, confirm } from '../utils/prompt';
 import { Defaults, findProjectRoot, loadConfig, persistLogin } from '../utils/store';
+import { runFullSync } from './pull';
 
 interface InitOptions {
     apiUrl?: string;
@@ -18,7 +19,18 @@ interface InitOptions {
     nonInteractive?: boolean;
     inherit?: boolean;
     force?: boolean;
+    /** Commander sets this to false when `--no-pull` is passed; defaults to true. */
+    pull?: boolean;
     json?: boolean;
+}
+
+/** Parse a user-supplied brand id (tolerates a leading `#`). */
+function parseBrandId(raw: string, label: string): number {
+    const n = parseInt(raw.trim().replace(/^#/, ''), 10);
+    if (!Number.isFinite(n) || n <= 0) {
+        throw new CliError(ExitCode.Validation, `Invalid ${label} — expected a positive numeric brand id.`);
+    }
+    return n;
 }
 
 /**
@@ -57,8 +69,8 @@ export function registerInitCommand(program: Command): void {
         .command('init')
         .description('Bind the current folder to an ElasticFunnels brand. Writes .ef/config.json and .ef/auth (chmod 600 on Unix).')
         .option('--api-url <url>', `ElasticFunnels API base URL`, Defaults.apiUrl)
-        .option('--api-key <key>', 'API key for the brand (find it under brand settings → API). Can also be passed via $EF_API_KEY.')
-        .option('--brand-id <id>', 'Numeric brand id to bind this folder to.')
+        .option('--api-key <key>', 'API key for the brand (Settings → All Settings → API). Can also be passed via $EF_API_KEY.')
+        .option('--brand-id <id>', 'Numeric brand id the key belongs to (shown next to the key on the API page).')
         .option('--sync-root <dir>', `Folder under the project root where pages/components/assets/scripts live (default "${Defaults.syncRoot}").`, Defaults.syncRoot)
         .option(
             '--sync-layout <nested|flat>',
@@ -69,6 +81,7 @@ export function registerInitCommand(program: Command): void {
         .option('--non-interactive', 'Fail rather than prompt. Use with --api-key and --brand-id.')
         .option('--inherit', 'If a parent directory already has a .ef project, update its config in place instead of creating a new nested project.')
         .option('--force', 'Skip the "folder is not empty" confirmation prompt.')
+        .option('--no-pull', 'Bind only — skip the initial full sync.')
         .option('--json', 'Print the resulting config as JSON.')
         .action(async (opts: InitOptions) => {
             await runInit(opts);
@@ -132,70 +145,37 @@ async function runInit(opts: InitOptions): Promise<void> {
                 'No API key provided and stdin is not a TTY. Pass --api-key, set $EF_API_KEY, or run interactively.',
             );
         }
-        apiKey = (await ask('Paste the API key for your brand', { mask: true })).trim();
+        apiKey = (await ask('Paste the API key for your brand (Settings → All Settings → API)', { mask: true })).trim();
     }
 
     if (!apiKey) throw new CliError(ExitCode.Validation, 'API key is required.');
 
     const api = new ApiClient(apiUrl, apiKey);
 
-    // Validate the key by listing brands. If the user fat-fingered it, this
-    // will tell them now instead of on the first push.
-    log.info('Verifying credentials…');
-    let brands = await api.listBrands();
-    if (brands.length === 0) {
-        throw new CliError(ExitCode.Auth, 'API key is valid but the user has no brands. Create or join a brand in the dashboard first.');
-    }
-
-    let brandId: number | undefined;
-    const requested = opts.brandId ? parseInt(opts.brandId, 10) : undefined;
-    if (requested != null && !Number.isFinite(requested)) {
-        throw new CliError(ExitCode.Validation, `Invalid --brand-id: "${opts.brandId}".`);
-    }
-    if (requested) {
-        const match = brands.find(b => b.id === requested);
-        if (!match) {
-            throw new CliError(ExitCode.Validation, `Brand id ${requested} is not on the list this API key can access. Available: ${brands.map(b => `${b.id} (${b.name})`).join(', ')}`);
-        }
-        brandId = match.id;
+    // The API key is scoped to a single brand, so we ask for the brand id
+    // directly rather than listing every brand on the account. Both the key and
+    // the brand id are shown on the same page: Settings → All Settings → API.
+    let brandId: number;
+    if (opts.brandId != null) {
+        brandId = parseBrandId(opts.brandId, `--brand-id "${opts.brandId}"`);
     } else if (opts.nonInteractive) {
-        if (brands.length === 1) {
-            brandId = brands[0].id;
-        } else {
-            throw new CliError(ExitCode.Validation, `Multiple brands available, --brand-id is required in --non-interactive mode. Choices: ${brands.map(b => `${b.id} (${b.name})`).join(', ')}`);
-        }
+        throw new CliError(ExitCode.Validation, '--brand-id is required in --non-interactive mode.');
     } else if (process.stdin.isTTY !== true) {
-        if (brands.length === 1) {
-            brandId = brands[0].id;
-        } else {
-            throw new CliError(
-                ExitCode.Validation,
-                `Multiple brands available and stdin is not a TTY. Pass --brand-id. Choices: ${brands.map(b => `${b.id} (${b.name})`).join(', ')}`,
-            );
-        }
+        throw new CliError(ExitCode.Validation, 'No brand id provided and stdin is not a TTY. Pass --brand-id.');
     } else {
-        // Sort brands by name so the prompt is stable across runs.
-        brands = brands.slice().sort((a, b) => a.name.localeCompare(b.name));
-        brandId = await pickOne('Pick a brand for this folder:', brands.map(b => ({
-            name: `${b.name}  ${c.dim(`#${b.id}`)}${b.domain ? c.dim(`  ${b.domain}`) : ''}`,
-            value: b.id,
-        })));
+        const answer = (await ask('Enter the brand id this key belongs to (shown next to the key on the API page)')).trim();
+        brandId = parseBrandId(answer, `brand id "${answer}"`);
     }
 
-    if (!brandId) throw new CliError(ExitCode.Validation, 'No brand selected.');
-
-    // Confirm the chosen brand really is reachable with this key. The /brands/all
-    // endpoint can accept a key for any brand the user is in, but the per-brand
-    // BrandAccess middleware checks (api_key, brand_id) tightly — so a key from
-    // brand A may fail to authenticate to brand B even if both are on the list.
-    log.info(`Checking access to brand #${brandId}…`);
+    // Verify the key actually works for this brand. The per-brand BrandAccess
+    // middleware checks (api_key, brand_id) together, so this one call catches a
+    // wrong key, a wrong brand id, or a key that belongs to a different brand.
+    log.info(`Verifying access to brand #${brandId}…`);
     const ok = await api.ping(brandId).catch(() => false);
     if (!ok) {
-        const chosen = brands.find(b => b.id === brandId);
-        const chosenLabel = chosen ? `${chosen.name} (#${chosen.id})` : `#${brandId}`;
         throw new CliError(
             ExitCode.Auth,
-            `That API key cannot operate on ${chosenLabel}. Each brand has its own API key — open the brand's settings → API page and use the key shown there.`,
+            `Could not access brand #${brandId} with that API key. Each brand has its own key — open Settings → All Settings → API for the brand you want, and use the key and brand id shown there.`,
         );
     }
 
@@ -221,6 +201,21 @@ async function runInit(opts: InitOptions): Promise<void> {
     log.detail(`Config: ${path.join(runtime.projectRoot, '.ef', 'config.json')}`);
     log.detail(`Brand root: ${runtime.brandRoot}`);
 
+    // Bind, then pull everything down so the folder is usable immediately.
+    // A sync failure doesn't undo the bind — the user can re-run `ef pull`.
+    let pulled: { pages: number; components: number; scripts: number; assets: number } | null = null;
+    if (opts.pull !== false) {
+        if (!opts.json) log.info('');
+        try {
+            pulled = await runFullSync(runtime, { json: opts.json });
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`Bound OK, but the initial sync failed: ${msg}. Run "ef pull" to retry.`);
+        }
+    } else {
+        log.detail('Skipped initial sync (--no-pull). Run "ef pull" when ready.');
+    }
+
     if (opts.json) {
         log.json({
             ok: true,
@@ -231,6 +226,7 @@ async function runInit(opts: InitOptions): Promise<void> {
             syncLayout: runtime.config.syncLayout,
             saveMode: runtime.config.saveMode,
             brandRoot: runtime.brandRoot,
+            pulled,
         });
     }
 }

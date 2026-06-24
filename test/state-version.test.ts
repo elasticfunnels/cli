@@ -202,6 +202,79 @@ test('save() can update extension schema v2 state without downgrading it', async
     }
 });
 
+test('load() rebuilds CLI buckets from extension id-keyed buckets', async () => {
+    const root = await tmpDir();
+    try {
+        // A file written by the VS Code extension: id-keyed v2 buckets only,
+        // no path-keyed v1 `pages`/`assets` buckets.
+        const extensionWritten = {
+            version: 2,
+            brandId: 7,
+            updatedAt: '2026-01-01T00:00:00Z',
+            lastSyncAt: '2026-01-01T00:00:00Z',
+            pagesById: {
+                '11': {
+                    path: 'pages/home.ef',
+                    revisionId: 123,
+                    contentHash: 'page-hash',
+                    updatedAt: '2026-01-03T00:00:00Z',
+                    serverUpdatedAt: '2026-01-03T00:00:00Z',
+                },
+            },
+            pathToPageId: { 'pages/home.ef': 11 },
+            assetsById: {
+                '44': { path: 'assets/main.css', contentHash: 'asset-hash', serverUpdatedAt: '2026-01-02T00:00:00Z' },
+            },
+            pathToAssetId: { 'assets/main.css': 44 },
+        };
+        await fs.promises.writeFile(path.join(root, '.ef-state.json'), JSON.stringify(extensionWritten, null, 2));
+
+        const sf = await SyncStateFile.load(root, 7);
+        // The baseline must be visible to the CLI via its path-keyed view.
+        const page = sf.getByPath('page', 'pages/home.ef');
+        assert.ok(page, 'expected the page to be recovered from pagesById');
+        assert.equal(page?.id, 11);
+        assert.equal(page?.revisionId, 123);
+        assert.equal(page?.contentHash, 'page-hash');
+        assert.equal(page?.serverUpdatedAt, '2026-01-03T00:00:00Z');
+        const asset = sf.getById('asset', 44);
+        assert.equal(asset?.path, 'assets/main.css');
+        assert.equal(asset?.contentHash, 'asset-hash');
+
+        // A CLI save must keep both schemas present and consistent.
+        await sf.save();
+        const reread = JSON.parse(await fs.promises.readFile(path.join(root, '.ef-state.json'), 'utf8'));
+        assert.equal(reread.version, 2, 'must not downgrade the extension version');
+        assert.equal(reread.pages['pages/home.ef'].id, 11);
+        assert.equal(reread.pagesById['11'].contentHash, 'page-hash', 'extension buckets must survive');
+        assert.equal(reread.pathToPageId['pages/home.ef'], 11);
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('load() prefers CLI v1 entries over extension buckets for the same id', async () => {
+    const root = await tmpDir();
+    try {
+        // Both schemas present but the extension bucket is stale for id 11.
+        const mixed = {
+            version: 2,
+            brandId: 7,
+            pages: { 'pages/home.ef': { path: 'pages/home.ef', id: 11, type: 'page', contentHash: 'fresh' } },
+            components: {}, scripts: {}, assets: {}, templatePages: {},
+            pagesById: { '11': { path: 'pages/home.ef', contentHash: 'stale' } },
+            pathToPageId: { 'pages/home.ef': 11 },
+        };
+        await fs.promises.writeFile(path.join(root, '.ef-state.json'), JSON.stringify(mixed, null, 2));
+
+        const sf = await SyncStateFile.load(root, 7);
+        const page = sf.getByPath('page', 'pages/home.ef');
+        assert.equal(page?.contentHash, 'fresh', 'CLI v1 entry must win over a stale extension bucket');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
 test('load() recovers from .bak when the primary is empty', async () => {
     const root = await tmpDir();
     try {

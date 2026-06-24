@@ -11,3 +11,4 @@ export {
 } from '../models/asset';
 export type { BackendScript } from '../models/backendScript';
 export type { BrandTemplate, BrandTemplatePage } from '../models/template';
+export type { Product, ProductVariant } from '../models/product';

@@ -3,7 +3,7 @@ import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
-import { fetchPagePreviewBundle, removeLocalEntity, resolvePageBySlug } from './shared';
+import { fetchPagePreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug } from './shared';
 import { relPathForPage } from '../sync/paths';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
@@ -42,6 +42,53 @@ export function registerPagesCommand(program: Command): void {
             }
             if (opts.json) { log.json({ ok: true, page: created }); return; }
             log.success(`Created page #${created.id} "${created.slug ?? slug}" (${created.title ?? title}).`);
+        });
+
+    cmd.command('settings <slug>')
+        .description('Update page settings (slug, domain, folder, status, SEO) — separate from the editor HTML.')
+        .option('--title <title>', 'Page title.')
+        .option('--slug <slug>', 'New URL slug.')
+        .option('--domain-id <id>', 'Numeric brand-domain id.', (v) => parseInt(v, 10))
+        .option('--folder-id <id>', 'Numeric folder id.', (v) => parseInt(v, 10))
+        .option('--status <status>', 'published | draft | offline | imported.')
+        .option('--is-index', 'Mark this page as the domain index (homepage).')
+        .option('--no-is-index', 'Unmark this page as the domain index.')
+        .option('--seo-title <text>', 'SEO title.')
+        .option('--seo-description <text>', 'SEO description.')
+        .option('--seo-blur-title <text>', 'SEO blur title.')
+        .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
+        .option('--json', 'Print result as JSON.')
+        .action(async (slug: string, opts: {
+            title?: string; slug?: string; domainId?: number; folderId?: number;
+            status?: string; isIndex?: boolean; seoTitle?: string; seoDescription?: string;
+            seoBlurTitle?: string; file?: string; json?: boolean;
+        }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const page = await resolvePageBySlug(api, rt.config.brandId, slug);
+
+            const base = opts.file ? await readJsonPayloadFile(opts.file) : {};
+            const flags: Record<string, unknown> = {};
+            if (opts.title !== undefined) flags.title = opts.title;
+            if (opts.slug !== undefined) flags.slug = opts.slug;
+            if (opts.domainId !== undefined) flags.domain_id = opts.domainId;
+            if (opts.folderId !== undefined) flags.folder_id = opts.folderId;
+            if (opts.status !== undefined) flags.status = opts.status;
+            if (opts.isIndex !== undefined) flags.is_index = opts.isIndex;
+            if (opts.seoTitle !== undefined) flags.seo_title = opts.seoTitle;
+            if (opts.seoDescription !== undefined) flags.seo_description = opts.seoDescription;
+            if (opts.seoBlurTitle !== undefined) flags.seo_blur_title = opts.seoBlurTitle;
+
+            const payload: Record<string, unknown> = { ...base, ...flags };
+            if (Object.keys(payload).length === 0) {
+                throw new CliError(ExitCode.Validation, 'Nothing to change — pass at least one setting flag or --file.');
+            }
+            // The server always requires a title; fall back to the current one.
+            if (payload.title == null) payload.title = page.title ?? '';
+
+            const updated = await api.updatePageSettings(rt.config.brandId, page.id, payload);
+            if (opts.json) { log.json({ ok: true, page: updated }); return; }
+            log.success(`Updated settings for page #${page.id} (${updated.slug ?? page.slug}).`);
         });
 
     cmd.command('publish <slug>')

@@ -154,15 +154,23 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |
 | `ef pages preview <slug>` | Print preview + live URLs (draft revision from editor when present). |
 | `ef pages duplicate <slug>` | Duplicate a page. |
+| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef components create <code>` | Create a new component. |
 | `ef components delete <codeOrName>` | Delete a component. |
+| `ef products list` | List products (alias `ef products ls`; `--classification` to filter). |
+| `ef products get <id>` | Print one product as JSON. |
+| `ef products create` | Create a product (`--title` + `--code` required; flags and/or `--file`). |
+| `ef products update <id>` | Update a product — only the fields you pass (flags and/or `--file`). |
+| `ef products clone <id>` | Clone a product. |
+| `ef products delete <id>` | Delete a product. |
 | `ef scripts create <code>` | Create a new backend script. |
 | `ef scripts pull <codeOrId>` | Pull one backend script. |
 | `ef scripts push <pathOrCode>` | Push one backend script. |
 | `ef scripts get <codeOrId>` | Print script body or `--json` payload. |
 | `ef scripts delete <codeOrId>` | Delete a script (and its local file). |
 | `ef assets upload <localPath>` | Upload a local file. `--as <remotePath>` to override. |
+| `ef assets bulk-upload <paths…>` | Upload many files/dirs at once (batched ≤20/request). `--to`, `--flat`, `--concurrency`. |
 | `ef assets pull <remotePath>` | Pull one asset. |
 | `ef assets delete <remotePath>` | Delete an asset. |
 | `ef variables get` | Print brand variables JSON. |

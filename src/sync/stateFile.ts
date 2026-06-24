@@ -76,6 +76,67 @@ function stringOrNull(value: unknown): string | null {
     return typeof value === 'string' || value === null ? value : null;
 }
 
+function numberOrNull(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The VS Code extension keeps id-keyed buckets (`pagesById`, …) plus path
+ * indexes; the CLI keeps path-keyed buckets (`pages`, …). When a file was last
+ * written by the extension our v1 buckets may be absent — these let us rebuild
+ * our entries from the extension's buckets so a CLI run doesn't lose its sync
+ * baseline. Symmetric to `mirrorExtensionEntry`, which keeps the extension's
+ * buckets current when the CLI writes.
+ */
+const EXTENSION_MIRROR_BUCKETS: ReadonlyArray<{ type: StateEntry['type']; entriesKey: string }> = [
+    { type: 'page', entriesKey: 'pagesById' },
+    { type: 'component', entriesKey: 'componentsById' },
+    { type: 'templatePage', entriesKey: 'templatePagesById' },
+    { type: 'script', entriesKey: 'scriptsById' },
+    { type: 'asset', entriesKey: 'assetsById' },
+];
+
+function bucketForShape(data: StateFileShape, kind: StateEntry['type']): Record<string, StateEntry> {
+    switch (kind) {
+        case 'page': return data.pages;
+        case 'component': return data.components;
+        case 'templatePage': return data.templatePages;
+        case 'script': return data.scripts;
+        case 'asset': return data.assets;
+    }
+}
+
+/**
+ * Fill gaps in our path-keyed buckets from the extension's id-keyed buckets.
+ * Existing v1 entries always win — we only add ids/paths v1 doesn't already
+ * track — so a CLI-written baseline is never overwritten by a stale mirror.
+ */
+function hydrateFromExtensionBuckets(parsed: Record<string, unknown>, data: StateFileShape): void {
+    for (const { type, entriesKey } of EXTENSION_MIRROR_BUCKETS) {
+        const entries = parsed[entriesKey];
+        if (!isRecord(entries)) continue;
+        const target = bucketForShape(data, type);
+        const knownIds = new Set<number>();
+        for (const e of Object.values(target)) knownIds.add(e.id);
+        for (const [idKey, value] of Object.entries(entries)) {
+            if (!isRecord(value) || typeof value.path !== 'string') continue;
+            const id = Number(idKey);
+            if (!Number.isFinite(id) || id <= 0) continue;
+            if (knownIds.has(id) || target[value.path]) continue;
+            const serverUpdatedAt = stringOrNull(value.serverUpdatedAt);
+            target[value.path] = {
+                path: value.path,
+                id,
+                updatedAt: serverUpdatedAt ?? stringOrNull(value.updatedAt),
+                revisionId: type === 'asset' ? null : numberOrNull(value.revisionId),
+                contentHash: stringOrNull(value.contentHash),
+                serverUpdatedAt,
+                type,
+            };
+        }
+    }
+}
+
 export class SyncStateFile {
     private data: StateFileShape;
     /** Top-level fields we didn't recognize; preserved verbatim on save. */
@@ -130,6 +191,10 @@ export class SyncStateFile {
                 scripts: (parsed.scripts as Record<string, StateEntry>) ?? {},
                 assets: (parsed.assets as Record<string, StateEntry>) ?? {},
             };
+            // Recover our baseline from the extension's id-keyed buckets when our
+            // own path-keyed buckets are missing (file last written by the
+            // extension). v1 entries win; this only fills gaps.
+            hydrateFromExtensionBuckets(parsed, data);
             return { data, loadedVersion, unknown };
         };
 

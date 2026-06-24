@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { ApiClient } from '../api/client';
 import { Component, Page } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
@@ -74,6 +75,37 @@ export async function resolvePageBySlug(
     const active = matches.find(m => m.is_active_version);
     if (active) return active;
     return matches.sort((a, b) => Date.parse(b.updated_at ?? '0') - Date.parse(a.updated_at ?? '0'))[0];
+}
+
+/**
+ * Read a JSON object payload from a file (or stdin when the path is "-").
+ * Used by command surfaces that take `--file` (products, page settings) so a
+ * caller can supply a full payload that flags then override. Throws a usage
+ * error on missing files or non-object / invalid JSON.
+ */
+export async function readJsonPayloadFile(filePath: string): Promise<Record<string, unknown>> {
+    let raw: string;
+    if (filePath === '-') {
+        raw = await readStdin();
+    } else {
+        const abs = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+        if (!(await fileExists(abs))) throw new CliError(ExitCode.NotFound, `File not found: ${filePath}`);
+        raw = await fs.promises.readFile(abs, 'utf8');
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch (e) {
+        throw new CliError(ExitCode.Validation, `Invalid JSON in ${filePath}: ${(e as Error).message}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new CliError(ExitCode.Validation, `Expected a JSON object in ${filePath}.`);
+    }
+    return parsed as Record<string, unknown>;
+}
+
+async function readStdin(): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks).toString('utf8');
 }
 
 export async function resolveComponentByCodeOrName(

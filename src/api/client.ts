@@ -10,8 +10,23 @@ import {
     Page,
     PageFolder,
     PageUpdateResponse,
+    Product,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
+
+/** Max files the server's bulk-upload endpoint accepts per request. */
+export const BULK_UPLOAD_MAX = 20;
+
+export interface BulkUploadFileResult {
+    filename: string;
+    status: 'uploaded' | 'failed' | string;
+    error?: string;
+}
+
+export interface BulkUploadResult {
+    summary: { total: number; uploaded: number; failed: number };
+    files: BulkUploadFileResult[];
+}
 
 /**
  * Distilled, VS-Code-free copy of the API surface the extension uses.
@@ -136,6 +151,19 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Delete page', res);
     }
 
+    /**
+     * Update a page's settings (title, slug, domain, folder, status, SEO, …)
+     * via the page resource — distinct from {@link updatePageHtml}, which only
+     * touches editor HTML. `title` is always required by the server, so callers
+     * must include it (the CLI fills it from the current page when omitted).
+     */
+    async updatePageSettings(brandId: number, pageId: number, settings: Record<string, unknown>): Promise<Page> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/pages/${pageId}`, { data: settings });
+        if (res.status >= 400) throw httpError('Update page settings', res);
+        const body = res.data as { page?: Page } | Page;
+        return ('page' in body && body.page ? body.page : body) as Page;
+    }
+
     async listPageFolders(brandId: number): Promise<PageFolder[]> {
         const res = await this.raw('GET', `/api/brands/${brandId}/page-folders`);
         if (res.status === 403) return [];
@@ -224,6 +252,59 @@ export class ApiClient {
             : `/api/brands/${brandId}/components/${componentId}`;
         const res = await this.raw('DELETE', url);
         if (res.status >= 400) throw httpError('Delete component', res);
+    }
+
+    // ── Products ─────────────────────────────────────────────────────
+
+    async listProducts(brandId: number, filters?: Record<string, string | number>): Promise<Product[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/products/all`, {
+            params: filters ?? {},
+        });
+        if (res.status === 403) {
+            throw new CliError(ExitCode.Auth, 'Products module is not enabled for this brand (or the API key lacks access).');
+        }
+        if (res.status >= 400) throw httpError('List products', res);
+        const body = res.data as Product[] | { data?: Product[] };
+        return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
+    }
+
+    async getProduct(brandId: number, productId: number): Promise<Product> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/products/${productId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Product #${productId} not found.`);
+        if (res.status >= 400) throw httpError('Get product', res);
+        const body = res.data as { product?: Product } | Product;
+        return ('product' in body && body.product ? body.product : body) as Product;
+    }
+
+    async createProduct(brandId: number, payload: Record<string, unknown>): Promise<Product> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products`, { data: payload });
+        if (res.status === 403) throw planOrAuthError(res);
+        if (res.status >= 400) throw httpError('Create product', res);
+        const body = res.data as { product?: Product } | Product;
+        return ('product' in body && body.product ? body.product : body) as Product;
+    }
+
+    /** Update is a POST (not PUT) on this resource — matches the dashboard. */
+    async updateProduct(brandId: number, productId: number, payload: Record<string, unknown>): Promise<Product> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products/${productId}`, { data: payload });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Product #${productId} not found.`);
+        if (res.status >= 400) throw httpError('Update product', res);
+        const body = res.data as { product?: Product } | Product;
+        return ('product' in body && body.product ? body.product : body) as Product;
+    }
+
+    async deleteProduct(brandId: number, productId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/products/${productId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Product #${productId} not found.`);
+        if (res.status >= 400) throw httpError('Delete product', res);
+    }
+
+    async cloneProduct(brandId: number, productId: number): Promise<Product> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products/${productId}/clone`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Product #${productId} not found.`);
+        if (res.status >= 400) throw httpError('Clone product', res);
+        const body = res.data as { product?: Product } | Product;
+        return ('product' in body && body.product ? body.product : body) as Product;
     }
 
     // ── Variables ────────────────────────────────────────────────────
@@ -318,6 +399,36 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Upload asset', res);
 
         return await this.getAssetByPath(brandId, normalized);
+    }
+
+    /**
+     * Upload many files into a single folder in one request via the
+     * file-manager bulk endpoint. The server caps this at 20 files and 10 MB
+     * each — callers are responsible for chunking. All files land under
+     * `folderPath` (relative to the brand's asset root); pass an empty string
+     * for the root.
+     */
+    async bulkUploadAssets(
+        brandId: number,
+        folderPath: string,
+        files: Array<{ name: string; bytes: Uint8Array }>,
+    ): Promise<BulkUploadResult> {
+        if (files.length === 0) return { summary: { total: 0, uploaded: 0, failed: 0 }, files: [] };
+        if (files.length > BULK_UPLOAD_MAX) {
+            throw new CliError(ExitCode.Validation, `bulkUploadAssets accepts at most ${BULK_UPLOAD_MAX} files per call.`);
+        }
+        const boundary = `----ElasticFunnelsCliBulk${Date.now().toString(16)}`;
+        const multipart = buildBulkUploadBody(boundary, normalizeAssetPath(folderPath), files);
+        const res = await this.raw('POST', `/api/brands/${brandId}/file-manager/bulk-upload-files`, {
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+            data: multipart,
+        });
+        if (res.status >= 400) throw httpError('Bulk upload assets', res);
+        const body = res.data as Partial<BulkUploadResult>;
+        return {
+            summary: body.summary ?? { total: files.length, uploaded: 0, failed: 0 },
+            files: Array.isArray(body.files) ? body.files : [],
+        };
     }
 
     async updateAssetContent(brandId: number, fileId: number, html: string): Promise<void> {
@@ -450,6 +561,21 @@ function httpError(label: string, res: AxiosResponse): CliError {
     return new CliError(code, `${label} failed (HTTP ${status}): ${detail || res.statusText || 'unknown error'}`);
 }
 
+/**
+ * A 403 on product create can be either a plan-limit rejection (the brand has
+ * hit its product cap / lacks the feature) or a genuine auth failure. Surface
+ * the server's plan message when present so the user knows to upgrade rather
+ * than re-check their key.
+ */
+function planOrAuthError(res: AxiosResponse): CliError {
+    const data = res.data as { error?: string; plan_error?: { message?: string } } | undefined;
+    const planMsg = data?.plan_error?.message;
+    if (planMsg) {
+        return new CliError(ExitCode.Error, `${data?.error ?? 'Cannot create product'}: ${planMsg}`);
+    }
+    return httpError('Create product', res);
+}
+
 function buildRevisionConflictMessage(body: PageUpdateResponse | undefined): string {
     const serverRev = body?.server_revision_id ?? body?.latest_revision_id;
     const hint = serverRev != null ? String(serverRev) : 'none (no draft revision on server — try `ef pull` to refresh efmeta, or pass --force)';
@@ -483,4 +609,41 @@ function mimeFromAssetPath(assetPath: string): string {
 export function normalizeAssetPath(p: string): string {
     if (!p) return '';
     return p.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
+}
+
+/**
+ * Build the multipart/form-data body for the bulk-upload endpoint. Each file
+ * is sent as `files[i]` with a matching `filenames[i]` text field, and the
+ * shared destination `path` is appended last — mirroring what the server's
+ * `bulkUploadFiles` validator expects. Pure (no I/O) so it can be unit-tested.
+ */
+export function buildBulkUploadBody(
+    boundary: string,
+    folderPath: string,
+    files: Array<{ name: string; bytes: Uint8Array }>,
+): Buffer {
+    const parts: Buffer[] = [];
+    files.forEach((f, i) => {
+        parts.push(Buffer.from(
+            `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="files[${i}]"; filename="${f.name}"\r\n` +
+            `Content-Type: ${mimeFromAssetPath(f.name)}\r\n\r\n`,
+            'utf8',
+        ));
+        parts.push(Buffer.from(f.bytes));
+        parts.push(Buffer.from(
+            `\r\n--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="filenames[${i}]"\r\n\r\n` +
+            `${f.name}\r\n`,
+            'utf8',
+        ));
+    });
+    parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="path"\r\n\r\n` +
+        `${folderPath}\r\n` +
+        `--${boundary}--\r\n`,
+        'utf8',
+    ));
+    return Buffer.concat(parts);
 }

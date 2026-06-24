@@ -276,8 +276,23 @@ export class ApiClient {
         return ('product' in body && body.product ? body.product : body) as Product;
     }
 
-    async createProduct(brandId: number, payload: Record<string, unknown>): Promise<Product> {
-        const res = await this.raw('POST', `/api/brands/${brandId}/products`, { data: payload });
+    /**
+     * Build request options for a product create/update. With an image, the
+     * request is sent as multipart/form-data (the only way the server accepts a
+     * product image — the JSON `image`/`image_link` field is read-only and
+     * ignored). Without one, it's a plain JSON body.
+     */
+    private productRequestOpts(payload: Record<string, unknown>, image?: ProductImageUpload): { data: unknown; headers?: Record<string, string> } {
+        if (!image) return { data: payload };
+        const boundary = `----ElasticFunnelsCli${Date.now().toString(16)}`;
+        return {
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+            data: buildProductMultipartBody(boundary, payload, image),
+        };
+    }
+
+    async createProduct(brandId: number, payload: Record<string, unknown>, image?: ProductImageUpload): Promise<Product> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products`, this.productRequestOpts(payload, image));
         if (res.status === 403) throw planOrAuthError(res);
         if (res.status >= 400) throw httpError('Create product', res);
         const body = res.data as { product?: Product } | Product;
@@ -285,8 +300,8 @@ export class ApiClient {
     }
 
     /** Update is a POST (not PUT) on this resource — matches the dashboard. */
-    async updateProduct(brandId: number, productId: number, payload: Record<string, unknown>): Promise<Product> {
-        const res = await this.raw('POST', `/api/brands/${brandId}/products/${productId}`, { data: payload });
+    async updateProduct(brandId: number, productId: number, payload: Record<string, unknown>, image?: ProductImageUpload): Promise<Product> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products/${productId}`, this.productRequestOpts(payload, image));
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `Product #${productId} not found.`);
         if (res.status >= 400) throw httpError('Update product', res);
         const body = res.data as { product?: Product } | Product;
@@ -617,6 +632,47 @@ export function normalizeAssetPath(p: string): string {
  * shared destination `path` is appended last — mirroring what the server's
  * `bulkUploadFiles` validator expects. Pure (no I/O) so it can be unit-tested.
  */
+/** A local image file to upload alongside a product create/update. */
+export interface ProductImageUpload {
+    /** File name including extension (used for the multipart filename + MIME). */
+    name: string;
+    bytes: Uint8Array;
+}
+
+/**
+ * Build the multipart/form-data body for a product create/update that includes
+ * an image. Scalar fields are sent as text parts (objects/arrays are
+ * JSON-encoded — the controller `json_decode`s variants/product_fields/etc.),
+ * and the image is sent under the `image` field, which is the only way the
+ * server stores a product image. Pure (no I/O) so it can be unit-tested.
+ */
+export function buildProductMultipartBody(
+    boundary: string,
+    fields: Record<string, unknown>,
+    image: { name: string; bytes: Uint8Array },
+): Buffer {
+    const parts: Buffer[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined || value === null) continue;
+        const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        parts.push(Buffer.from(
+            `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="${key}"\r\n\r\n` +
+            `${text}\r\n`,
+            'utf8',
+        ));
+    }
+    parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="image"; filename="${image.name}"\r\n` +
+        `Content-Type: ${mimeFromAssetPath(image.name)}\r\n\r\n`,
+        'utf8',
+    ));
+    parts.push(Buffer.from(image.bytes));
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'));
+    return Buffer.concat(parts);
+}
+
 export function buildBulkUploadBody(
     boundary: string,
     folderPath: string,

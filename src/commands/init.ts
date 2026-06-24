@@ -6,7 +6,7 @@ import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
-import { Defaults, findProjectRoot, loadConfig, persistLogin } from '../utils/store';
+import { Defaults, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 
@@ -85,16 +85,16 @@ export function registerInitCommand(program: Command): void {
     program
         .command('init')
         .description('Bind the current folder to an ElasticFunnels brand. Writes .ef/config.json and .ef/auth (chmod 600 on Unix).')
-        .option('--api-url <url>', `ElasticFunnels API base URL`, Defaults.apiUrl)
-        .option('--api-key <key>', 'API key for the brand (Settings → All Settings → API). Can also be passed via $EF_API_KEY.')
-        .option('--brand-id <id>', 'Numeric brand id the key belongs to (shown next to the key on the API page).')
-        .option('--sync-root <dir>', `Folder under the project root where pages/components/assets/scripts live (default "${Defaults.syncRoot}").`, Defaults.syncRoot)
+        .option('--api-url <url>', `ElasticFunnels API base URL (default: ${Defaults.apiUrl}, or from .vscode/settings.json).`)
+        .option('--api-key <key>', 'API key for the brand (Settings → All Settings → API). Can also be passed via $EF_API_KEY, or read from .vscode/settings.json.')
+        .option('--brand-id <id>', 'Numeric brand id the key belongs to (shown next to the key on the API page; or read from .vscode/settings.json).')
+        .option('--sync-root <dir>', `Folder under the project root where pages/components/assets/scripts live (default "${Defaults.syncRoot}", or from .vscode/settings.json).`)
         .option(
             '--sync-layout <flat|nested>',
             'Disk layout: flat = syncRoot/pages (default, matches VS Code); nested = syncRoot/brandId/pages.',
             'flat',
         )
-        .option('--save-mode <mode>', 'Default save mode for `ef push`: "draft" or "direct".', Defaults.saveMode)
+        .option('--save-mode <mode>', `Default save mode for \`ef push\`: "draft" or "direct" (default: ${Defaults.saveMode}, or from .vscode/settings.json).`)
         .option('--non-interactive', 'Fail rather than prompt. Use with --api-key and --brand-id.')
         .option('--inherit', 'If a parent directory already has a .ef project, update its config in place instead of creating a new nested project.')
         .option('--force', 'Skip the "folder is not empty" confirmation prompt.')
@@ -139,19 +139,31 @@ async function runInit(opts: InitOptions): Promise<void> {
         }
     }
 
+    // Reuse an existing VS Code extension setup if one is present, so `ef init`
+    // in an extension-configured folder "just works" instead of re-prompting for
+    // a key/brand the user already configured. Explicit flags and $EF_API_KEY
+    // always win over these.
+    const vscodeSettings = await readVscodeEfSettings(projectRoot);
+    const hasExtensionConfig = !!(vscodeSettings.apiKey && vscodeSettings.brandId);
+    if (hasExtensionConfig) {
+        log.info(`Found an existing VS Code setup in .vscode/settings.json (brand #${vscodeSettings.brandId}); reusing its credentials.`);
+    }
+
     // Creating a fresh project in this folder. If it already has unrelated
     // content, make the user confirm so they don't accidentally scaffold a
-    // brand into the wrong directory (e.g. their home folder).
-    if (creatingHere) {
+    // brand into the wrong directory (e.g. their home folder). A detected
+    // extension config is itself confirmation this is a real EF workspace, so
+    // we skip the prompt in that case.
+    if (creatingHere && !hasExtensionConfig) {
         await confirmFolderIfNotEmpty(projectRoot, opts);
     }
 
-    const apiUrl = (opts.apiUrl || Defaults.apiUrl).trim();
+    const apiUrl = (opts.apiUrl || vscodeSettings.apiUrl || Defaults.apiUrl).trim();
 
-    // Resolve API key: explicit flag > env var > prompt. Block prompting when
-    // we can't actually drive a TTY masked input (CI, piped stdin, no terminal)
-    // so the command exits with a clear error instead of hanging.
-    let apiKey = (opts.apiKey || process.env.EF_API_KEY || '').trim();
+    // Resolve API key: explicit flag > env var > .vscode/settings.json > prompt.
+    // Block prompting when we can't actually drive a TTY masked input (CI, piped
+    // stdin, no terminal) so the command exits with a clear error, not a hang.
+    let apiKey = (opts.apiKey || process.env.EF_API_KEY || vscodeSettings.apiKey || '').trim();
     if (!apiKey) {
         if (opts.nonInteractive) {
             throw new CliError(ExitCode.Validation, '--api-key is required in --non-interactive mode (or set $EF_API_KEY).');
@@ -176,6 +188,9 @@ async function runInit(opts: InitOptions): Promise<void> {
     let brandId: number;
     if (opts.brandId != null) {
         brandId = parseBrandId(opts.brandId, `--brand-id "${opts.brandId}"`);
+    } else if (vscodeSettings.brandId != null) {
+        brandId = vscodeSettings.brandId;
+        log.info(`Using brand #${brandId} from .vscode/settings.json.`);
     } else {
         let brands: Brand[] = [];
         try { brands = await api.listBrands(); } catch { /* offline / unsupported — fall back to asking */ }
@@ -199,8 +214,9 @@ async function runInit(opts: InitOptions): Promise<void> {
         );
     }
 
-    const saveMode = (opts.saveMode === 'direct' ? 'direct' : 'draft') as 'draft' | 'direct';
-    const syncRoot = (opts.syncRoot || Defaults.syncRoot).trim() || Defaults.syncRoot;
+    const saveModeRaw = opts.saveMode ?? vscodeSettings.saveMode;
+    const saveMode = (saveModeRaw === 'direct' ? 'direct' : 'draft') as 'draft' | 'direct';
+    const syncRoot = (opts.syncRoot || vscodeSettings.syncRoot || Defaults.syncRoot).trim() || Defaults.syncRoot;
     const layoutRaw = (opts.syncLayout ?? 'flat').trim().toLowerCase();
     if (layoutRaw !== 'nested' && layoutRaw !== 'flat') {
         throw new CliError(ExitCode.Validation, `--sync-layout must be "flat" or "nested", got "${opts.syncLayout ?? ''}".`);

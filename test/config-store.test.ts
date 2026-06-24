@@ -10,6 +10,7 @@ import {
     persistLogin,
     clearLogin,
     findProjectRoot,
+    readVscodeEfSettings,
 } from '../src/utils/store';
 import { CliError, ExitCode } from '../src/utils/exit';
 
@@ -166,6 +167,87 @@ test('findProjectRoot returns null when no .ef is found anywhere up the tree', a
         // The temp dir lives inside /tmp which has no .ef anywhere up to /, so
         // findProjectRoot must return null for an isolated temp tree.
         assert.equal(findProjectRoot(root), null);
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+async function writeVscodeSettings(root: string, body: string): Promise<void> {
+    await fs.promises.mkdir(path.join(root, '.vscode'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.vscode', 'settings.json'), body);
+}
+
+test('readVscodeEfSettings returns {} when no .vscode/settings.json exists', async () => {
+    const root = await tmpDir();
+    try {
+        assert.deepEqual(await readVscodeEfSettings(root), {});
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('readVscodeEfSettings extracts elasticfunnels.* keys', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, JSON.stringify({
+            'editor.tabSize': 2,
+            'elasticfunnels.apiKey': '  secret-key-123  ',
+            'elasticfunnels.brandId': 63,
+            'elasticfunnels.apiUrl': 'https://app.elasticfunnels.io',
+            'elasticfunnels.saveMode': 'direct',
+            'elasticfunnels.syncToDisk.root': 'elasticfunnels',
+        }));
+        const s = await readVscodeEfSettings(root);
+        assert.equal(s.apiKey, 'secret-key-123');
+        assert.equal(s.brandId, 63);
+        // The // in the URL must survive comment-stripping.
+        assert.equal(s.apiUrl, 'https://app.elasticfunnels.io');
+        assert.equal(s.saveMode, 'direct');
+        assert.equal(s.syncRoot, 'elasticfunnels');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('readVscodeEfSettings tolerates JSONC comments and trailing commas', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, `{
+            // ElasticFunnels credentials (managed by the VS Code extension)
+            "elasticfunnels.apiKey": "k-from-jsonc", /* inline */
+            "elasticfunnels.brandId": 7,
+            "elasticfunnels.apiUrl": "https://app.elasticfunnels.io", // trailing comment with // slashes
+        }`);
+        const s = await readVscodeEfSettings(root);
+        assert.equal(s.apiKey, 'k-from-jsonc');
+        assert.equal(s.brandId, 7);
+        assert.equal(s.apiUrl, 'https://app.elasticfunnels.io');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('readVscodeEfSettings coerces a string brandId and maps saveMode "ask" to draft', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, JSON.stringify({
+            'elasticfunnels.apiKey': 'k',
+            'elasticfunnels.brandId': '#42',
+            'elasticfunnels.saveMode': 'ask',
+        }));
+        const s = await readVscodeEfSettings(root);
+        assert.equal(s.brandId, 42);
+        assert.equal(s.saveMode, undefined, '"ask" is not a CLI save mode; left unset so it falls back to draft');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('readVscodeEfSettings returns {} for unparseable JSON', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, '{ this is not json ');
+        assert.deepEqual(await readVscodeEfSettings(root), {});
     } finally {
         await fs.promises.rm(root, { recursive: true, force: true });
     }

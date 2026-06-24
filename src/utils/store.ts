@@ -219,3 +219,77 @@ export const Defaults = {
     syncRoot: DEFAULT_SYNC_ROOT,
     saveMode: DEFAULT_SAVE_MODE,
 };
+
+/** Subset of the VS Code extension's config the CLI can reuse on `ef init`. */
+export interface VscodeEfSettings {
+    apiKey?: string;
+    brandId?: number;
+    apiUrl?: string;
+    saveMode?: 'draft' | 'direct';
+    syncRoot?: string;
+}
+
+/**
+ * Strip `//` and block comments and trailing commas so a VS Code `settings.json`
+ * (JSONC) parses as JSON. String contents — e.g. a `"https://…"` value — are
+ * matched and preserved, so the `//` inside a URL is never mistaken for a
+ * comment.
+ */
+function stripJsonc(text: string): string {
+    const noComments = text.replace(
+        /("(?:\\.|[^"\\])*")|\/\/[^\n\r]*|\/\*[\s\S]*?\*\//g,
+        (_m, str) => (str ? str : ''),
+    );
+    return noComments.replace(/,(\s*[}\]])/g, '$1');
+}
+
+/**
+ * Best-effort read of an existing VS Code extension setup from
+ * `<projectRoot>/.vscode/settings.json`, so `ef init` can reuse the brand a user
+ * already configured in the extension instead of re-prompting — the two tools
+ * then work interchangeably on the same folder. Returns `{}` when the file is
+ * absent or unparseable. Never throws.
+ */
+export async function readVscodeEfSettings(projectRoot: string): Promise<VscodeEfSettings> {
+    const p = path.join(projectRoot, '.vscode', 'settings.json');
+    let raw: string;
+    try {
+        raw = await fs.promises.readFile(p, 'utf8');
+    } catch {
+        return {};
+    }
+    let parsed: Record<string, unknown>;
+    try {
+        parsed = JSON.parse(stripJsonc(raw)) as Record<string, unknown>;
+    } catch {
+        return {};
+    }
+    if (!parsed || typeof parsed !== 'object') return {};
+
+    const out: VscodeEfSettings = {};
+
+    const apiKey = parsed['elasticfunnels.apiKey'];
+    if (typeof apiKey === 'string' && apiKey.trim() !== '') out.apiKey = apiKey.trim();
+
+    const brandId = parsed['elasticfunnels.brandId'];
+    if (typeof brandId === 'number' && Number.isFinite(brandId) && brandId > 0) {
+        out.brandId = brandId;
+    } else if (typeof brandId === 'string' && brandId.trim() !== '') {
+        const n = parseInt(brandId.trim().replace(/^#/, ''), 10);
+        if (Number.isFinite(n) && n > 0) out.brandId = n;
+    }
+
+    const apiUrl = parsed['elasticfunnels.apiUrl'];
+    if (typeof apiUrl === 'string' && apiUrl.trim() !== '') out.apiUrl = apiUrl.trim();
+
+    // The extension also supports "ask"; the CLI has no interactive save prompt,
+    // so anything other than an explicit "direct" maps to the safe "draft".
+    const saveMode = parsed['elasticfunnels.saveMode'];
+    if (saveMode === 'direct') out.saveMode = 'direct';
+    else if (saveMode === 'draft') out.saveMode = 'draft';
+
+    const syncRoot = parsed['elasticfunnels.syncToDisk.root'];
+    if (typeof syncRoot === 'string' && syncRoot.trim() !== '') out.syncRoot = syncRoot.trim();
+
+    return out;
+}

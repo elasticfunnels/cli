@@ -1,10 +1,35 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Command } from 'commander';
-import { ApiClient } from '../api/client';
+import { ApiClient, ProductImageUpload } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { readJsonPayloadFile } from './shared';
 import { formatRelative, renderTable } from '../utils/format';
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
+
+/**
+ * Read a local image file for upload. The server only accepts a product image
+ * as a multipart file (the JSON `image`/`image_link` field is read-only), so
+ * `--image` always points at a file on disk.
+ */
+async function readImageUpload(p: string): Promise<ProductImageUpload> {
+    const abs = path.resolve(p);
+    const name = path.basename(abs);
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(ext)) {
+        throw new CliError(ExitCode.Validation, `--image must be an image file (${[...IMAGE_EXTENSIONS].join(', ')}); got "${name}".`);
+    }
+    let bytes: Buffer;
+    try {
+        bytes = await fs.promises.readFile(abs);
+    } catch {
+        throw new CliError(ExitCode.Validation, `Image file not found or unreadable: ${p}`);
+    }
+    return { name, bytes };
+}
 
 /**
  * Map of CLI flags → product payload keys. String fields pass through; the
@@ -50,6 +75,7 @@ function addCommonFlags(cmd: Command): Command {
         .option('--seo-title <text>', 'SEO title.')
         .option('--seo-description <text>', 'SEO description.')
         .option('--seo-slug <slug>', 'SEO slug.')
+        .option('--image <path>', 'Local image file to upload as the product image (png, jpg, gif, webp, svg). Uploaded to the CDN by the server.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.');
 }
 
@@ -120,9 +146,10 @@ export function registerProductsCommand(program: Command): void {
             const payload = await buildPayload(opts);
             if (!payload.title) throw new CliError(ExitCode.Validation, 'A product title is required (pass --title or include it in --file).');
             if (!payload.code) throw new CliError(ExitCode.Validation, 'A product code is required (pass --code or include it in --file).');
-            const created = await api.createProduct(rt.config.brandId, payload);
+            const image = opts.image ? await readImageUpload(opts.image as string) : undefined;
+            const created = await api.createProduct(rt.config.brandId, payload, image);
             if (opts.json) { log.json({ ok: true, product: created }); return; }
-            log.success(`Created product #${created.id} "${created.code ?? payload.code}" (${created.title ?? payload.title}).`);
+            log.success(`Created product #${created.id} "${created.code ?? payload.code}" (${created.title ?? payload.title}).${image ? ' Image uploaded.' : ''}`);
         });
 
     addCommonFlags(
@@ -133,13 +160,22 @@ export function registerProductsCommand(program: Command): void {
         .action(async (id: string, opts: Record<string, unknown>) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const pid = numericId(id);
             const payload = await buildPayload(opts);
-            if (Object.keys(payload).length === 0) {
-                throw new CliError(ExitCode.Validation, 'Nothing to update — pass at least one field flag or --file.');
+            const image = opts.image ? await readImageUpload(opts.image as string) : undefined;
+            if (Object.keys(payload).length === 0 && !image) {
+                throw new CliError(ExitCode.Validation, 'Nothing to update — pass at least one field flag, --image, or --file.');
             }
-            const updated = await api.updateProduct(rt.config.brandId, numericId(id), payload);
+            // The server requires `title` on every update (it's not a partial
+            // PATCH). Backfill it from the current product when the caller didn't
+            // supply one, so updating just one field (or only the image) works.
+            if (payload.title === undefined) {
+                const current = await api.getProduct(rt.config.brandId, pid);
+                if (current.title) payload.title = current.title;
+            }
+            const updated = await api.updateProduct(rt.config.brandId, pid, payload, image);
             if (opts.json) { log.json({ ok: true, product: updated }); return; }
-            log.success(`Updated product #${updated.id ?? id}.`);
+            log.success(`Updated product #${updated.id ?? id}.${image ? ' Image uploaded.' : ''}`);
         });
 
     cmd.command('delete <id>')

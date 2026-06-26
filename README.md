@@ -148,7 +148,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
 | `ef push <paths…>` | Push specific files. Uses optimistic concurrency (`expected_revision_id`). |
 | `ef push --all` | Push every file under the brand root. |
-| `ef push <paths…> --direct` | Publish straight to the live page/component instead of saving a draft. |
+| `ef push <paths…> --draft` | Save as a draft instead of publishing (publishing is the default). |
 | `ef push --dry-run` | Print what would be pushed without making any API calls or disk writes. |
 | `ef diff [paths…]` | Show local-vs-baseline drift across the brand root (or restricted to paths). |
 | `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). |
@@ -271,10 +271,15 @@ ef push pages/about-us.ef --force
 
 ## Draft vs publish (`ef push`)
 
-`ef push` saves a **draft** by default — the body lands on the server as a
-revision, but the **live page doesn't change** until it's published. This
-mirrors the editor: a plain save is a draft; the **Publish** button is a direct
-save. After a draft push the CLI says so explicitly:
+`ef push` **publishes** by default — the change goes live immediately, the same
+as clicking **Publish** in the editor. To save a draft instead (a server
+revision that isn't live until it's published), pass `--draft`:
+
+```bash
+ef push pages/about-us.ef --draft         # save a draft, don't publish
+```
+
+A draft push says so explicitly, so it's never mistaken for a publish:
 
 ```text
 ✓ Pushed 1 file.
@@ -282,15 +287,9 @@ save. After a draft push the CLI says so explicitly:
   Publish in the app, or re-run with --direct to publish now.
 ```
 
-To publish from the CLI:
-
-```bash
-ef push pages/about-us.ef --direct        # publish this push
-```
-
-To make publishing the default for a folder, set `"saveMode": "direct"` in
-`.ef/config.json` (or `ef init … --save-mode direct`). The effective mode and
-the live-vs-draft outcome are shown under `ef push … --verbose`, and `--json`
+To make **draft** the default for a folder, set `"saveMode": "draft"` in
+`.ef/config.json` (or `ef init … --save-mode draft`). The effective mode and the
+live-vs-draft outcome are shown under `ef push … --verbose`, and `--json`
 includes a top-level `"draft"` boolean.
 
 ## JSON output for tooling

@@ -36,7 +36,7 @@ Examples:
   ef push --all                                 # push every file under syncRoot
   ef push pages/login.ef pages/signup.ef        # push multiple
   ef push pages/login.ef --force                # ignore revision conflicts (overwrite)
-  ef push pages/login.ef --direct               # publish (override saveMode "draft")
+  ef push pages/login.ef --draft                # save a draft instead of publishing (publish is the default)
   ef push pages/login.ef --verbose              # explain draft vs live + each file`)
         .option('--all', 'Push every file under the brand root.')
         .option('--force', 'Skip optimistic concurrency. Use only when you mean to overwrite the server.')

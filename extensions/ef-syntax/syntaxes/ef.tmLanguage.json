@@ -1,0 +1,91 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ElasticFunnels",
+  "scopeName": "text.html.ef",
+  "patterns": [
+    { "include": "#ef-comment" },
+    { "include": "#ef-interpolation" },
+    { "include": "#ef-directive" },
+    { "include": "text.html.basic" }
+  ],
+  "repository": {
+    "ef-comment": {
+      "name": "comment.block.ef",
+      "begin": "\\{\\{--",
+      "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.ef" } },
+      "end": "--\\}\\}",
+      "endCaptures": { "0": { "name": "punctuation.definition.comment.end.ef" } }
+    },
+    "ef-interpolation": {
+      "name": "meta.interpolation.ef",
+      "begin": "\\{\\{(?!--)",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.ef" } },
+      "end": "\\}\\}",
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.ef" } },
+      "patterns": [{ "include": "#ef-expression" }]
+    },
+    "ef-directive": {
+      "patterns": [
+        {
+          "comment": "Directive that takes a (...) argument list: @if(...), @foreach(...), @set(...), @component(...), etc.",
+          "begin": "(@)(if|elseif|foreach|set|component|extends|block|yield|splittest|include|php)\\b\\s*(\\()",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.keyword.ef" },
+            "2": { "name": "keyword.control.ef" },
+            "3": { "name": "punctuation.section.arguments.begin.ef" }
+          },
+          "end": "(\\))",
+          "endCaptures": { "1": { "name": "punctuation.section.arguments.end.ef" } },
+          "patterns": [
+            { "include": "#ef-keyword-in" },
+            { "include": "#ef-expression" }
+          ]
+        },
+        {
+          "comment": "Bare directive with no arguments: @else, @endif, @endforeach, etc.",
+          "match": "(@)(else|endif|endforeach|endcomponent|endblock|endsplittest|endphp)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.keyword.ef" },
+            "2": { "name": "keyword.control.ef" }
+          }
+        }
+      ]
+    },
+    "ef-keyword-in": {
+      "comment": "The `in` keyword inside @foreach(item in collection).",
+      "match": "\\b(in)\\b",
+      "name": "keyword.control.loop.ef"
+    },
+    "ef-expression": {
+      "patterns": [
+        { "include": "#ef-filter" },
+        {
+          "name": "string.quoted.double.ef",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.ef" }]
+        },
+        {
+          "name": "string.quoted.single.ef",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.ef" }]
+        },
+        { "name": "constant.numeric.ef", "match": "\\b\\d+(?:\\.\\d+)?\\b" },
+        { "name": "constant.language.ef", "match": "\\b(true|false|null)\\b" },
+        { "name": "keyword.operator.comparison.ef", "match": "\\b(eq|ne|gt|gte|lt|lte|and|or|not)\\b" },
+        { "name": "keyword.operator.ef", "match": "(==|!=|>=|<=|>|<|&&|\\|\\||=)" },
+        { "name": "variable.other.property.ef", "match": "\\b[a-zA-Z_][\\w]*(?:\\.[a-zA-Z_][\\w]*)*\\b" },
+        { "name": "punctuation.separator.ef", "match": "[,:]" }
+      ]
+    },
+    "ef-filter": {
+      "comment": "A pipe filter and its name: |upper, |truncate:10",
+      "match": "(\\|)\\s*([a-zA-Z_][\\w]*)",
+      "captures": {
+        "1": { "name": "keyword.operator.pipe.ef" },
+        "2": { "name": "support.function.filter.ef" }
+      }
+    }
+  }
+}

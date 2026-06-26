@@ -293,3 +293,101 @@ export async function readVscodeEfSettings(projectRoot: string): Promise<VscodeE
 
     return out;
 }
+
+/**
+ * Language we map `*.ef` files to in VS Code. Their bodies are HTML with `{{ }}`
+ * interpolations, so the built-in Handlebars grammar highlights both the markup
+ * and the expressions without needing a custom extension. (The engine's
+ * `@if`/`@foreach` directives have no built-in grammar, so those stay
+ * uncoloured — a dedicated TextMate grammar in the VS Code extension would be
+ * needed to highlight them.)
+ */
+export const EF_VSCODE_LANGUAGE = 'handlebars';
+
+/** What `ensureEfFileAssociation` did, for logging. `null` means a no-op/error. */
+export type EfAssociationResult = 'created' | 'added' | 'already-set' | 'skipped-different';
+
+/**
+ * Best-effort: ensure `<projectRoot>/.vscode/settings.json` maps `*.ef` to a
+ * language so VS Code highlights it, even for users who don't run the extension.
+ *
+ * Uses a minimal text merge — it inserts a single key rather than reparsing and
+ * rewriting the file — so existing settings, formatting and `//` comments are
+ * preserved. The edit is index-based, so as a safety net the result is
+ * re-parsed before writing; if anything looks off we abort rather than risk
+ * corrupting the user's settings. Never throws, and never overrides an existing
+ * `*.ef` association the user set themselves. Returns `null` on any I/O error.
+ */
+export async function ensureEfFileAssociation(projectRoot: string): Promise<EfAssociationResult | null> {
+    const dir = path.join(projectRoot, '.vscode');
+    const p = path.join(dir, 'settings.json');
+
+    let raw: string | null;
+    try {
+        raw = await fs.promises.readFile(p, 'utf8');
+    } catch {
+        raw = null; // absent (or unreadable) — create a fresh file below
+    }
+
+    // No settings file yet → write a minimal one.
+    if (raw == null) {
+        const body = `{\n  "files.associations": {\n    "*.ef": "${EF_VSCODE_LANGUAGE}"\n  }\n}\n`;
+        try {
+            await fs.promises.mkdir(dir, { recursive: true });
+            await fs.promises.writeFile(p, body, 'utf8');
+            return 'created';
+        } catch {
+            return null;
+        }
+    }
+
+    // Inspect current state with a tolerant parse. If it won't parse, don't risk
+    // a blind text edit.
+    let assoc: Record<string, unknown> | undefined;
+    try {
+        const parsed = JSON.parse(stripJsonc(raw)) as Record<string, unknown>;
+        const a = parsed?.['files.associations'];
+        if (a && typeof a === 'object') assoc = a as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+
+    // Already mapped → respect the user's choice, do nothing.
+    if (assoc && Object.prototype.hasOwnProperty.call(assoc, '*.ef')) {
+        return assoc['*.ef'] === EF_VSCODE_LANGUAGE ? 'already-set' : 'skipped-different';
+    }
+
+    let next: string;
+    if (assoc) {
+        // `files.associations` exists but lacks `*.ef` — insert into that object.
+        const keyIdx = raw.search(/["']files\.associations["']\s*:/);
+        const braceIdx = keyIdx >= 0 ? raw.indexOf('{', keyIdx) : -1;
+        if (braceIdx < 0) return null;
+        const insertion = `\n    "*.ef": "${EF_VSCODE_LANGUAGE}",`;
+        next = raw.slice(0, braceIdx + 1) + insertion + raw.slice(braceIdx + 1);
+    } else {
+        // No `files.associations` key — insert one at the top of the root object.
+        const braceIdx = raw.indexOf('{');
+        if (braceIdx < 0) return null;
+        const insertion = `\n  "files.associations": { "*.ef": "${EF_VSCODE_LANGUAGE}" },`;
+        next = raw.slice(0, braceIdx + 1) + insertion + raw.slice(braceIdx + 1);
+    }
+
+    // Safety net: only write if the result still parses and now has our mapping
+    // (guards against the index-based insert landing in the wrong place, e.g. a
+    // `{` inside a leading comment).
+    try {
+        const check = JSON.parse(stripJsonc(next)) as Record<string, unknown>;
+        const a = check?.['files.associations'] as Record<string, unknown> | undefined;
+        if (!a || a['*.ef'] !== EF_VSCODE_LANGUAGE) return null;
+    } catch {
+        return null;
+    }
+
+    try {
+        await fs.promises.writeFile(p, next, 'utf8');
+        return 'added';
+    } catch {
+        return null;
+    }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "ef-syntax",
+  "displayName": "ElasticFunnels Syntax",
+  "description": "Syntax highlighting for ElasticFunnels .ef template files (HTML + {{ }} expressions + @if/@foreach directives).",
+  "version": "0.1.0",
+  "publisher": "elasticfunnels",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "elasticfunnels",
+    "ef",
+    "template",
+    "blade",
+    "html"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ef",
+        "aliases": [
+          "ElasticFunnels",
+          "ef"
+        ],
+        "extensions": [
+          ".ef"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ef",
+        "scopeName": "text.html.ef",
+        "path": "./syntaxes/ef.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.js": "javascript",
+          "source.css": "css"
+        }
+      }
+    ]
+  }
+}

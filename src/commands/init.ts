@@ -6,7 +6,7 @@ import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
-import { Defaults, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
+import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 
@@ -237,6 +237,14 @@ async function runInit(opts: InitOptions): Promise<void> {
     log.detail(`Config: ${path.join(runtime.projectRoot, '.ef', 'config.json')}`);
     log.detail(`Brand root: ${runtime.brandRoot}`);
 
+    // Make VS Code highlight `.ef` files (HTML + `{{ }}`) without needing the
+    // extension. Best-effort — a failure here never undoes the bind.
+    const vscodeAssoc = await ensureEfFileAssociation(runtime.projectRoot);
+    if (vscodeAssoc === 'created' || vscodeAssoc === 'added') {
+        log.detail(`VS Code: mapped *.ef → ${EF_VSCODE_LANGUAGE} in .vscode/settings.json (syntax highlighting).`);
+        log.detail('For full .ef highlighting (@if/@foreach + {{ }}), run "ef install-highlighter".');
+    }
+
     // Bind, then pull everything down so the folder is usable immediately.
     // A sync failure doesn't undo the bind — the user can re-run `ef pull`.
     let pulled: { pages: number; components: number; scripts: number; assets: number } | null = null;
@@ -276,6 +284,7 @@ async function runInit(opts: InitOptions): Promise<void> {
             syncLayout: runtime.config.syncLayout,
             saveMode: runtime.config.saveMode,
             brandRoot: runtime.brandRoot,
+            vscodeAssociation: vscodeAssoc,
             pulled,
         });
     }

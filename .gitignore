@@ -6,3 +6,7 @@ out-test/
 .DS_Store
 .ef/
 
+# Built VS Code extension artifact — produced by `npm run build:ext` (and at
+# prepublish), bundled into the npm tarball, not committed.
+assets/*.vsix
+

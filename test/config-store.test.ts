@@ -11,6 +11,8 @@ import {
     clearLogin,
     findProjectRoot,
     readVscodeEfSettings,
+    ensureEfFileAssociation,
+    EF_VSCODE_LANGUAGE,
 } from '../src/utils/store';
 import { CliError, ExitCode } from '../src/utils/exit';
 
@@ -256,3 +258,102 @@ test('readVscodeEfSettings returns {} for unparseable JSON', async () => {
 async function exists(p: string): Promise<boolean> {
     try { await fs.promises.stat(p); return true; } catch { return false; }
 }
+
+async function readVscodeRaw(root: string): Promise<string> {
+    return await fs.promises.readFile(path.join(root, '.vscode', 'settings.json'), 'utf8');
+}
+
+/** Parse JSONC (strip `//`/`/* *​/` comments + trailing commas) for assertions. */
+function parseJsonc(raw: string): any {
+    const noComments = raw.replace(
+        /("(?:\\.|[^"\\])*")|\/\/[^\n\r]*|\/\*[\s\S]*?\*\//g,
+        (_m, str) => (str ? str : ''),
+    );
+    return JSON.parse(noComments.replace(/,(\s*[}\]])/g, '$1'));
+}
+
+test('ensureEfFileAssociation creates settings.json when absent', async () => {
+    const root = await tmpDir();
+    try {
+        const res = await ensureEfFileAssociation(root);
+        assert.equal(res, 'created');
+        const parsed = JSON.parse(await readVscodeRaw(root));
+        assert.equal(parsed['files.associations']['*.ef'], EF_VSCODE_LANGUAGE);
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('ensureEfFileAssociation merges into existing files.associations, preserving comments + keys', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, `{
+  // keep me
+  "editor.tabSize": 2,
+  "files.associations": {
+    "*.tpl": "html"
+  }
+}
+`);
+        const res = await ensureEfFileAssociation(root);
+        assert.equal(res, 'added');
+        const raw = await readVscodeRaw(root);
+        assert.ok(raw.includes('// keep me'), 'comment preserved');
+        assert.ok(raw.includes('"*.tpl": "html"'), 'existing association preserved');
+        // Parse (tolerating the trailing comma our insert leaves) to confirm both keys.
+        const parsed = parseJsonc(raw);
+        assert.equal(parsed['editor.tabSize'], 2);
+        assert.equal(parsed['files.associations']['*.ef'], EF_VSCODE_LANGUAGE);
+        assert.equal(parsed['files.associations']['*.tpl'], 'html');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('ensureEfFileAssociation adds files.associations when the key is missing', async () => {
+    const root = await tmpDir();
+    try {
+        await writeVscodeSettings(root, `{
+  "editor.tabSize": 4
+}
+`);
+        const res = await ensureEfFileAssociation(root);
+        assert.equal(res, 'added');
+        const parsed = parseJsonc(await readVscodeRaw(root));
+        assert.equal(parsed['editor.tabSize'], 4);
+        assert.equal(parsed['files.associations']['*.ef'], EF_VSCODE_LANGUAGE);
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('ensureEfFileAssociation leaves a user-chosen *.ef mapping untouched', async () => {
+    const root = await tmpDir();
+    try {
+        const original = `{
+  "files.associations": {
+    "*.ef": "html"
+  }
+}
+`;
+        await writeVscodeSettings(root, original);
+        const res = await ensureEfFileAssociation(root);
+        assert.equal(res, 'skipped-different');
+        assert.equal(await readVscodeRaw(root), original, 'file untouched');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('ensureEfFileAssociation is idempotent when already set', async () => {
+    const root = await tmpDir();
+    try {
+        await ensureEfFileAssociation(root);
+        const first = await readVscodeRaw(root);
+        const res = await ensureEfFileAssociation(root);
+        assert.equal(res, 'already-set');
+        assert.equal(await readVscodeRaw(root), first, 'no double-insert');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});

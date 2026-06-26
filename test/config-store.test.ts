@@ -174,6 +174,31 @@ test('findProjectRoot returns null when no .ef is found anywhere up the tree', a
     }
 });
 
+async function writeConfig(root: string, cfg: Record<string, unknown>): Promise<void> {
+    await fs.promises.mkdir(path.join(root, '.ef'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.ef', 'config.json'), JSON.stringify(cfg));
+}
+
+test('loadConfig defaults saveMode to "direct" when the field is absent', async () => {
+    const root = await tmpDir();
+    try {
+        await writeConfig(root, { apiUrl: 'https://x', brandId: 3, syncRoot: 'elasticfunnels' });
+        assert.equal((await loadConfig(root)).saveMode, 'direct');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('loadConfig honors an explicit saveMode "draft" (upgrade does not flip it to direct)', async () => {
+    const root = await tmpDir();
+    try {
+        await writeConfig(root, { apiUrl: 'https://x', brandId: 3, syncRoot: 'elasticfunnels', saveMode: 'draft' });
+        assert.equal((await loadConfig(root)).saveMode, 'draft');
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
 async function writeVscodeSettings(root: string, body: string): Promise<void> {
     await fs.promises.mkdir(path.join(root, '.vscode'), { recursive: true });
     await fs.promises.writeFile(path.join(root, '.vscode', 'settings.json'), body);

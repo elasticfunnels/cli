@@ -215,7 +215,7 @@ async function runInit(opts: InitOptions): Promise<void> {
     }
 
     const saveModeRaw = opts.saveMode ?? vscodeSettings.saveMode;
-    const saveMode = (saveModeRaw === 'direct' ? 'direct' : 'draft') as 'draft' | 'direct';
+    const saveMode = (saveModeRaw === 'draft' ? 'draft' : saveModeRaw === 'direct' ? 'direct' : Defaults.saveMode) as 'draft' | 'direct';
     const syncRoot = (opts.syncRoot || vscodeSettings.syncRoot || Defaults.syncRoot).trim() || Defaults.syncRoot;
     const layoutRaw = (opts.syncLayout ?? 'flat').trim().toLowerCase();
     if (layoutRaw !== 'nested' && layoutRaw !== 'flat') {

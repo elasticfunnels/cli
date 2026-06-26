@@ -56,12 +56,12 @@ function startMock(): Promise<Mock> {
     });
 }
 
-async function setupBrand(root: string, apiUrl: string): Promise<string> {
+async function setupBrand(root: string, apiUrl: string, saveMode?: 'draft' | 'direct'): Promise<string> {
     await fs.promises.mkdir(path.join(root, '.ef'), { recursive: true });
-    await fs.promises.writeFile(
-        path.join(root, '.ef', 'config.json'),
-        JSON.stringify({ apiUrl, brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'draft' }),
-    );
+    // Omit saveMode entirely to exercise the built-in default (now "direct").
+    const config: Record<string, unknown> = { apiUrl, brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat' };
+    if (saveMode) config.saveMode = saveMode;
+    await fs.promises.writeFile(path.join(root, '.ef', 'config.json'), JSON.stringify(config));
     await fs.promises.writeFile(path.join(root, '.ef', 'auth'), 'fake-key\n');
     const brandRoot = path.join(root, 'elasticfunnels');
     await fs.promises.mkdir(path.join(brandRoot, 'pages'), { recursive: true });
@@ -86,11 +86,11 @@ function runEf(cwd: string, args: string[]): Promise<{ stdout: string; stderr: s
     });
 }
 
-test('push in draft mode (default) warns the page is NOT live', async () => {
+test('push with saveMode "draft" warns the page is NOT live', async () => {
     const mock = await startMock();
     const root = await tmpDir();
     try {
-        await setupBrand(root, mock.url);
+        await setupBrand(root, mock.url, 'draft');
         const res = await runEf(root, ['push', 'pages/home.ef', '--force']);
         assert.equal(res.status, 0, `expected exit 0, got ${res.status}\nstderr=${res.stderr}`);
         assert.match(res.stderr, /Saved as DRAFT/i, 'draft push must warn the change is not live');
@@ -101,11 +101,26 @@ test('push in draft mode (default) warns the page is NOT live', async () => {
     }
 });
 
+test('push uses the direct default (no saveMode in config) and does NOT warn', async () => {
+    const mock = await startMock();
+    const root = await tmpDir();
+    try {
+        await setupBrand(root, mock.url); // no saveMode → built-in default "direct"
+        const res = await runEf(root, ['push', 'pages/home.ef', '--force']);
+        assert.equal(res.status, 0, `expected exit 0, got ${res.status}\nstderr=${res.stderr}`);
+        assert.doesNotMatch(res.stderr, /Saved as DRAFT/i, 'default push now publishes — no draft warning');
+        assert.ok(mock.editorPosts.some((b) => b?.draft === false), 'POST …/editor should carry draft:false');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
 test('push --direct publishes and does NOT warn about drafts', async () => {
     const mock = await startMock();
     const root = await tmpDir();
     try {
-        await setupBrand(root, mock.url);
+        await setupBrand(root, mock.url, 'draft');
         const res = await runEf(root, ['push', 'pages/home.ef', '--direct', '--force']);
         assert.equal(res.status, 0, `expected exit 0, got ${res.status}\nstderr=${res.stderr}`);
         assert.doesNotMatch(res.stderr, /Saved as DRAFT/i, '--direct must not warn about drafts');

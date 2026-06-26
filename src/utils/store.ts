@@ -64,7 +64,7 @@ export const AUTH_FILENAME = 'auth';
 
 const DEFAULT_API_URL = 'https://app.elasticfunnels.io';
 const DEFAULT_SYNC_ROOT = 'elasticfunnels';
-const DEFAULT_SAVE_MODE: EfConfig['saveMode'] = 'draft';
+const DEFAULT_SAVE_MODE: EfConfig['saveMode'] = 'direct';
 
 export function configDirFor(projectRoot: string): string {
     return path.join(projectRoot, CONFIG_DIR);
@@ -117,7 +117,9 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         brandId: parsed.brandId,
         syncRoot: typeof parsed.syncRoot === 'string' && parsed.syncRoot.trim() !== '' ? parsed.syncRoot.trim() : DEFAULT_SYNC_ROOT,
         syncLayout: parsed.syncLayout === 'nested' ? 'nested' : 'flat',
-        saveMode: parsed.saveMode === 'direct' ? 'direct' : DEFAULT_SAVE_MODE,
+        // Honor an explicit "draft" so upgrading (when the default flipped to
+        // "direct") doesn't silently start publishing for users who chose draft.
+        saveMode: parsed.saveMode === 'draft' ? 'draft' : parsed.saveMode === 'direct' ? 'direct' : DEFAULT_SAVE_MODE,
         lastPulledAt: typeof parsed.lastPulledAt === 'string' ? parsed.lastPulledAt : null,
     };
 }

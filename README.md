@@ -137,6 +137,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | --- | --- |
 | `ef init` | Bind this folder to a brand. Interactive or non-interactive (`--api-key`, `--brand-id`). Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
+| `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
 | `ef whoami` | Print the active project root, brand, API URL, key prefix. |
 | `ef status` | Connection check, last-pull timestamp, entity counts. |
 | `ef list <kind>` | List pages \| components \| assets \| scripts \| folders \| templates. |
@@ -147,6 +148,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
 | `ef push <paths…>` | Push specific files. Uses optimistic concurrency (`expected_revision_id`). |
 | `ef push --all` | Push every file under the brand root. |
+| `ef push <paths…> --direct` | Publish straight to the live page/component instead of saving a draft. |
 | `ef push --dry-run` | Print what would be pushed without making any API calls or disk writes. |
 | `ef diff [paths…]` | Show local-vs-baseline drift across the brand root (or restricted to paths). |
 | `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). |
@@ -266,6 +268,30 @@ Or, if you're sure you want to overwrite the server, pass `--force`:
 ```bash
 ef push pages/about-us.ef --force
 ```
+
+## Draft vs publish (`ef push`)
+
+`ef push` saves a **draft** by default — the body lands on the server as a
+revision, but the **live page doesn't change** until it's published. This
+mirrors the editor: a plain save is a draft; the **Publish** button is a direct
+save. After a draft push the CLI says so explicitly:
+
+```text
+✓ Pushed 1 file.
+! Saved as DRAFT — not live on the site yet.
+  Publish in the app, or re-run with --direct to publish now.
+```
+
+To publish from the CLI:
+
+```bash
+ef push pages/about-us.ef --direct        # publish this push
+```
+
+To make publishing the default for a folder, set `"saveMode": "direct"` in
+`.ef/config.json` (or `ef init … --save-mode direct`). The effective mode and
+the live-vs-draft outcome are shown under `ef push … --verbose`, and `--json`
+includes a top-level `"draft"` boolean.
 
 ## JSON output for tooling
 

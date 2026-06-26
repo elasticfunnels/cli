@@ -196,7 +196,7 @@ Examples:
                 const pushed = opts.verbose
                     ? results
                     : results.map(({ apiResponse: _omit, ...r }) => r);
-                const base: Record<string, unknown> = { ok: true, pushed };
+                const base: Record<string, unknown> = { ok: true, draft, pushed };
                 if (opts.verbose) {
                     base.debug = {
                         apiUrl: rt.config.apiUrl,
@@ -210,6 +210,18 @@ Examples:
                 return;
             }
             log.success(`Pushed ${results.length} file${results.length === 1 ? '' : 's'}.`);
+
+            // Draft saves a revision but doesn't update the live page — make that
+            // unmissable so a push isn't mistaken for a publish. Only warn when a
+            // page/component body was actually written (scripts/assets aren't
+            // draft-gated), and not when --direct already published.
+            const wroteDraftBody = draft && results.some(
+                (r) => (r.kind === 'page' || r.kind === 'component') && (r.action === 'created' || r.action === 'updated'),
+            );
+            if (wroteDraftBody) {
+                log.warn('Saved as DRAFT — not live on the site yet.');
+                log.detail('Publish in the app, or re-run with --direct to publish now. To always publish, set "saveMode": "direct" in .ef/config.json.');
+            }
         });
 }
 

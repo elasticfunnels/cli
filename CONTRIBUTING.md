@@ -41,9 +41,10 @@ npm test                   # full test suite
 npm run release:dry        # `npm pack --dry-run` — prints what would ship
 ```
 
-The dry-run output should show only `bin/ef.js`, the compiled `out/` tree,
-`README.md`, `LICENSE`, and `package.json`. If you see `src/`, `test/`, or
-`out-test/`, fix `files` / `.npmignore` before continuing.
+The dry-run output should show only `bin/ef.js`, the compiled `out/` tree, the
+bundled `assets/ef-syntax-*.vsix` (the editor highlighting extension, built by
+`npm run build:ext`), `README.md`, `LICENSE`, and `package.json`. If you see
+`src/`, `test/`, or `out-test/`, fix `files` / `.npmignore` before continuing.
 
 ### Cutting a release
 

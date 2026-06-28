@@ -496,7 +496,10 @@ export async function pushComponentFile(
 
     const code = relPathForComponentSlugFromRel(rel);
     if (!code) throw new Error(`Cannot derive component code from "${rel}". Components must live under components/<code>.ef.`);
-    const created = await ctx.api.createComponent(ctx.rt.config.brandId, code, body);
+    // Pass `code` as both name and code. Sending an empty code lets Laravel's
+    // ConvertEmptyStringsToNull null it out and the server rejects it ("The code
+    // must be a string"), so the create would 422.
+    const created = await ctx.api.createComponent(ctx.rt.config.brandId, code, body, code);
     const newMeta: EfMeta = {
         v: 1, type: 'component', brandId: ctx.rt.config.brandId, id: created.id,
         slug: created.code ?? code, name: created.name ?? code,

@@ -13,6 +13,7 @@ import {
     Product,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
+import { requestStart, requestEnd } from '../utils/loader';
 
 /** Max files the server's bulk-upload endpoint accepts per request. */
 export const BULK_UPLOAD_MAX = 20;
@@ -535,6 +536,7 @@ export class ApiClient {
         url: string,
         opts?: { params?: Record<string, unknown>; data?: unknown; headers?: Record<string, string> },
     ): Promise<AxiosResponse> {
+        requestStart();
         try {
             return await this.http.request({ method, url, ...opts });
         } catch (err) {
@@ -546,6 +548,8 @@ export class ApiClient {
                 );
             }
             throw err;
+        } finally {
+            requestEnd();
         }
     }
 }

@@ -132,9 +132,27 @@ export async function buildSyncContext(rt: EfRuntime): Promise<SyncContext> {
 
 // ── Pages ────────────────────────────────────────────────────────────
 
+/**
+ * Pull-collision guard. If `rel` is already occupied on disk by a DIFFERENT
+ * entity (its efmeta id ≠ `id`) — which happens when two server entities share a
+ * code/slug — return an id-suffixed path so the pull doesn't clobber the first,
+ * and warn. The disambiguated file still carries the correct efmeta id, so a
+ * later push targets the right entity regardless of the filename.
+ */
+export async function nonCollidingRel(ctx: SyncContext, rel: string, id: number, kind: 'page' | 'component'): Promise<string> {
+    const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
+    if (!(await fileExists(abs))) return rel;
+    let existingId: number | undefined;
+    try { existingId = parseEfMeta(await fs.promises.readFile(abs, 'utf8')).meta?.id; } catch { /* unreadable → treat as free */ }
+    if (existingId == null || existingId === id) return rel;
+    const alt = rel.replace(/\.ef$/, `-${id}.ef`);
+    log.warn(`${kind} path collision: #${existingId} and #${id} both map to "${rel}" (duplicate code/slug on the server?). Writing #${id} to "${alt}".`);
+    return alt;
+}
+
 export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel: string; absPath: string; created: boolean }> {
     const page = await ctx.api.getPageContent(ctx.rt.config.brandId, pageId);
-    const rel = relPathForPage(page);
+    const rel = await nonCollidingRel(ctx, relPathForPage(page), page.id, 'page');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
     const meta: EfMeta = {
         v: 1,
@@ -176,7 +194,7 @@ export async function pullAllPages(ctx: SyncContext): Promise<Array<{ rel: strin
 
 export async function pullComponent(ctx: SyncContext, componentId: number): Promise<{ rel: string; absPath: string; created: boolean }> {
     const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, componentId);
-    const rel = relPathForComponent(c);
+    const rel = await nonCollidingRel(ctx, relPathForComponent(c), c.id, 'component');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
     const meta: EfMeta = {
         v: 1,
@@ -343,6 +361,22 @@ async function fetchCanonicalBody(
     }
 }
 
+/**
+ * A file is a *copy* of another entity when its embedded efmeta was issued for a
+ * different path AND that original file still exists on disk. Pushing it under
+ * the embedded id would trample the original's server entity, so the caller
+ * creates a NEW entity instead. (A pure rename — the original path is gone —
+ * keeps the id and just re-homes the path.)
+ */
+async function isCopyOfExistingFile(ctx: SyncContext, meta: EfMeta | null, rel: string): Promise<boolean> {
+    if (!meta?.path || meta.path === rel) return false;
+    try {
+        return await fileExists(safeJoinBrandRoot(ctx.rt.brandRoot, meta.path));
+    } catch {
+        return false;
+    }
+}
+
 export async function pushPageFile(
     ctx: SyncContext,
     abs: string,
@@ -351,11 +385,15 @@ export async function pushPageFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseEfMeta(text);
+    // Copy-trample guard: a duplicated file keeps the source's efmeta id; pushing
+    // it would overwrite the original on the server. Detect it and create a new
+    // page instead.
+    const isCopy = await isCopyOfExistingFile(ctx, meta, rel);
 
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'POST …/pages/{id}/editor `html`');
     }
-    if (meta && meta.type === 'page' && meta.id) {
+    if (meta && meta.type === 'page' && meta.id && !isCopy) {
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
         const expectedRev = opts.force ? null : (meta.revisionId ?? ctx.state.getByPath('page', rel)?.revisionId ?? null);
         // Match vscode-extension: only send revision_id when saving a draft row.
@@ -436,7 +474,9 @@ export async function pushPageFile(
         serverId: created.id,
         revisionId: res.revision_id ?? null,
         previewUrl: res.preview_url ?? null,
-        note: `Allocated new page id ${created.id} for slug "${slug}".`,
+        note: isCopy && meta?.id
+            ? `Copy of page #${meta.id} (efmeta issued for ${meta.path}); created NEW page #${created.id} (slug "${slug}") so the original is untouched.`
+            : `Allocated new page id ${created.id} for slug "${slug}".`,
         apiResponse: {
             page: shrinkPushApiBody(created) ?? {},
             editor: shrinkPushApiBody(res) ?? {},
@@ -452,11 +492,14 @@ export async function pushComponentFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseEfMeta(text);
+    // Copy-trample guard (see pushPageFile): a duplicated component file keeps the
+    // source's efmeta id; create a new component instead of overwriting it.
+    const isCopy = await isCopyOfExistingFile(ctx, meta, rel);
 
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'POST …/components/{id}/editor `html`');
     }
-    if (meta && meta.type === 'component' && meta.id) {
+    if (meta && meta.type === 'component' && meta.id && !isCopy) {
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
         const expectedRev = opts.force ? null : (meta.revisionId ?? ctx.state.getByPath('component', rel)?.revisionId ?? null);
         const res = await ctx.api.updateComponentHtml(ctx.rt.config.brandId, meta.id, body, {
@@ -520,7 +563,9 @@ export async function pushComponentFile(
         kind: 'component',
         action: 'created',
         serverId: created.id,
-        note: `Allocated new component id ${created.id} (code "${code}").`,
+        note: isCopy && meta?.id
+            ? `Copy of component #${meta.id} (efmeta issued for ${meta.path}); created NEW component #${created.id} (code "${code}") so the original is untouched.`
+            : `Allocated new component id ${created.id} (code "${code}").`,
         apiResponse: shrinkPushApiBody(created) ?? {},
     };
 }

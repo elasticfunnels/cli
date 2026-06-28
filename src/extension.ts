@@ -20,6 +20,7 @@ import { registerDiffCommand } from './commands/diff';
 import { registerAskCommand } from './commands/ask';
 import { registerClaudeCommand } from './commands/claude';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
+import { registerConfigCommand } from './commands/config';
 
 function getVersion(): string {
     try {
@@ -68,6 +69,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerAskCommand(program);
     registerClaudeCommand(program);
     registerInstallHighlighterCommand(program);
+    registerConfigCommand(program);
 
     return program;
 }

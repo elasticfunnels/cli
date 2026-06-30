@@ -1,12 +1,62 @@
+import * as path from 'path';
+import * as fs from 'fs';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
+import { Page } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
-import { loadRuntime } from '../utils/store';
+import { EfRuntime, loadRuntime } from '../utils/store';
 import { fetchPagePreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug } from './shared';
-import { relPathForPage } from '../sync/paths';
+import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
+import { EfMeta, parseEfMeta, withEfMeta } from '../sync/efMeta';
+import { fileExists, sha256, writeFileAtomic } from '../utils/fs';
+import { SyncStateFile } from '../sync/stateFile';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
+
+/**
+ * When a page's slug changes on the server, move its local `.ef` file to match
+ * (e.g. pages/old.ef → pages/new.ef): preserve the body, rewrite the embedded
+ * efmeta (slug/name/path), and move the `.ef-state.json` path→id entry so drift
+ * detection and `ef push` target the new path. Returns the rename, or null when
+ * there's nothing on disk to move or the path didn't change.
+ */
+async function renameLocalPageFile(rt: EfRuntime, pageId: number, oldRel: string, newRel: string, updated: Page): Promise<{ from: string; to: string } | null> {
+    if (oldRel === newRel) return null;
+    const oldAbs = safeJoinBrandRoot(rt.brandRoot, oldRel);
+    if (!(await fileExists(oldAbs))) return null;
+    const newAbs = safeJoinBrandRoot(rt.brandRoot, newRel);
+
+    const { meta, body } = parseEfMeta(await fs.promises.readFile(oldAbs, 'utf8'));
+    const newMeta: EfMeta = {
+        ...(meta ?? { v: 1 as const, type: 'page' as const, brandId: rt.config.brandId, id: pageId }),
+        type: 'page',
+        id: pageId,
+        slug: updated.slug ?? undefined,
+        name: updated.title ?? meta?.name,
+        path: newRel,
+    };
+    await fs.promises.mkdir(path.dirname(newAbs), { recursive: true });
+    await writeFileAtomic(newAbs, withEfMeta(newMeta, body));
+    if (path.resolve(newAbs) !== path.resolve(oldAbs)) {
+        await fs.promises.unlink(oldAbs).catch(() => { /* already gone */ });
+    }
+
+    const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);
+    const prev = state.getByPath('page', oldRel);
+    state.deleteEntry('page', oldRel);
+    state.setEntry('page', {
+        path: newRel,
+        id: pageId,
+        type: 'page',
+        revisionId: prev?.revisionId ?? updated.revision_id ?? null,
+        updatedAt: updated.updated_at ?? new Date().toISOString(),
+        serverUpdatedAt: prev?.serverUpdatedAt ?? updated.updated_at ?? null,
+        contentHash: prev?.contentHash ?? sha256(Buffer.from(body, 'utf8')),
+    });
+    await state.save();
+    return { from: oldRel, to: newRel };
+}
 
 export function registerPagesCommand(program: Command): void {
     const cmd = program
@@ -87,8 +137,14 @@ export function registerPagesCommand(program: Command): void {
             if (payload.title == null) payload.title = page.title ?? '';
 
             const updated = await api.updatePageSettings(rt.config.brandId, page.id, payload);
-            if (opts.json) { log.json({ ok: true, page: updated }); return; }
+
+            // A slug change moves the page's URL — keep the local .ef file in sync
+            // so disk, efmeta and state match the new slug.
+            const renamed = await renameLocalPageFile(rt, page.id, relPathForPage(page), relPathForPage(updated), updated);
+
+            if (opts.json) { log.json({ ok: true, page: updated, renamed }); return; }
             log.success(`Updated settings for page #${page.id} (${updated.slug ?? page.slug}).`);
+            if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });
 
     cmd.command('publish <slug>')

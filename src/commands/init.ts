@@ -287,6 +287,9 @@ async function runInit(opts: InitOptions): Promise<void> {
             pulled = await runFullSync(runtime, {
                 json: opts.json,
                 silent: true,
+                // Adopt files already on disk (e.g. an existing VS Code extension
+                // folder) instead of re-downloading everything.
+                adopt: true,
                 onProgress: (kind, label, done, total) => {
                     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
                     const name = label.split('/').pop() || label;

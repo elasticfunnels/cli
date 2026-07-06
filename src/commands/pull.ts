@@ -22,6 +22,7 @@ import { classifyAbsPath } from '../sync/sync';
 interface PullOpts {
     json?: boolean;
     since?: string;
+    adopt?: boolean;
 }
 
 /**
@@ -32,6 +33,9 @@ interface PullOpts {
 export async function runFullSync(rt: EfRuntime, opts: {
     json?: boolean;
     silent?: boolean;
+    /** Adopt an already-synced folder: skip re-downloading files already on disk
+     *  and unchanged (used by `ef init` on an extension-populated folder). */
+    adopt?: boolean;
     onProgress?: SyncContext['onProgress'];
 } = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
@@ -41,15 +45,20 @@ export async function runFullSync(rt: EfRuntime, opts: {
     // `silent` suppresses the per-kind streaming so a caller (e.g. `ef init`)
     // can show its own loader instead.
     const log_ = (msg: string) => { if (!opts.json && !opts.silent) log.info(msg); };
-    log_(`${c.bold('Full sync')} → ${ctx.rt.brandRoot}`);
-    const pages = await pullAllPages(ctx);
-    log_(`${c.green('✓')} ${pages.length} pages`);
-    const components = await pullAllComponents(ctx);
-    log_(`${c.green('✓')} ${components.length} components`);
-    const scripts = await pullAllScripts(ctx);
-    log_(`${c.green('✓')} ${scripts.length} scripts`);
-    const assets = await pullAllAssets(ctx);
-    log_(`${c.green('✓')} ${assets.length} assets`);
+    const a = { adopt: opts.adopt };
+    const summary = (kind: string, arr: Array<{ skipped?: boolean }>): string => {
+        const skipped = arr.filter((x) => x.skipped).length;
+        return skipped ? `${arr.length} ${kind} (${arr.length - skipped} fetched, ${skipped} already current)` : `${arr.length} ${kind}`;
+    };
+    log_(`${c.bold('Full sync')}${opts.adopt ? ' (adopting existing files)' : ''} → ${ctx.rt.brandRoot}`);
+    const pages = await pullAllPages(ctx, a);
+    log_(`${c.green('✓')} ${summary('pages', pages)}`);
+    const components = await pullAllComponents(ctx, a);
+    log_(`${c.green('✓')} ${summary('components', components)}`);
+    const scripts = await pullAllScripts(ctx, a);
+    log_(`${c.green('✓')} ${summary('scripts', scripts)}`);
+    const assets = await pullAllAssets(ctx, a);
+    log_(`${c.green('✓')} ${summary('assets', assets)}`);
     const variables = await pullVariables(ctx);
     log_(`${c.green('✓')} variables → ${variables.rel}`);
     await ctx.state.save();
@@ -75,6 +84,7 @@ With <target>, pulls one entity. Examples:
   ef pull script welcome-email  # one specific script`)
         .option('--json', 'Print results as JSON.')
         .option('--since <iso>', 'Only pull entities modified after this ISO timestamp. Uses the server\'s sync-delta endpoints — much faster than a full sync for incremental updates.')
+        .option('--adopt', 'Skip re-downloading files already on disk and unchanged (resume, or adopt an existing/extension folder). Only fetches what is missing or drifted.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
@@ -100,28 +110,28 @@ With <target>, pulls one entity. Examples:
 
             const t = target.trim();
             if (t === 'pages') {
-                const out = await pullAllPages(ctx);
+                const out = await pullAllPages(ctx, { adopt: opts.adopt });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} pages.`);
                 return;
             }
             if (t === 'components') {
-                const out = await pullAllComponents(ctx);
+                const out = await pullAllComponents(ctx, { adopt: opts.adopt });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} components.`);
                 return;
             }
             if (t === 'scripts') {
-                const out = await pullAllScripts(ctx);
+                const out = await pullAllScripts(ctx, { adopt: opts.adopt });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} scripts.`);
                 return;
             }
             if (t === 'assets') {
-                const out = await pullAllAssets(ctx);
+                const out = await pullAllAssets(ctx, { adopt: opts.adopt });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} assets.`);

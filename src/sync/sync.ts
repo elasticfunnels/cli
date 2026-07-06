@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import { ApiClient } from '../api/client';
 import { EfRuntime } from '../utils/store';
 import { SyncStateFile } from '../sync/stateFile';
-import { EfMeta, parseEfMeta, serializeEfMeta, withEfMeta } from '../sync/efMeta';
+import { EfMeta, parseEfMeta, serializeEfMeta, serializeScriptEfMeta, withEfMeta } from '../sync/efMeta';
+import { CliError, ExitCode } from '../utils/exit';
 import { fileExists, readFileBytes, sha256, writeFileAtomic } from '../utils/fs';
 import { DEFAULT_PULL_CONCURRENCY, mapWithConcurrency } from '../utils/concurrency';
 import {
@@ -237,17 +238,10 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
     const s = await ctx.api.getBackendScript(ctx.rt.config.brandId, idOrCode);
     const rel = relPathForScript(s);
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
-    const metaLine = `// efmeta:${JSON.stringify({
-        v: 1,
-        type: 'script',
-        brandId: ctx.rt.config.brandId,
-        id: s.id,
-        slug: s.code,
-        name: s.name,
-        revisionId: s.revision_id ?? undefined,
-        remoteUpdatedAt: s.updated_at ?? undefined,
-        path: rel,
-    } satisfies EfMeta)}\n`;
+    const metaLine = serializeScriptEfMeta({
+        v: 1, type: 'script', brandId: ctx.rt.config.brandId, id: s.id,
+        slug: s.code ?? undefined, path: rel,
+    }) + '\n';
     const body = s.content ?? '';
     const existed = await fileExists(abs);
     await writeFileAtomic(abs, metaLine + body);
@@ -377,6 +371,29 @@ async function isCopyOfExistingFile(ctx: SyncContext, meta: EfMeta | null, rel: 
     }
 }
 
+/**
+ * Guard against a tampered / merge-corrupted efmeta line. If this path is
+ * tracked in `.ef-state.json`, the file's efmeta must still claim the SAME id and
+ * type. If it doesn't (an editor, an AI, or a git merge changed or removed the
+ * first line), refuse the push instead of writing to the wrong server entity — a
+ * detected copy is exempt (it becomes a new entity anyway).
+ */
+function assertEfmetaMatchesState(ctx: SyncContext, kind: 'page' | 'component' | 'script', rel: string, meta: EfMeta | null, isCopy: boolean): void {
+    if (isCopy) return;
+    const tracked = ctx.state.getByPath(kind, rel);
+    if (!tracked) return; // untracked path (new file / fresh clone) — nothing to compare
+    const idOk = meta?.id === tracked.id;
+    const typeOk = !meta || !meta.type || meta.type === kind;
+    if (idOk && typeOk) return;
+    const claim = meta?.id ? `the file's efmeta says #${meta.id}` : 'the file has no valid efmeta line';
+    throw new CliError(
+        ExitCode.Conflict,
+        `Refusing to push ${rel}: its efmeta no longer matches the tracked identity ` +
+        `(tracked as ${kind} #${tracked.id}, but ${claim}). The first line was changed — ` +
+        `by an edit, an AI, or a git merge. Run "ef pull ${rel}" to restore the correct efmeta, then re-apply your body changes.`,
+    );
+}
+
 export async function pushPageFile(
     ctx: SyncContext,
     abs: string,
@@ -389,19 +406,22 @@ export async function pushPageFile(
     // it would overwrite the original on the server. Detect it and create a new
     // page instead.
     const isCopy = await isCopyOfExistingFile(ctx, meta, rel);
+    assertEfmetaMatchesState(ctx, 'page', rel, meta, isCopy);
 
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'POST …/pages/{id}/editor `html`');
     }
     if (meta && meta.type === 'page' && meta.id && !isCopy) {
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
-        const expectedRev = opts.force ? null : (meta.revisionId ?? ctx.state.getByPath('page', rel)?.revisionId ?? null);
+        const trackedRev = ctx.state.getByPath('page', rel)?.revisionId ?? null;
+        const expectedRev = opts.force ? null : (meta.revisionId ?? trackedRev);
         // Match vscode-extension: only send revision_id when saving a draft row.
         // Direct/publish saves apply to the live BrandPage row and clear revisions;
-        // sending a stale draft revision_id can confuse some code paths.
+        // sending a stale draft revision_id can confuse some code paths. The
+        // revision now lives in state, not efmeta, so fall back to it.
         const res = await ctx.api.updatePageHtml(ctx.rt.config.brandId, meta.id, body, {
             draft: isDraft,
-            revisionId: isDraft ? (meta.revisionId ?? null) : null,
+            revisionId: isDraft ? (meta.revisionId ?? trackedRev) : null,
             expectedRevisionId: expectedRev,
         });
         const newMeta: EfMeta = { ...meta, path: rel };
@@ -495,16 +515,18 @@ export async function pushComponentFile(
     // Copy-trample guard (see pushPageFile): a duplicated component file keeps the
     // source's efmeta id; create a new component instead of overwriting it.
     const isCopy = await isCopyOfExistingFile(ctx, meta, rel);
+    assertEfmetaMatchesState(ctx, 'component', rel, meta, isCopy);
 
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'POST …/components/{id}/editor `html`');
     }
     if (meta && meta.type === 'component' && meta.id && !isCopy) {
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
-        const expectedRev = opts.force ? null : (meta.revisionId ?? ctx.state.getByPath('component', rel)?.revisionId ?? null);
+        const trackedRev = ctx.state.getByPath('component', rel)?.revisionId ?? null;
+        const expectedRev = opts.force ? null : (meta.revisionId ?? trackedRev);
         const res = await ctx.api.updateComponentHtml(ctx.rt.config.brandId, meta.id, body, {
             draft: isDraft,
-            revisionId: isDraft ? (meta.revisionId ?? null) : null,
+            revisionId: isDraft ? (meta.revisionId ?? trackedRev) : null,
             expectedRevisionId: expectedRev,
         });
         const newMeta: EfMeta = { ...meta, path: rel };
@@ -578,6 +600,7 @@ export async function pushScriptFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseScriptMeta(text);
+    assertEfmetaMatchesState(ctx, 'script', rel, meta, false);
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'PUT …/scripts/{id} body');
     }
@@ -586,14 +609,7 @@ export async function pushScriptFile(
     const code = relPathForScriptCodeFromRel(rel);
     if (meta && meta.type === 'script' && meta.id) {
         const updated = await ctx.api.updateBackendScript(ctx.rt.config.brandId, meta.id, body);
-        const newFirst = `// efmeta:${JSON.stringify({
-            ...meta,
-            slug: updated.code,
-            name: updated.name,
-            revisionId: updated.revision_id ?? meta.revisionId,
-            remoteUpdatedAt: updated.updated_at ?? meta.remoteUpdatedAt,
-            path: rel,
-        } satisfies EfMeta)}\n`;
+        const newFirst = serializeScriptEfMeta({ ...meta, slug: updated.code ?? meta.slug, path: rel }) + '\n';
         await writeFileAtomic(abs, newFirst + body);
         ctx.state.setEntry('script', {
             path: rel,
@@ -616,10 +632,10 @@ export async function pushScriptFile(
 
     if (!code) throw new Error(`Cannot derive script code from "${rel}". Scripts must live under scripts/<code>.js.`);
     const created = await ctx.api.createBackendScript(ctx.rt.config.brandId, code, code, body);
-    const newFirst = `// efmeta:${JSON.stringify({
+    const newFirst = serializeScriptEfMeta({
         v: 1, type: 'script', brandId: ctx.rt.config.brandId, id: created.id,
-        slug: created.code, name: created.name, revisionId: created.revision_id ?? undefined, path: rel,
-    } satisfies EfMeta)}\n`;
+        slug: created.code ?? code, path: rel,
+    }) + '\n';
     await writeFileAtomic(abs, newFirst + body);
     ctx.state.setEntry('script', {
         path: rel,

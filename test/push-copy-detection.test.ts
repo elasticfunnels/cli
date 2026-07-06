@@ -136,3 +136,26 @@ test('pushing a RENAME (original gone) keeps the id and updates it', async () =>
         await fs.promises.rm(root, { recursive: true, force: true });
     }
 });
+
+test('push is REFUSED when the efmeta id no longer matches .ef-state.json', async () => {
+    const mock = await startMock();
+    const root = await tmpDir();
+    try {
+        const brandRoot = await setupBrand(root, mock.url);
+        // File claims #999, but state tracks this path as #100 (efmeta was tampered/merged).
+        await fs.promises.writeFile(path.join(brandRoot, 'components', 'x.ef'), withEfMeta(META(999, 'components/x.ef'), '<p>tampered</p>'));
+        await fs.promises.writeFile(path.join(brandRoot, '.ef-state.json'), JSON.stringify({
+            version: 1, brandId: 7,
+            pages: {}, components: { 'components/x.ef': { path: 'components/x.ef', id: 100, type: 'component', revisionId: null, contentHash: null } },
+            templatePages: {}, scripts: {}, assets: {},
+        }));
+        const res = await runEf(root, ['push', 'components/x.ef', '--json']);
+        assert.equal(res.status, 4, `expected exit 4 (conflict), got ${res.status}\nstderr=${res.stderr}`);
+        assert.equal(mock.editorUpdates.length, 0, 'must not touch any component');
+        assert.equal(mock.creates.length, 0, 'must not create a component');
+        assert.equal(JSON.parse(res.stdout).conflicts, 1);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});

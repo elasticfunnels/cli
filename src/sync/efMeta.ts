@@ -31,8 +31,30 @@ const TEMPLATE_SUFFIX = ' --}}';
 const LEGACY_HTML_PREFIX = '<!-- efmeta:';
 const LEGACY_HTML_SUFFIX = ' -->';
 
+/**
+ * The stable identity fields written to disk. Volatile fields (name/title,
+ * revisionId, remoteUpdatedAt, stub) are deliberately NOT written — they live in
+ * `.ef-state.json`. Keeping the line near-immutable means it rarely appears in a
+ * git merge conflict and gives an AI nothing to "correct". Reading
+ * (`parseEfMeta`) still tolerates any extra legacy fields.
+ */
+function stableEfMeta(meta: EfMeta): Record<string, unknown> {
+    const out: Record<string, unknown> = { v: meta.v, type: meta.type, brandId: meta.brandId, id: meta.id };
+    if (meta.slug != null && meta.slug !== '') out.slug = meta.slug;
+    if (meta.path != null && meta.path !== '') out.path = meta.path;
+    if (meta.templateSlug != null) out.templateSlug = meta.templateSlug;
+    if (meta.templateId != null) out.templateId = meta.templateId;
+    if (meta.pageSlug != null) out.pageSlug = meta.pageSlug;
+    return out;
+}
+
 export function serializeEfMeta(meta: EfMeta): string {
-    return `${TEMPLATE_PREFIX}${JSON.stringify(meta)}${TEMPLATE_SUFFIX}`;
+    return `${TEMPLATE_PREFIX}${JSON.stringify(stableEfMeta(meta))}${TEMPLATE_SUFFIX}`;
+}
+
+/** The same stable-field identity, as the `// efmeta:` line backend `.js` scripts use. */
+export function serializeScriptEfMeta(meta: EfMeta): string {
+    return `// efmeta:${JSON.stringify(stableEfMeta(meta))}`;
 }
 
 export function parseEfMeta(text: string): { meta: EfMeta | null; body: string } {

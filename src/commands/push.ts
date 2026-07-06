@@ -131,6 +131,7 @@ Examples:
             }
 
             const results: PushResult[] = [];
+            let conflicts = 0;
             for (const abs of files) {
                 const cls = classifyAbsPath(rt.brandRoot, abs);
                 if (!cls) {
@@ -178,13 +179,16 @@ Examples:
                     }
                 } catch (err) {
                     if (err instanceof CliError && err.code === ExitCode.Conflict) {
+                        conflicts++;
                         if (opts.json) {
                             results.push({ rel: cls.rel, kind: cls.kind, action: 'noop', serverId: 0, note: `conflict: ${err.message}` });
                         } else {
                             log.error(`  conflict ${cls.kind} ${cls.rel}`);
                             log.detail(`        ${err.message}`);
                         }
-                        // Keep going — push is best-effort across multiple files.
+                        // Keep going — push is best-effort across multiple files — but
+                        // the run exits non-zero (below) so a conflict isn't mistaken
+                        // for success.
                         continue;
                     }
                     throw err;
@@ -196,7 +200,8 @@ Examples:
                 const pushed = opts.verbose
                     ? results
                     : results.map(({ apiResponse: _omit, ...r }) => r);
-                const base: Record<string, unknown> = { ok: true, draft, pushed };
+                if (conflicts > 0) process.exitCode = ExitCode.Conflict;
+                const base: Record<string, unknown> = { ok: conflicts === 0, draft, conflicts, pushed };
                 if (opts.verbose) {
                     base.debug = {
                         apiUrl: rt.config.apiUrl,
@@ -210,6 +215,10 @@ Examples:
                 return;
             }
             log.success(`Pushed ${results.length} file${results.length === 1 ? '' : 's'}.`);
+            if (conflicts > 0) {
+                process.exitCode = ExitCode.Conflict;
+                log.warn(`${conflicts} file${conflicts === 1 ? '' : 's'} had a conflict and ${conflicts === 1 ? 'was' : 'were'} NOT pushed (see above). Exit ${ExitCode.Conflict}.`);
+            }
 
             // Draft saves a revision but doesn't update the live page — make that
             // unmissable so a push isn't mistaken for a publish. Only warn when a

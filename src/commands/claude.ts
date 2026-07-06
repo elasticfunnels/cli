@@ -39,22 +39,26 @@ elasticfunnels/
 
 The brand id lives in \`.ef/config.json\`, not in the path.
 
-## CRITICAL: the \`efmeta\` line
+## CRITICAL: the \`efmeta\` line — NEVER touch it
 
-Every synced \`.ef\` file starts with a \`{{-- efmeta:{...} --}}\` comment (backend
-\`.js\` scripts use \`// efmeta:{...}\`). It carries the server id, type, brand, and
-the path the file was issued for, and is **path-bound**.
+The **first line** of every synced \`.ef\` file is machine identity — a
+\`{{-- efmeta:{...} --}}\` comment (backend \`.js\` scripts use \`// efmeta:{...}\`)
+carrying the server \`id\`/\`type\`/\`brandId\`/\`slug\`/\`path\`. It is **path-bound**.
 
-- **Never write, paste, or copy an \`efmeta\` line** into code you generate. The
-  CLI injects the correct, path-bound metadata on push.
-- **When duplicating a page/component**, copy the **body only** — strip the
-  first line if it begins with \`{{-- efmeta:\` or \`// efmeta:\`. Otherwise the new
-  file inherits the original's identity and deleting either one can destroy the
-  wrong server entity.
-- **Never edit** the \`path\`, \`id\`, \`brandId\`, or \`type\` fields of an existing
-  \`efmeta\` block. If you must remove it, delete the **entire** first line.
-- The \`{{-- --}}\` comment is stripped at render time and never reaches the
-  browser.
+**Rule with NO exceptions: never add, edit, remove, reformat, reorder, or "fix"
+the efmeta line, for ANY reason** — not to correct a slug, not to tidy the JSON,
+not while resolving a merge. Only ever change the body **below** it.
+
+- The CLI **REJECTS \`ef push\`** (exit 4, conflict) for a file whose efmeta no
+  longer matches its tracked identity in \`.ef-state.json\`. If you hit that, run
+  \`ef pull <path>\` to restore the correct line — do **not** hand-edit it back.
+- **Never write or paste an efmeta line** into code you generate. The CLI stamps
+  the correct one on pull/push. (It intentionally holds only stable identity —
+  no title, no revision number — so it rarely changes.)
+- **When duplicating a page/component**, copy the **body only** — strip the first
+  line if it begins with \`{{-- efmeta:\` or \`// efmeta:\`. Otherwise the copy
+  inherits the original's identity and can overwrite the wrong server entity.
+- The \`{{-- --}}\` comment is stripped at render time and never reaches the browser.
 
 ## Do not touch
 

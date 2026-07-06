@@ -82,8 +82,8 @@ async function pullEach<T>(
     ctx: SyncContext,
     kind: 'page' | 'component' | 'script' | 'asset',
     items: T[],
-    pull: (item: T) => Promise<{ rel: string } | null>,
-): Promise<Array<{ rel: string }>> {
+    pull: (item: T) => Promise<{ rel: string; skipped?: boolean } | null>,
+): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const total = items.length;
     let done = 0;
     const failures: string[] = [];
@@ -104,7 +104,30 @@ async function pullEach<T>(
         const { log } = await import('../utils/log');
         log.warn(`Skipped ${failures.length} ${kind}${failures.length === 1 ? '' : 's'} that failed to pull (e.g. deleted on the server). First error: ${failures[0]}`);
     }
-    return out.filter((r): r is { rel: string } => r != null).map((r) => ({ rel: r.rel }));
+    return out.filter((r): r is { rel: string; skipped?: boolean } => r != null).map((r) => ({ rel: r.rel, skipped: r.skipped }));
+}
+
+/**
+ * Adopt check for `ef init` on an already-synced folder (e.g. one the VS Code
+ * extension populated): an entity is already on disk and unchanged when its
+ * tracked local file exists and its body hash matches the recorded contentHash,
+ * so init can skip re-downloading it. Assets are adopted on existence alone
+ * (they're the heaviest to re-fetch and rarely change). Returns the rel to skip,
+ * or null to fetch.
+ */
+async function alreadyOnDisk(ctx: SyncContext, kind: 'page' | 'component' | 'script' | 'asset', id: number): Promise<{ rel: string } | null> {
+    const st = ctx.state.getById(kind, id);
+    if (!st) return null;
+    const abs = safeJoinBrandRoot(ctx.rt.brandRoot, st.path);
+    if (!(await fileExists(abs))) return null;
+    if (kind === 'asset') return { rel: st.path };
+    if (!st.contentHash) return null;
+    try {
+        const text = await fs.promises.readFile(abs, 'utf8');
+        const body = kind === 'script' ? parseScriptMeta(text).body : parseEfMeta(text).body;
+        if (sha256(Buffer.from(body, 'utf8')) === st.contentHash) return { rel: st.path };
+    } catch { /* unreadable → fetch */ }
+    return null;
 }
 
 /**
@@ -184,9 +207,10 @@ export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel:
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllPages(ctx: SyncContext): Promise<Array<{ rel: string }>> {
+export async function pullAllPages(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const pages = await ctx.api.listPages(ctx.rt.config.brandId);
     return await pullEach(ctx, 'page', pages, async (p) => {
+        if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'page', p.id); if (hit) return { rel: hit.rel, skipped: true }; }
         const { rel } = await pullPage(ctx, p.id);
         return { rel };
     });
@@ -227,9 +251,10 @@ export async function pullComponent(ctx: SyncContext, componentId: number): Prom
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllComponents(ctx: SyncContext): Promise<Array<{ rel: string }>> {
+export async function pullAllComponents(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listComponents(ctx.rt.config.brandId);
     return await pullEach(ctx, 'component', list, async (c) => {
+        if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'component', c.id); if (hit) return { rel: hit.rel, skipped: true }; }
         const { rel } = await pullComponent(ctx, c.id);
         return { rel };
     });
@@ -263,9 +288,10 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllScripts(ctx: SyncContext): Promise<Array<{ rel: string }>> {
+export async function pullAllScripts(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listBackendScripts(ctx.rt.config.brandId);
     return await pullEach(ctx, 'script', list, async (s) => {
+        if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'script', s.id); if (hit) return { rel: hit.rel, skipped: true }; }
         const { rel } = await pullScript(ctx, s.id);
         return { rel };
     });
@@ -304,9 +330,13 @@ export async function pullAsset(ctx: SyncContext, assetId: number): Promise<{ re
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllAssets(ctx: SyncContext): Promise<Array<{ rel: string }>> {
+export async function pullAllAssets(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const assets = await ctx.api.listAssets(ctx.rt.config.brandId);
-    return await pullEach(ctx, 'asset', assets, async (a) => await pullAsset(ctx, a.id));
+    return await pullEach(ctx, 'asset', assets, async (a) => {
+        if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'asset', a.id); if (hit) return { rel: hit.rel, skipped: true }; }
+        const r = await pullAsset(ctx, a.id);
+        return r ? { rel: r.rel } : null;
+    });
 }
 
 // ── Variables ────────────────────────────────────────────────────────

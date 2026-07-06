@@ -7,6 +7,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
+import { applyClaudeGuidance } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 
@@ -23,6 +24,8 @@ interface InitOptions {
     force?: boolean;
     /** Commander sets this to false when `--no-pull` is passed; defaults to true. */
     pull?: boolean;
+    /** Commander sets this to false when `--no-claude` is passed; defaults to true. */
+    claude?: boolean;
     json?: boolean;
 }
 
@@ -99,6 +102,7 @@ export function registerInitCommand(program: Command): void {
         .option('--inherit', 'If a parent directory already has a .ef project, update its config in place instead of creating a new nested project.')
         .option('--force', 'Skip the "folder is not empty" confirmation prompt.')
         .option('--no-pull', 'Bind only — skip the initial full sync.')
+        .option('--no-claude', 'Skip writing ElasticFunnels guidance into CLAUDE.md.')
         .option('--json', 'Print the resulting config as JSON.')
         .action(async (opts: InitOptions) => {
             await runInit(opts);
@@ -243,6 +247,16 @@ async function runInit(opts: InitOptions): Promise<void> {
     if (vscodeAssoc === 'created' || vscodeAssoc === 'added') {
         log.detail(`VS Code: mapped *.ef → ${EF_VSCODE_LANGUAGE} in .vscode/settings.json (syntax highlighting).`);
         log.detail('For full .ef highlighting (@if/@foreach + {{ }}), run "ef install-highlighter".');
+    }
+
+    // Drop ElasticFunnels guidance into CLAUDE.md so Claude Code knows the
+    // conventions (efmeta, template syntax, CLI). Idempotent; best-effort.
+    let claudeAction: 'created' | 'updated' | 'appended' | null = null;
+    if (opts.claude !== false) {
+        try {
+            claudeAction = await applyClaudeGuidance(path.join(runtime.projectRoot, 'CLAUDE.md'));
+            log.detail(`CLAUDE.md ${claudeAction} — ElasticFunnels guidance for Claude Code (re-run with "ef claude").`);
+        } catch { /* non-fatal */ }
     }
 
     // Bind, then pull everything down so the folder is usable immediately.

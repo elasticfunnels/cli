@@ -196,7 +196,10 @@ export async function persistLogin(args: {
     const gitignorePath = path.join(args.projectRoot, '.gitignore');
     const isGitRepo = await fileExists(path.join(args.projectRoot, '.git'));
     if (isGitRepo || (await fileExists(gitignorePath))) {
-        try { await ensureGitignoreEntry(gitignorePath, '.ef'); } catch { /* tolerated */ }
+        try {
+            await ensureGitignoreEntry(gitignorePath, '.ef');
+            await ensureGitignoreEntry(gitignorePath, '.ef-history/'); // local version snapshots
+        } catch { /* tolerated */ }
     }
 
     return {

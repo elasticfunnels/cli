@@ -249,6 +249,24 @@ async function runInit(opts: InitOptions): Promise<void> {
         log.detail('For full .ef highlighting (@if/@foreach + {{ }}), run "ef install-highlighter".');
     }
 
+    // Reduce git-merge damage to synced files: mark them text/LF. The first line
+    // of each .ef file is machine identity (efmeta) — a bad merge is caught by
+    // the push state-mismatch guard. Only create if absent (don't clobber).
+    try {
+        const gaPath = path.join(runtime.projectRoot, '.gitattributes');
+        let hasGa = true;
+        try { await fs.promises.access(gaPath); } catch { hasGa = false; }
+        if (!hasGa) {
+            const root = runtime.config.syncRoot;
+            await fs.promises.writeFile(
+                gaPath,
+                `# ElasticFunnels synced files. The first line of each .ef file is machine\n` +
+                `# identity (efmeta) — never hand-edit it; \`ef push\` rejects a mismatched line.\n` +
+                `${root}/**/*.ef text eol=lf\n${root}/**/*.js text eol=lf\n`,
+            );
+        }
+    } catch { /* non-fatal */ }
+
     // Drop ElasticFunnels guidance into CLAUDE.md so Claude Code knows the
     // conventions (efmeta, template syntax, CLI). Idempotent; best-effort.
     let claudeAction: 'created' | 'updated' | 'appended' | null = null;

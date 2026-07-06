@@ -169,6 +169,7 @@ export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel:
     const body = page.html ?? '';
     const file = withEfMeta(meta, body);
     const existed = await fileExists(abs);
+    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
     await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('page', {
@@ -210,7 +211,9 @@ export async function pullComponent(ctx: SyncContext, componentId: number): Prom
     };
     const body = c.html ?? '';
     const existed = await fileExists(abs);
-    await writeFileAtomic(abs, withEfMeta(meta, body));
+    const file = withEfMeta(meta, body);
+    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
+    await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('component', {
         path: rel,
@@ -243,8 +246,10 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
         slug: s.code ?? undefined, path: rel,
     }) + '\n';
     const body = s.content ?? '';
+    const file = metaLine + body;
     const existed = await fileExists(abs);
-    await writeFileAtomic(abs, metaLine + body);
+    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
+    await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('script', {
         path: rel,
@@ -392,6 +397,34 @@ function assertEfmetaMatchesState(ctx: SyncContext, kind: 'page' | 'component' |
         `(tracked as ${kind} #${tracked.id}, but ${claim}). The first line was changed — ` +
         `by an edit, an AI, or a git merge. Run "ef pull ${rel}" to restore the correct efmeta, then re-apply your body changes.`,
     );
+}
+
+/** How many historical snapshots to keep per file. */
+const HISTORY_KEEP = 20;
+
+/**
+ * Local version history for people who don't use git. Before a sync overwrites a
+ * file with *different* content, copy the CURRENT on-disk version into
+ * `.ef-history/<rel>/<timestamp><ext>`. Best-effort — never blocks or fails a
+ * sync. `.ef-history/` is a dotdir so the sync walkers skip it, and it's
+ * gitignored on init.
+ */
+async function snapshotToHistory(brandRoot: string, rel: string, nextContent: string): Promise<void> {
+    try {
+        const abs = safeJoinBrandRoot(brandRoot, rel);
+        if (!(await fileExists(abs))) return;
+        const prev = await fs.promises.readFile(abs, 'utf8');
+        if (prev === nextContent) return; // unchanged — nothing worth keeping
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const dir = path.join(brandRoot, '.ef-history', rel);
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, `${stamp}${path.extname(rel) || '.txt'}`), prev);
+        // Retention: keep the newest HISTORY_KEEP (timestamps sort lexically).
+        const entries = (await fs.promises.readdir(dir)).sort();
+        for (const old of entries.slice(0, Math.max(0, entries.length - HISTORY_KEEP))) {
+            await fs.promises.unlink(path.join(dir, old)).catch(() => { /* tolerated */ });
+        }
+    } catch { /* history is best-effort — never block a sync */ }
 }
 
 export async function pushPageFile(

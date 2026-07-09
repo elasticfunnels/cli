@@ -170,6 +170,8 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`):
 - \`ef diff\` — show local-vs-server drift before pushing. Run this first.
 - \`ef push pages/about.ef\` — push a file (optimistic concurrency). \`--all\` for
   everything, \`--dry-run\` to preview, \`--force\` to override a conflict.
+- \`ef watch\` — auto-push files as you edit and save them (publishes by default;
+  \`--draft\` to save drafts). Ideal alongside an AI editor — save and it's live.
 - \`ef pages push <slugOrPath>\` · \`ef components push <codeOrPath>\` ·
   \`ef scripts push <pathOrCode>\` — push one entity by path or code.
 - \`ef components create <code>\` · \`ef pages create <slug>\` — create an entity.
@@ -192,6 +194,11 @@ prints a warning that it's not live. Change the project default with
 3. \`ef diff\` to review what changed.
 4. \`ef push <paths…>\`. On an HTTP 409 conflict (exit 4): \`ef pull <path>\`,
    re-apply your change, push again.
+
+**Safety:** \`ef pull\` will NOT overwrite a file you've edited locally — it keeps
+your version and warns (use \`--force\` to take the server's). \`ef push\` will NOT
+overwrite a server entity whose efmeta was changed, or that moved on since you
+pulled. Overwritten files are copied to \`.ef-history/\` first.
 
 Exit codes: 0 ok · 2 usage · 3 auth · 4 conflict · 5 network · 6 server · 7 not found.`;
 

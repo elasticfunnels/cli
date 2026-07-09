@@ -1,6 +1,6 @@
 {
   "name": "@elasticfunnels/cli",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "description": "ElasticFunnels command-line tool. Folder-scoped auth and full sync, designed to be used by humans, scripts, Claude Code, and any other automation.",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,

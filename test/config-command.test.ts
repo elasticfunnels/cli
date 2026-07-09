@@ -79,6 +79,22 @@ test('config get --json prints the full config', async () => {
         const cfg = JSON.parse(res.stdout);
         assert.equal(cfg.brandId, 7);
         assert.equal(cfg.saveMode, 'direct');
+        // History knobs surface with defaults even when absent from the file.
+        assert.equal(cfg.historyKeep, 20);
+        assert.equal(cfg.historyTtlDays, 30);
+    } finally {
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('config set historyKeep / historyTtlDays validate and persist', async () => {
+    const root = await setupProject('direct');
+    try {
+        assert.equal(runEf(root, ['config', 'set', 'historyKeep', 'abc']).status, 2, 'rejects non-integer');
+        assert.equal(runEf(root, ['config', 'set', 'historyKeep', '5']).status, 0);
+        assert.equal(runEf(root, ['config', 'get', 'historyKeep']).stdout.trim(), '5');
+        assert.equal(runEf(root, ['config', 'set', 'historyTtlDays', '90']).status, 0);
+        assert.equal(runEf(root, ['config', 'get', 'historyTtlDays']).stdout.trim(), '90');
     } finally {
         await fs.promises.rm(root, { recursive: true, force: true });
     }

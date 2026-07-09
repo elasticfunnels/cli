@@ -227,7 +227,7 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
     }
     const file = withEfMeta(meta, body);
     const existed = await fileExists(abs);
-    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
+    await snapshotToHistory(ctx, rel, file);
     await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('page', {
@@ -275,7 +275,7 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
     }
     const existed = await fileExists(abs);
     const file = withEfMeta(meta, body);
-    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
+    await snapshotToHistory(ctx, rel, file);
     await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('component', {
@@ -316,7 +316,7 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string, op
     }
     const file = metaLine + body;
     const existed = await fileExists(abs);
-    await snapshotToHistory(ctx.rt.brandRoot, rel, file);
+    await snapshotToHistory(ctx, rel, file);
     await writeFileAtomic(abs, file);
 
     ctx.state.setEntry('script', {
@@ -472,9 +472,6 @@ function assertEfmetaMatchesState(ctx: SyncContext, kind: 'page' | 'component' |
     );
 }
 
-/** How many historical snapshots to keep per file. */
-const HISTORY_KEEP = 20;
-
 /**
  * Local version history for people who don't use git. Before a sync overwrites a
  * file with *different* content, copy the CURRENT on-disk version into
@@ -482,22 +479,42 @@ const HISTORY_KEEP = 20;
  * sync. `.ef-history/` is a dotdir so the sync walkers skip it, and it's
  * gitignored on init.
  */
-async function snapshotToHistory(brandRoot: string, rel: string, nextContent: string): Promise<void> {
+async function snapshotToHistory(ctx: SyncContext, rel: string, nextContent: string): Promise<void> {
+    const keep = ctx.rt.config.historyKeep;
+    const ttlDays = ctx.rt.config.historyTtlDays;
+    if (keep <= 0) return; // history disabled (config historyKeep 0)
     try {
-        const abs = safeJoinBrandRoot(brandRoot, rel);
+        const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
         if (!(await fileExists(abs))) return;
         const prev = await fs.promises.readFile(abs, 'utf8');
         if (prev === nextContent) return; // unchanged — nothing worth keeping
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const dir = path.join(brandRoot, '.ef-history', rel);
+        const dir = path.join(ctx.rt.brandRoot, '.ef-history', rel);
         await fs.promises.mkdir(dir, { recursive: true });
         await fs.promises.writeFile(path.join(dir, `${stamp}${path.extname(rel) || '.txt'}`), prev);
-        // Retention: keep the newest HISTORY_KEEP (timestamps sort lexically).
-        const entries = (await fs.promises.readdir(dir)).sort();
-        for (const old of entries.slice(0, Math.max(0, entries.length - HISTORY_KEEP))) {
-            await fs.promises.unlink(path.join(dir, old)).catch(() => { /* tolerated */ });
-        }
+        await pruneHistory(dir, keep, ttlDays);
     } catch { /* history is best-effort — never block a sync */ }
+}
+
+/** Retention: drop snapshots older than `ttlDays` (0 = no age limit), then keep
+ *  only the newest `keep` per file. */
+async function pruneHistory(dir: string, keep: number, ttlDays: number): Promise<void> {
+    let names = (await fs.promises.readdir(dir)).sort(); // ISO stamps sort chronologically
+    if (ttlDays > 0) {
+        const cutoff = Date.now() - ttlDays * 86_400_000;
+        const survivors: string[] = [];
+        for (const name of names) {
+            try {
+                const st = await fs.promises.stat(path.join(dir, name));
+                if (st.mtimeMs < cutoff) { await fs.promises.unlink(path.join(dir, name)).catch(() => {}); continue; }
+            } catch { /* skip unreadable */ }
+            survivors.push(name);
+        }
+        names = survivors;
+    }
+    for (const old of names.slice(0, Math.max(0, names.length - keep))) {
+        await fs.promises.unlink(path.join(dir, old)).catch(() => { /* tolerated */ });
+    }
 }
 
 export async function pushPageFile(

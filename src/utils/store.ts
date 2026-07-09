@@ -40,6 +40,10 @@ export interface EfConfig {
     syncLayout: 'nested' | 'flat';
     /** Save mode mirroring the extension. `direct` publishes immediately. */
     saveMode: 'draft' | 'direct';
+    /** Max `.ef-history` snapshots kept per file. 0 disables history. */
+    historyKeep: number;
+    /** Max age (days) for `.ef-history` snapshots. 0 = no age limit. */
+    historyTtlDays: number;
     /** ISO timestamp of the last successful pull. Updated by `ef pull`. */
     lastPulledAt?: string | null;
 }
@@ -65,6 +69,13 @@ export const AUTH_FILENAME = 'auth';
 const DEFAULT_API_URL = 'https://app.elasticfunnels.io';
 const DEFAULT_SYNC_ROOT = 'elasticfunnels';
 const DEFAULT_SAVE_MODE: EfConfig['saveMode'] = 'direct';
+const DEFAULT_HISTORY_KEEP = 20;
+const DEFAULT_HISTORY_TTL_DAYS = 30;
+
+/** Parse a non-negative integer from parsed config, or fall back to `def`. */
+function nonNegIntOr(value: unknown, def: number): number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : def;
+}
 
 export function configDirFor(projectRoot: string): string {
     return path.join(projectRoot, CONFIG_DIR);
@@ -120,6 +131,8 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         // Honor an explicit "draft" so upgrading (when the default flipped to
         // "direct") doesn't silently start publishing for users who chose draft.
         saveMode: parsed.saveMode === 'draft' ? 'draft' : parsed.saveMode === 'direct' ? 'direct' : DEFAULT_SAVE_MODE,
+        historyKeep: nonNegIntOr(parsed.historyKeep, DEFAULT_HISTORY_KEEP),
+        historyTtlDays: nonNegIntOr(parsed.historyTtlDays, DEFAULT_HISTORY_TTL_DAYS),
         lastPulledAt: typeof parsed.lastPulledAt === 'string' ? parsed.lastPulledAt : null,
     };
 }
@@ -186,6 +199,8 @@ export async function persistLogin(args: {
         syncRoot: args.syncRoot ?? DEFAULT_SYNC_ROOT,
         syncLayout: args.syncLayout === 'nested' ? 'nested' : 'flat',
         saveMode: args.saveMode ?? DEFAULT_SAVE_MODE,
+        historyKeep: DEFAULT_HISTORY_KEEP,
+        historyTtlDays: DEFAULT_HISTORY_TTL_DAYS,
         lastPulledAt: null,
     };
     await saveConfig(args.projectRoot, config);

@@ -4,7 +4,7 @@ import { log } from '../utils/log';
 import { EfConfig, findProjectRoot, loadConfig, saveConfig } from '../utils/store';
 
 /** Keys a user may change with `ef config set`. brandId/auth go through `ef init`. */
-const SETTABLE = ['saveMode', 'apiUrl', 'syncRoot', 'syncLayout'] as const;
+const SETTABLE = ['saveMode', 'apiUrl', 'syncRoot', 'syncLayout', 'historyKeep', 'historyTtlDays'] as const;
 type Settable = (typeof SETTABLE)[number];
 
 function requireRoot(): string {
@@ -71,6 +71,18 @@ export function registerConfigCommand(program: Command): void {
                     next.syncRoot = v;
                     log.warn('Changed syncRoot — files already on disk are NOT moved.');
                     break;
+                case 'historyKeep': {
+                    const n = parseInt(v, 10);
+                    if (!Number.isInteger(n) || n < 0) throw new CliError(ExitCode.Validation, 'historyKeep must be a non-negative integer (0 disables .ef-history).');
+                    next.historyKeep = n;
+                    break;
+                }
+                case 'historyTtlDays': {
+                    const n = parseInt(v, 10);
+                    if (!Number.isInteger(n) || n < 0) throw new CliError(ExitCode.Validation, 'historyTtlDays must be a non-negative integer (0 = no age limit).');
+                    next.historyTtlDays = n;
+                    break;
+                }
             }
             await saveConfig(root, next);
             if (opts.json) { log.json({ ok: true, config: next }); return; }

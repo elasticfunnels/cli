@@ -23,6 +23,7 @@ interface PullOpts {
     json?: boolean;
     since?: string;
     adopt?: boolean;
+    force?: boolean;
 }
 
 /**
@@ -36,6 +37,8 @@ export async function runFullSync(rt: EfRuntime, opts: {
     /** Adopt an already-synced folder: skip re-downloading files already on disk
      *  and unchanged (used by `ef init` on an extension-populated folder). */
     adopt?: boolean;
+    /** Overwrite local files even when they have unpushed edits (drift). */
+    force?: boolean;
     onProgress?: SyncContext['onProgress'];
 } = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
@@ -45,7 +48,7 @@ export async function runFullSync(rt: EfRuntime, opts: {
     // `silent` suppresses the per-kind streaming so a caller (e.g. `ef init`)
     // can show its own loader instead.
     const log_ = (msg: string) => { if (!opts.json && !opts.silent) log.info(msg); };
-    const a = { adopt: opts.adopt };
+    const a = { adopt: opts.adopt, force: opts.force };
     const summary = (kind: string, arr: Array<{ skipped?: boolean }>): string => {
         const skipped = arr.filter((x) => x.skipped).length;
         return skipped ? `${arr.length} ${kind} (${arr.length - skipped} fetched, ${skipped} already current)` : `${arr.length} ${kind}`;
@@ -85,6 +88,7 @@ With <target>, pulls one entity. Examples:
         .option('--json', 'Print results as JSON.')
         .option('--since <iso>', 'Only pull entities modified after this ISO timestamp. Uses the server\'s sync-delta endpoints — much faster than a full sync for incremental updates.')
         .option('--adopt', 'Skip re-downloading files already on disk and unchanged (resume, or adopt an existing/extension folder). Only fetches what is missing or drifted.')
+        .option('--force', 'Overwrite local files even if they have unpushed changes (a copy is saved to .ef-history). Without this, pull keeps locally-edited files and warns.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
@@ -110,21 +114,21 @@ With <target>, pulls one entity. Examples:
 
             const t = target.trim();
             if (t === 'pages') {
-                const out = await pullAllPages(ctx, { adopt: opts.adopt });
+                const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} pages.`);
                 return;
             }
             if (t === 'components') {
-                const out = await pullAllComponents(ctx, { adopt: opts.adopt });
+                const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} components.`);
                 return;
             }
             if (t === 'scripts') {
-                const out = await pullAllScripts(ctx, { adopt: opts.adopt });
+                const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} scripts.`);
@@ -187,7 +191,7 @@ async function runIncrementalPull(
     if (scope === 'all' || scope === 'pages') {
         const delta = await ctx.api.getPagesSyncDelta(rt.config.brandId, sinceIso);
         for (const row of delta) {
-            const r = await pullPage(ctx, row.id);
+            const r = await pullPage(ctx, row.id, { force: opts.force });
             out.pages.push(r.rel);
             if (!opts.json) log.detail(`  page  ${r.rel}`);
         }
@@ -225,24 +229,24 @@ async function pullByKindAndKey(
     ctx: Awaited<ReturnType<typeof buildSyncContext>>,
     kind: 'page' | 'component' | 'script' | 'asset',
     key: string,
-    opts: { json?: boolean },
+    opts: { json?: boolean; force?: boolean },
 ): Promise<void> {
     if (kind === 'page') {
         const ref = await resolvePageBySlug(ctx.api, ctx.rt.config.brandId, key);
-        const out = await pullPage(ctx, ref.id);
+        const out = await pullPage(ctx, ref.id, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'component') {
         const ref = await resolveComponentByCodeOrName(ctx.api, ctx.rt.config.brandId, key);
-        const out = await pullComponent(ctx, ref.id);
+        const out = await pullComponent(ctx, ref.id, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'script') {
-        const out = await pullScript(ctx, key);
+        const out = await pullScript(ctx, key, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
@@ -259,12 +263,12 @@ async function pullByKindAndPath(
     ctx: Awaited<ReturnType<typeof buildSyncContext>>,
     kind: 'page' | 'component' | 'script' | 'asset',
     rel: string,
-    opts: { json?: boolean },
+    opts: { json?: boolean; force?: boolean },
 ): Promise<void> {
     if (kind === 'page') {
         const slug = rel.slice('pages/'.length, rel.length - '.ef'.length);
         const ref = await resolvePageBySlug(ctx.api, ctx.rt.config.brandId, slug);
-        const out = await pullPage(ctx, ref.id);
+        const out = await pullPage(ctx, ref.id, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
@@ -272,14 +276,14 @@ async function pullByKindAndPath(
     if (kind === 'component') {
         const code = rel.slice('components/'.length, rel.length - '.ef'.length);
         const ref = await resolveComponentByCodeOrName(ctx.api, ctx.rt.config.brandId, code);
-        const out = await pullComponent(ctx, ref.id);
+        const out = await pullComponent(ctx, ref.id, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'script') {
         const code = rel.slice('scripts/'.length, rel.length - '.js'.length);
-        const out = await pullScript(ctx, code);
+        const out = await pullScript(ctx, code, { force: opts.force });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;

@@ -26,6 +26,15 @@ interface PullOpts {
     force?: boolean;
 }
 
+/** Make a pull exit non-zero (and warn loudly) if any entity FAILED to fetch —
+ *  so a mid-sync network/server error can't masquerade as a clean success. */
+function reportPullFailures(ctx: SyncContext): void {
+    if (ctx.stats.failed > 0) {
+        process.exitCode = ExitCode.Server;
+        log.warn(`${ctx.stats.failed} item${ctx.stats.failed === 1 ? '' : 's'} FAILED to pull and ${ctx.stats.failed === 1 ? 'is' : 'are'} missing or stale locally (exit ${ExitCode.Server}). Re-run "ef pull" to retry.`);
+    }
+}
+
 /**
  * Pull every entity (pages, components, scripts, assets, variables) to disk and
  * update the baseline + lastPulledAt. Shared by `ef pull` (no target) and
@@ -67,6 +76,7 @@ export async function runFullSync(rt: EfRuntime, opts: {
     await ctx.state.save();
     rt.config.lastPulledAt = new Date().toISOString();
     await saveConfig(rt.projectRoot, rt.config);
+    reportPullFailures(ctx);
     return { pages: pages.length, components: components.length, scripts: scripts.length, assets: assets.length };
 }
 
@@ -116,6 +126,7 @@ With <target>, pulls one entity. Examples:
             if (t === 'pages') {
                 const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
+                reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} pages.`);
                 return;
@@ -123,6 +134,7 @@ With <target>, pulls one entity. Examples:
             if (t === 'components') {
                 const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
+                reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} components.`);
                 return;
@@ -130,6 +142,7 @@ With <target>, pulls one entity. Examples:
             if (t === 'scripts') {
                 const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force });
                 await ctx.state.save();
+                reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} scripts.`);
                 return;
@@ -137,6 +150,7 @@ With <target>, pulls one entity. Examples:
             if (t === 'assets') {
                 const out = await pullAllAssets(ctx, { adopt: opts.adopt });
                 await ctx.state.save();
+                reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
                 log.success(`Pulled ${out.length} assets.`);
                 return;

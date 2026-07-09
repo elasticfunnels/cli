@@ -18,6 +18,36 @@ import { requestStart, requestEnd } from '../utils/loader';
 /** Max files the server's bulk-upload endpoint accepts per request. */
 export const BULK_UPLOAD_MAX = 20;
 
+/** Transient-failure retry policy (env-tunable, mainly for tests). */
+const RETRY_MAX = Number(process.env.EF_RETRY_MAX ?? 4);
+const RETRY_BASE_MS = Number(process.env.EF_RETRY_BASE_MS ?? 300);
+
+/**
+ * Which failures are safe to retry. Idempotent methods (GET/PUT/DELETE/PATCH)
+ * retry on a network error, 5xx, or 429; a POST only retries on 429/503 (both
+ * mean "not processed") so we never risk a double-create on an ambiguous error.
+ */
+function shouldRetry(method: string, status: number, hadResponse: boolean, attempt: number): boolean {
+    if (attempt >= RETRY_MAX) return false;
+    const idempotent = method !== 'POST';
+    if (!hadResponse) return idempotent;                 // network drop / timeout
+    if (status === 429 || status === 503) return true;   // rate-limited / unavailable
+    if (status >= 500) return idempotent;                // other 5xx
+    return false;
+}
+
+/** Backoff before a retry: exponential + jitter, honoring `Retry-After` (seconds). */
+async function sleepForRetry(attempt: number, res?: AxiosResponse): Promise<void> {
+    let ms = Math.min(8000, RETRY_BASE_MS * 2 ** attempt);
+    const ra = res?.headers?.['retry-after'];
+    if (ra != null) {
+        const s = parseInt(String(ra), 10);
+        if (Number.isFinite(s) && s >= 0) ms = Math.min(30000, s * 1000);
+    }
+    ms += Math.floor(Math.random() * ms * 0.25); // jitter to avoid thundering herds
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface BulkUploadFileResult {
     filename: string;
     status: 'uploaded' | 'failed' | string;
@@ -538,16 +568,31 @@ export class ApiClient {
     ): Promise<AxiosResponse> {
         requestStart();
         try {
-            return await this.http.request({ method, url, ...opts });
-        } catch (err) {
-            // Network-level failure (no response). Map to a stable exit code.
-            if (axios.isAxiosError(err) && !err.response) {
-                throw new CliError(
-                    ExitCode.Network,
-                    `Could not reach ${this.apiUrl} (${err.code ?? err.message}).`,
-                );
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    const res = await this.http.request({ method, url, ...opts });
+                    // Transient server responses (5xx/429) are retried with backoff.
+                    if (shouldRetry(method, res.status, true, attempt)) {
+                        await sleepForRetry(attempt, res);
+                        continue;
+                    }
+                    return res;
+                } catch (err) {
+                    // Network-level failure (no response). Retry idempotent methods,
+                    // else map to a stable exit code.
+                    if (axios.isAxiosError(err) && !err.response) {
+                        if (shouldRetry(method, 0, false, attempt)) {
+                            await sleepForRetry(attempt);
+                            continue;
+                        }
+                        throw new CliError(
+                            ExitCode.Network,
+                            `Could not reach ${this.apiUrl} (${err.code ?? err.message}) after ${RETRY_MAX} retries.`,
+                        );
+                    }
+                    throw err;
+                }
             }
-            throw err;
         } finally {
             requestEnd();
         }

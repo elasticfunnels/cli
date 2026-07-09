@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as http from 'http';
 import { spawn } from 'child_process';
 import { withEfMeta } from '../src/sync/efMeta';
+import { sha256 } from '../src/utils/fs';
 
 const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
 
@@ -73,6 +74,13 @@ test('pull snapshots the previous version into .ef-history before overwriting', 
         const brandRoot = await setupBrand(root, mock.url);
         const pageFile = path.join(brandRoot, 'pages', 'home.ef');
         await fs.promises.writeFile(pageFile, withEfMeta({ v: 1, type: 'page', brandId: 7, id: 42, slug: 'home', path: 'pages/home.ef' }, '<h1>OLD</h1>'));
+        // Baseline so the local file counts as "unchanged since last pull" (not local drift),
+        // making the server change safe to take (overwrite + snapshot).
+        await fs.promises.writeFile(path.join(brandRoot, '.ef-state.json'), JSON.stringify({
+            version: 1, brandId: 7,
+            pages: { 'pages/home.ef': { path: 'pages/home.ef', id: 42, type: 'page', revisionId: null, contentHash: sha256(Buffer.from('<h1>OLD</h1>', 'utf8')) } },
+            components: {}, templatePages: {}, scripts: {}, assets: {},
+        }));
 
         const res = await runEf(root, ['pull', 'page', 'home', '--json']);
         assert.equal(res.status, 0, `stderr=${res.stderr}`);

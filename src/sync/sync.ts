@@ -174,7 +174,30 @@ export async function nonCollidingRel(ctx: SyncContext, rel: string, id: number,
     return alt;
 }
 
-export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel: string; absPath: string; created: boolean }> {
+/**
+ * Local-overwrite guard. Returns true when pulling would clobber unpushed local
+ * edits: the local file exists, its body differs from the incoming server body,
+ * AND the local body has drifted from the last-pulled baseline (or there's no
+ * baseline to trust). Callers then keep the local file and warn instead of
+ * overwriting. `force` bypasses. When the local body still matches the baseline
+ * (no local edits), a normal server refresh is safe → returns false.
+ */
+async function wouldClobberLocalEdits(ctx: SyncContext, kind: 'page' | 'component' | 'script', rel: string, serverBody: string, force?: boolean): Promise<boolean> {
+    if (force) return false;
+    const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
+    if (!(await fileExists(abs))) return false;
+    let localBody: string;
+    try {
+        const text = await fs.promises.readFile(abs, 'utf8');
+        localBody = kind === 'script' ? parseScriptMeta(text).body : parseEfMeta(text).body;
+    } catch { return false; }
+    if (localBody === serverBody) return false; // identical — nothing to lose
+    const baseline = ctx.state.getByPath(kind, rel)?.contentHash;
+    if (baseline && sha256(Buffer.from(localBody, 'utf8')) === baseline) return false; // local unchanged since last pull → safe
+    return true; // local edited (or unknown baseline) and differs from server → protect
+}
+
+export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const page = await ctx.api.getPageContent(ctx.rt.config.brandId, pageId);
     const rel = await nonCollidingRel(ctx, relPathForPage(page), page.id, 'page');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -190,6 +213,10 @@ export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel:
         path: rel,
     };
     const body = page.html ?? '';
+    if (await wouldClobberLocalEdits(ctx, 'page', rel, body, opts.force)) {
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        return { rel, absPath: abs, created: false, skipped: 'local-drift' };
+    }
     const file = withEfMeta(meta, body);
     const existed = await fileExists(abs);
     await snapshotToHistory(ctx.rt.brandRoot, rel, file);
@@ -207,18 +234,18 @@ export async function pullPage(ctx: SyncContext, pageId: number): Promise<{ rel:
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllPages(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllPages(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const pages = await ctx.api.listPages(ctx.rt.config.brandId);
     return await pullEach(ctx, 'page', pages, async (p) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'page', p.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const { rel } = await pullPage(ctx, p.id);
-        return { rel };
+        const r = await pullPage(ctx, p.id, { force: opts.force });
+        return { rel: r.rel, skipped: !!r.skipped };
     });
 }
 
 // ── Components ───────────────────────────────────────────────────────
 
-export async function pullComponent(ctx: SyncContext, componentId: number): Promise<{ rel: string; absPath: string; created: boolean }> {
+export async function pullComponent(ctx: SyncContext, componentId: number, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, componentId);
     const rel = await nonCollidingRel(ctx, relPathForComponent(c), c.id, 'component');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -234,6 +261,10 @@ export async function pullComponent(ctx: SyncContext, componentId: number): Prom
         path: rel,
     };
     const body = c.html ?? '';
+    if (await wouldClobberLocalEdits(ctx, 'component', rel, body, opts.force)) {
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        return { rel, absPath: abs, created: false, skipped: 'local-drift' };
+    }
     const existed = await fileExists(abs);
     const file = withEfMeta(meta, body);
     await snapshotToHistory(ctx.rt.brandRoot, rel, file);
@@ -251,18 +282,18 @@ export async function pullComponent(ctx: SyncContext, componentId: number): Prom
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllComponents(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllComponents(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listComponents(ctx.rt.config.brandId);
     return await pullEach(ctx, 'component', list, async (c) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'component', c.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const { rel } = await pullComponent(ctx, c.id);
-        return { rel };
+        const r = await pullComponent(ctx, c.id, { force: opts.force });
+        return { rel: r.rel, skipped: !!r.skipped };
     });
 }
 
 // ── Scripts ──────────────────────────────────────────────────────────
 
-export async function pullScript(ctx: SyncContext, idOrCode: number | string): Promise<{ rel: string; absPath: string; created: boolean }> {
+export async function pullScript(ctx: SyncContext, idOrCode: number | string, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const s = await ctx.api.getBackendScript(ctx.rt.config.brandId, idOrCode);
     const rel = relPathForScript(s);
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -271,6 +302,10 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
         slug: s.code ?? undefined, path: rel,
     }) + '\n';
     const body = s.content ?? '';
+    if (await wouldClobberLocalEdits(ctx, 'script', rel, body, opts.force)) {
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        return { rel, absPath: abs, created: false, skipped: 'local-drift' };
+    }
     const file = metaLine + body;
     const existed = await fileExists(abs);
     await snapshotToHistory(ctx.rt.brandRoot, rel, file);
@@ -288,12 +323,12 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string): P
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllScripts(ctx: SyncContext, opts: { adopt?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllScripts(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listBackendScripts(ctx.rt.config.brandId);
     return await pullEach(ctx, 'script', list, async (s) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'script', s.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const { rel } = await pullScript(ctx, s.id);
-        return { rel };
+        const r = await pullScript(ctx, s.id, { force: opts.force });
+        return { rel: r.rel, skipped: !!r.skipped };
     });
 }
 

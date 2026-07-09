@@ -35,6 +35,7 @@ elasticfunnels/
   variables.json  brand variables (editable — syncs on push)
   .ef-state.json  internal sync state — DO NOT EDIT
   .ef-state/      internal snapshot cache — DO NOT EDIT
+  .ef-history/    local version snapshots — DO NOT EDIT
 \`\`\`
 
 The brand id lives in \`.ef/config.json\`, not in the path.

@@ -21,6 +21,7 @@ import { registerAskCommand } from './commands/ask';
 import { registerClaudeCommand } from './commands/claude';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerConfigCommand } from './commands/config';
+import { registerWatchCommand } from './commands/watch';
 
 function getVersion(): string {
     try {
@@ -70,6 +71,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerClaudeCommand(program);
     registerInstallHighlighterCommand(program);
     registerConfigCommand(program);
+    registerWatchCommand(program);
 
     return program;
 }

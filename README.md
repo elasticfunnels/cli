@@ -150,6 +150,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef push --all` | Push every file under the brand root. |
 | `ef push <paths…> --draft` | Save as a draft instead of publishing (publishing is the default). |
 | `ef push --dry-run` | Print what would be pushed without making any API calls or disk writes. |
+| `ef watch` | Watch the brand root and auto-push files as you save them (`--draft`/`--direct`; Ctrl-C to stop). |
 | `ef diff [paths…]` | Show local-vs-baseline drift across the brand root (or restricted to paths). |
 | `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). |
 | `ef pages create <slug>` | Create a new page. |

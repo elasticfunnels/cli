@@ -71,6 +71,8 @@ export interface SyncContext {
     state: SyncStateFile;
     /** Optional per-item progress hook for full syncs (label = brand-root-relative path). */
     onProgress?: (kind: 'page' | 'component' | 'script' | 'asset', label: string, done: number, total: number) => void;
+    /** Accumulated pull outcomes so callers can exit non-zero on real failures. */
+    stats: { failed: number; deleted: number };
 }
 
 /**
@@ -95,14 +97,20 @@ async function pullEach<T>(
             return r;
         } catch (err) {
             done++;
-            failures.push(err instanceof Error ? err.message : String(err));
+            // A 404 means the entity is gone on the server (benign). Anything else
+            // (network/5xx after retries) is a real failure worth surfacing loudly.
+            if (err instanceof CliError && err.code === ExitCode.NotFound) {
+                ctx.stats.deleted++;
+            } else {
+                ctx.stats.failed++;
+                failures.push(err instanceof Error ? err.message : String(err));
+            }
             ctx.onProgress?.(kind, `(skipped a ${kind})`, done, total);
             return null;
         }
     });
     if (failures.length) {
-        const { log } = await import('../utils/log');
-        log.warn(`Skipped ${failures.length} ${kind}${failures.length === 1 ? '' : 's'} that failed to pull (e.g. deleted on the server). First error: ${failures[0]}`);
+        log.warn(`${failures.length} ${kind}${failures.length === 1 ? '' : 's'} FAILED to pull (network/server error — NOT deleted) and were skipped. First: ${failures[0]}. Re-run "ef pull" to retry.`);
     }
     return out.filter((r): r is { rel: string; skipped?: boolean } => r != null).map((r) => ({ rel: r.rel, skipped: r.skipped }));
 }
@@ -151,7 +159,7 @@ export async function buildSyncContext(rt: EfRuntime): Promise<SyncContext> {
             `Sync will run but local state will NOT be updated. Upgrade with: npm i -g @elasticfunnels/cli@latest`,
         );
     }
-    return { rt, api, state };
+    return { rt, api, state, stats: { failed: 0, deleted: 0 } };
 }
 
 // ── Pages ────────────────────────────────────────────────────────────

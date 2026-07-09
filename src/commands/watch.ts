@@ -10,11 +10,13 @@ import {
     PushResult,
     buildSyncContext,
     classifyAbsPath,
+    parseScriptMeta,
     pushAssetFile,
     pushComponentFile,
     pushPageFile,
     pushScriptFile,
 } from '../sync/sync';
+import { parseEfMeta } from '../sync/efMeta';
 
 interface WatchOpts { draft?: boolean; direct?: boolean; debounce?: string; json?: boolean; }
 
@@ -27,6 +29,21 @@ function isIgnored(p: string): boolean {
     if (base.endsWith('~') || base.endsWith('.swp') || base.endsWith('.swo')) return true;
     if (/\.tmp-\d+-\d+(?:-[a-z0-9]+)?$/.test(base)) return true;
     return false;
+}
+
+/**
+ * A freshly-created or just-emptied file must NOT be pushed — editors often
+ * create the file before you type into it, and pushing it would create an empty
+ * server entity (and then stamp efmeta onto the empty file, which your next save
+ * strips, tripping the push identity guard). True when the file is 0 bytes, or
+ * its text body (after the efmeta line) is whitespace-only.
+ */
+function isEffectivelyEmpty(kind: 'page' | 'component' | 'script' | 'asset', buf: Buffer): boolean {
+    if (buf.length === 0) return true;
+    if (kind === 'asset') return false; // non-empty binary is legitimate
+    const text = buf.toString('utf8');
+    const body = kind === 'script' ? parseScriptMeta(text).body : parseEfMeta(text).body;
+    return body.trim() === '';
 }
 
 export function registerWatchCommand(program: Command): void {
@@ -66,6 +83,10 @@ export function registerWatchCommand(program: Command): void {
                 let buf: Buffer;
                 try { buf = await fs.promises.readFile(abs); } catch { return; } // gone/unreadable
                 if (lastWroteHash.get(rel) === sha256(buf)) { lastWroteHash.delete(rel); return; } // our echo
+                if (isEffectivelyEmpty(kind, buf)) {
+                    if (!opts.json) log.detail(`  (skipped ${rel} — empty, nothing to push yet)`);
+                    return;
+                }
                 try {
                     let res: PushResult;
                     if (kind === 'page') res = await pushPageFile(ctx, abs, rel, { draft });

@@ -214,6 +214,7 @@ export async function persistLogin(args: {
         try {
             await ensureGitignoreEntry(gitignorePath, '.ef');
             await ensureGitignoreEntry(gitignorePath, '.ef-history/'); // local version snapshots
+            await ensureGitignoreEntry(gitignorePath, '.history/');    // VS Code "Local History" extension
         } catch { /* tolerated */ }
     }
 

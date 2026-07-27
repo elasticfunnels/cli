@@ -2,11 +2,20 @@ import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
 import {
     Asset,
     AssetEditorPayload,
+    Automation,
     BackendScript,
     Brand,
+    BrandDomain,
+    BrandEmail,
     BrandTemplate,
     BrandTemplatePage,
     Component,
+    CrmEntity,
+    CrmEntry,
+    CrmField,
+    CrmPipeline,
+    CrmStage,
+    DomainValidationInstructions,
     Page,
     PageFolder,
     PageUpdateResponse,
@@ -57,6 +66,19 @@ export interface BulkUploadFileResult {
 export interface BulkUploadResult {
     summary: { total: number; uploaded: number; failed: number };
     files: BulkUploadFileResult[];
+}
+
+/** Laravel index endpoints return either a bare array or a paginated { data: [...] }. */
+function crmList<T>(data: unknown): T[] {
+    if (Array.isArray(data)) return data as T[];
+    const d = (data as { data?: unknown } | null)?.data;
+    return Array.isArray(d) ? (d as T[]) : [];
+}
+/** Store/update endpoints may wrap the model under a key; unwrap the first that matches. */
+function crmModel<T>(data: unknown, ...keys: string[]): T {
+    const obj = data as Record<string, unknown> | null;
+    if (obj) for (const k of keys) if (obj[k] && typeof obj[k] === 'object') return obj[k] as T;
+    return data as T;
 }
 
 /**
@@ -545,6 +567,219 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Delete backend script', res);
     }
 
+    // ── Automations ──────────────────────────────────────────────────
+
+    async listAutomations(brandId: number): Promise<Automation[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/automations/all`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List automations', res);
+        const body = res.data;
+        if (Array.isArray(body)) return body as Automation[];
+        const data = (body as { data?: Automation[] }).data;
+        return Array.isArray(data) ? data : [];
+    }
+
+    /** Create an empty automation shell (only `title` is required server-side).
+     *  The trigger + node graph are authored later in the builder. */
+    async createAutomation(brandId: number, title: string): Promise<Automation> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/automations`, { data: { title } });
+        if (res.status >= 400) throw httpError('Create automation', res);
+        const body = res.data as { automation?: Automation };
+        return body.automation ?? (res.data as Automation);
+    }
+
+    /** Save the Vue Flow graph. `draft: true` writes to a revision (never deploys
+     *  live); publishing (draft: false) compiles + deploys and is intentionally
+     *  not exposed by the CLI. */
+    async saveAutomationBuilder(brandId: number, id: number, builderConfig: unknown, draft = true): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/automations/${id}/builder`, {
+            data: { builder_config: builderConfig, draft },
+        });
+        if (res.status >= 400) throw httpError('Save automation builder', res);
+    }
+
+    async deleteAutomation(brandId: number, id: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/automations/${id}`);
+        if (res.status >= 400) throw httpError('Delete automation', res);
+    }
+
+    // ── Emails ───────────────────────────────────────────────────────
+
+    async listEmails(brandId: number): Promise<BrandEmail[]> {
+        const all: BrandEmail[] = [];
+        let page = 1;
+        for (;;) {
+            const res = await this.raw('GET', `/api/brands/${brandId}/emails`, { params: { per_page: 100, page } });
+            if (res.status === 403 || res.status === 404) return [];
+            if (res.status >= 400) throw httpError('List emails', res);
+            const body = res.data as { data?: BrandEmail[]; last_page?: number };
+            const data = body.data ?? (Array.isArray(res.data) ? (res.data as BrandEmail[]) : []);
+            all.push(...data);
+            const lastPage = body.last_page ?? 1;
+            if (page >= lastPage) break;
+            page++;
+        }
+        return all;
+    }
+
+    /** Full email incl. raw html/css/config (the `show` endpoint, id-or-code). */
+    async getEmail(brandId: number, idOrCode: number | string): Promise<BrandEmail> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/emails/${encodeURIComponent(String(idOrCode))}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Email "${idOrCode}" not found.`);
+        if (res.status >= 400) throw httpError('Get email', res);
+        const body = res.data as { email?: BrandEmail } & BrandEmail;
+        return body.email ?? body;
+    }
+
+    /** Create the email row (metadata only — the body goes through saveEmailBody). */
+    async createEmail(brandId: number, meta: Record<string, unknown>): Promise<BrandEmail> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/emails`, { data: meta });
+        if (res.status >= 400) throw httpError('Create email', res);
+        const body = res.data as { email?: BrandEmail };
+        return body.email ?? (res.data as BrandEmail);
+    }
+
+    async updateEmail(brandId: number, idOrCode: number | string, meta: Record<string, unknown>): Promise<BrandEmail> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/emails/${encodeURIComponent(String(idOrCode))}`, { data: meta });
+        if (res.status >= 400) throw httpError('Update email', res);
+        const body = res.data as { email?: BrandEmail } & BrandEmail;
+        return body.email ?? body;
+    }
+
+    /** Write the email body. `config`/`css` MUST be resent to avoid wiping the
+     *  server's GrapesJS graph / stylesheet (a missing field is stored as null). */
+    async saveEmailBody(brandId: number, idOrCode: number | string, payload: { html: string; css?: string; config?: unknown }): Promise<void> {
+        const data: Record<string, unknown> = { html: payload.html, css: payload.css ?? '' };
+        if (payload.config !== undefined) data.config = payload.config;
+        const res = await this.raw('POST', `/api/brands/${brandId}/emails/${encodeURIComponent(String(idOrCode))}/builder`, { data });
+        if (res.status >= 400) throw httpError('Save email body', res);
+    }
+
+    async deleteEmail(brandId: number, idOrCode: number | string): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/emails/${encodeURIComponent(String(idOrCode))}`);
+        if (res.status >= 400) throw httpError('Delete email', res);
+    }
+
+    // ── CRM ──────────────────────────────────────────────────────────
+    // Prefix: /api/brands/{brand}/crm. Definitions (entity/pipeline/stage/field)
+    // are MySQL; entries are Elasticsearch docs (string ids).
+
+    async listCrmEntities(brandId: number): Promise<CrmEntity[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List CRM entities', res);
+        return crmList<CrmEntity>(res.data);
+    }
+
+    async getCrmEntity(brandId: number, entityId: number): Promise<CrmEntity> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `CRM entity ${entityId} not found.`);
+        if (res.status >= 400) throw httpError('Get CRM entity', res);
+        return crmModel<CrmEntity>(res.data, 'entity', 'data');
+    }
+
+    async createCrmEntity(brandId: number, payload: Record<string, unknown>): Promise<CrmEntity> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/crm/entities`, { data: payload });
+        if (res.status >= 400) throw httpError('Create CRM entity', res);
+        return crmModel<CrmEntity>(res.data, 'entity', 'data');
+    }
+
+    async deleteCrmEntity(brandId: number, entityId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/crm/entities/${entityId}`);
+        if (res.status >= 400) throw httpError('Delete CRM entity', res);
+    }
+
+    async listCrmPipelines(brandId: number, entityId: number): Promise<CrmPipeline[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}/pipelines`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List CRM pipelines', res);
+        return crmList<CrmPipeline>(res.data);
+    }
+
+    async createCrmPipeline(brandId: number, entityId: number, payload: Record<string, unknown>): Promise<CrmPipeline> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/crm/entities/${entityId}/pipelines`, { data: payload });
+        if (res.status >= 400) throw httpError('Create CRM pipeline', res);
+        return crmModel<CrmPipeline>(res.data, 'pipeline', 'data');
+    }
+
+    async deleteCrmPipeline(brandId: number, pipelineId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/crm/pipelines/${pipelineId}`);
+        if (res.status >= 400) throw httpError('Delete CRM pipeline', res);
+    }
+
+    async listCrmStages(brandId: number, pipelineId: number): Promise<CrmStage[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/pipelines/${pipelineId}/stages`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List CRM stages', res);
+        return crmList<CrmStage>(res.data);
+    }
+
+    async createCrmStage(brandId: number, pipelineId: number, payload: Record<string, unknown>): Promise<CrmStage> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/crm/pipelines/${pipelineId}/stages`, { data: payload });
+        if (res.status >= 400) throw httpError('Create CRM stage', res);
+        return crmModel<CrmStage>(res.data, 'stage', 'data');
+    }
+
+    async deleteCrmStage(brandId: number, stageId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/crm/stages/${stageId}`);
+        if (res.status >= 400) throw httpError('Delete CRM stage', res);
+    }
+
+    async listCrmFields(brandId: number, entityId: number): Promise<CrmField[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}/fields`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List CRM fields', res);
+        return crmList<CrmField>(res.data);
+    }
+
+    async createCrmField(brandId: number, entityId: number, payload: Record<string, unknown>): Promise<CrmField> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/crm/entities/${entityId}/fields`, { data: payload });
+        if (res.status >= 400) throw httpError('Create CRM field', res);
+        return crmModel<CrmField>(res.data, 'field', 'data');
+    }
+
+    async deleteCrmField(brandId: number, fieldId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/crm/fields/${fieldId}`);
+        if (res.status >= 400) throw httpError('Delete CRM field', res);
+    }
+
+    async listCrmEntries(brandId: number, entityId: number, filters: Record<string, string | number> = {}): Promise<CrmEntry[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}/entries`, { params: filters });
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List CRM entries', res);
+        return crmList<CrmEntry>(res.data);
+    }
+
+    async getCrmEntry(brandId: number, entryId: string): Promise<CrmEntry> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entries/${encodeURIComponent(entryId)}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `CRM entry ${entryId} not found.`);
+        if (res.status >= 400) throw httpError('Get CRM entry', res);
+        return crmModel<CrmEntry>(res.data, 'entry', 'data');
+    }
+
+    async createCrmEntry(brandId: number, entityId: number, payload: Record<string, unknown>): Promise<CrmEntry> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/crm/entities/${entityId}/entries`, { data: payload });
+        if (res.status >= 400) throw httpError('Create CRM entry', res);
+        return crmModel<CrmEntry>(res.data, 'entry', 'data');
+    }
+
+    async updateCrmEntry(brandId: number, entryId: string, payload: Record<string, unknown>): Promise<CrmEntry> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/crm/entries/${encodeURIComponent(entryId)}`, { data: payload });
+        if (res.status >= 400) throw httpError('Update CRM entry', res);
+        return crmModel<CrmEntry>(res.data, 'entry', 'data');
+    }
+
+    async moveCrmEntry(brandId: number, entryId: string, stageId: number): Promise<CrmEntry> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/crm/entries/${encodeURIComponent(entryId)}/stage`, { data: { stage_id: stageId } });
+        if (res.status >= 400) throw httpError('Move CRM entry', res);
+        return crmModel<CrmEntry>(res.data, 'entry', 'data');
+    }
+
+    async deleteCrmEntry(brandId: number, entryId: string): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/crm/entries/${encodeURIComponent(entryId)}`);
+        if (res.status >= 400) throw httpError('Delete CRM entry', res);
+    }
+
     // ── Templates ────────────────────────────────────────────────────
 
     async listTemplates(brandId: number): Promise<BrandTemplate[]> {
@@ -557,6 +792,72 @@ export class ApiClient {
         const res = await this.raw('GET', `/api/brands/${brandId}/templates/${encodeURIComponent(String(templateIdOrSlug))}/pages`);
         if (res.status >= 400) throw httpError('List template pages', res);
         return (Array.isArray(res.data) ? res.data : []) as BrandTemplatePage[];
+    }
+
+    // ── Domains ──────────────────────────────────────────────────────
+
+    async listDomains(brandId: number): Promise<BrandDomain[]> {
+        const all: BrandDomain[] = [];
+        let page = 1;
+        for (;;) {
+            const res = await this.raw('GET', `/api/brands/${brandId}/domains`, {
+                params: { per_page: 100, page },
+            });
+            if (res.status === 403 || res.status === 404) return [];
+            if (res.status >= 400) throw httpError('List domains', res);
+            const body = res.data as { data?: BrandDomain[]; last_page?: number };
+            const data = body.data ?? (Array.isArray(res.data) ? (res.data as BrandDomain[]) : []);
+            all.push(...data);
+            const lastPage = body.last_page ?? 1;
+            if (page >= lastPage) break;
+            page++;
+        }
+        return all;
+    }
+
+    async getDomain(brandId: number, domainId: number): Promise<BrandDomain> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/domains/${domainId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
+        if (res.status >= 400) throw httpError('Get domain', res);
+        return res.data as BrandDomain;
+    }
+
+    /**
+     * Add a domain to the brand. Defaults to a dedicated (customer-owned) domain;
+     * pass a `subdomain` (+ optional `subdomain_root`) to create a platform
+     * subdomain instead. A dedicated domain kicks off async Cloudflare custom
+     * hostname creation — the TXT ownership record appears a few seconds later
+     * (poll {@link getDomainValidationInstructions}).
+     */
+    async createDomain(
+        brandId: number,
+        payload: { domain?: string; dedicated_domain?: boolean; subdomain?: string; subdomain_root?: string; merchant_id?: number | null },
+    ): Promise<BrandDomain> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/domains`, { data: payload });
+        if (res.status >= 400) throw httpError('Add domain', res);
+        const body = res.data as { domain?: BrandDomain } | BrandDomain;
+        return ('domain' in body && body.domain ? body.domain : body) as BrandDomain;
+    }
+
+    /** Fetch the DNS records (TXT ownership + CNAME → platform) needed to validate a domain. */
+    async getDomainValidationInstructions(brandId: number, domainId: number): Promise<DomainValidationInstructions> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/domains/${domainId}/validation-instructions`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
+        if (res.status >= 400) throw httpError('Get domain validation instructions', res);
+        return res.data as DomainValidationInstructions;
+    }
+
+    /** Queue (re)validation of a dedicated domain — checks DNS + issues SSL. */
+    async validateDomain(brandId: number, domainId: number): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/domains/${domainId}/validate`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
+        if (res.status >= 400) throw httpError('Validate domain', res);
+    }
+
+    async deleteDomain(brandId: number, domainId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/domains/${domainId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
+        if (res.status >= 400) throw httpError('Delete domain', res);
     }
 
     // ── Internal HTTP helper ────────────────────────────────────────

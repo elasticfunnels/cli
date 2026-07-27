@@ -83,9 +83,10 @@ export async function runFullSync(rt: EfRuntime, opts: {
 export function registerPullCommand(program: Command): void {
     program
         .command('pull [target] [key]')
-        .description(`Pull from server to disk. Without arguments, pulls everything (pages, components, scripts, assets, variables).
-With <target>, pulls one entity. Examples:
-  ef pull                       # full sync
+        .description('Pull from server to disk. No args = full sync; <target> pulls one kind or entity.')
+        .addHelpText('after', `
+Examples:
+  ef pull                       # full sync (pages, components, scripts, assets, variables)
   ef pull pages                 # all pages
   ef pull components            # all components
   ef pull scripts               # all backend scripts

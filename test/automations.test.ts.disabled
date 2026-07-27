@@ -1,0 +1,192 @@
+import { test } from 'node:test';
+import * as assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as http from 'http';
+import { spawn } from 'child_process';
+
+const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
+
+interface BuilderPost { id: string; builder_config: { nodes: { type: string; data: { ef_type: string } }[] }; draft: boolean; }
+interface Mock { url: string; close: () => Promise<void>; createdTitles: string[]; builderPosts: BuilderPost[]; }
+
+function startMock(): Promise<Mock> {
+    const createdTitles: string[] = [];
+    const builderPosts: BuilderPost[] = [];
+    return new Promise((resolve) => {
+        const server = http.createServer((req, res) => {
+            let b = '';
+            req.on('data', (d) => (b += d));
+            req.on('end', () => {
+                const url = req.url || '';
+                const builder = /\/automations\/([^/]+)\/builder$/.exec(url);
+                if (req.method === 'POST' && builder) {
+                    try { const p = JSON.parse(b) as { builder_config: BuilderPost['builder_config']; draft: boolean }; builderPosts.push({ id: builder[1], builder_config: p.builder_config, draft: p.draft }); } catch { /* ignore */ }
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ id: 501, title: 'PP' }));
+                    return;
+                }
+                if (req.method === 'POST' && /\/automations$/.test(url)) {
+                    let title = '';
+                    try { title = (JSON.parse(b) as { title?: string }).title ?? ''; } catch { /* ignore */ }
+                    createdTitles.push(title);
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ automation: { id: 501, title, status: 'draft', postback_code: 'abc123' } }));
+                    return;
+                }
+                if (req.method === 'GET' && /\/automations\/all$/.test(url)) {
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify([{ id: 1, title: 'Existing Flow', trigger_node_type: 'triggers_on_refund', status: 'active' }]));
+                    return;
+                }
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end('{}');
+            });
+        });
+        server.listen(0, '127.0.0.1', () => {
+            const addr = server.address() as { port: number };
+            resolve({ url: `http://127.0.0.1:${addr.port}`, close: () => new Promise<void>((r) => server.close(() => r())), createdTitles, builderPosts });
+        });
+    });
+}
+
+async function setupProject(apiUrl: string): Promise<string> {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-auto-'));
+    await fs.promises.mkdir(path.join(root, '.ef'), { recursive: true });
+    await fs.promises.writeFile(
+        path.join(root, '.ef', 'config.json'),
+        JSON.stringify({ apiUrl, brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'direct' }),
+    );
+    await fs.promises.writeFile(path.join(root, '.ef', 'auth'), 'k\n');
+    return root;
+}
+
+function runEf(cwd: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+        const child = spawn(process.execPath, [BIN_PATH, ...args], { cwd, env: { ...process.env, NO_COLOR: '1' } });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => (stdout += d));
+        child.stderr.on('data', (d) => (stderr += d));
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+}
+
+test('automations triggers --json lists canonical ids (works without a project)', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-notrig-'));
+    try {
+        const r = await runEf(dir, ['automations', 'triggers', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const rows = JSON.parse(r.stdout) as { id: string; short: string }[];
+        const np = rows.find((t) => t.short === 'new_purchase');
+        assert.equal(np!.id, 'triggers_on_new_purchase');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('automations node-types --json exposes render types + step aliases', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-nonode-'));
+    try {
+        const r = await runEf(dir, ['automations', 'node-types', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const out = JSON.parse(r.stdout) as { renderTypes: string[]; stepAliases: Record<string, unknown> };
+        assert.ok(out.renderTypes.includes('wait') && out.renderTypes.includes('action'));
+        assert.ok('email' in out.stepAliases && 'condition' in out.stepAliases);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('automations create --dry-run builds the graph without touching the server', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-nodry-'));
+    try {
+        const r = await runEf(dir, ['automations', 'create', 'PP', '--trigger', 'new_purchase', '--steps', 'email(welcome), wait(4d)', '--dry-run', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const out = JSON.parse(r.stdout) as { dryRun: boolean; trigger: string; builderConfig: { nodes: { type: string; data: { ef_type: string; values: Record<string, unknown> } }[]; edges: unknown[] } };
+        assert.equal(out.dryRun, true);
+        assert.equal(out.trigger, 'triggers_on_new_purchase');
+        const nodes = out.builderConfig.nodes;
+        assert.equal(nodes[0].type, 'trigger');
+        assert.equal(nodes[0].data.ef_type, 'triggers_on_new_purchase');
+        assert.equal(nodes[1].data.ef_type, 'mailing_<provider>_send_email');
+        assert.equal(nodes[2].data.ef_type, 'control_general_wait_for');
+        assert.equal(nodes[2].data.values.minutes, 5760, '4d → 5760 minutes');
+        assert.equal(out.builderConfig.edges.length, 2, 'linear chain of 2 edges');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('automations create with --steps but no --trigger is rejected', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-notrigsteps-'));
+    try {
+        const r = await runEf(dir, ['automations', 'create', 'X', '--steps', 'email(welcome)', '--dry-run']);
+        assert.equal(r.code, 2);
+        assert.match(r.stderr, /Steps need a --trigger/);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('automations create rejects an unknown step (exit 2, no server call)', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-nobadstep-'));
+    try {
+        const r = await runEf(dir, ['automations', 'create', 'X', '--steps', 'teleport(now)', '--dry-run']);
+        assert.equal(r.code, 2);
+        assert.match(r.stderr, /Unknown step "teleport"/);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('automations create posts the shell AND a draft graph, normalizing a legacy trigger', async () => {
+    const mock = await startMock();
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['automations', 'create', 'Abandoned Cart', '--trigger', 'abandoned_cart', '--steps', 'email(cart)', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.deepEqual(mock.createdTitles, ['Abandoned Cart']);
+        const out = JSON.parse(r.stdout) as { ok: boolean; automation: { id: number }; wired: boolean };
+        assert.equal(out.ok, true);
+        assert.equal(out.automation.id, 501);
+        assert.equal(out.wired, true);
+        // The draft graph was posted with the normalized trigger as the entry node.
+        assert.equal(mock.builderPosts.length, 1);
+        assert.equal(mock.builderPosts[0].draft, true, 'posted as a DRAFT, never live');
+        assert.equal(mock.builderPosts[0].builder_config.nodes[0].data.ef_type, 'triggers_on_abandon', 'legacy alias normalized');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('automations create without a trigger makes only a shell (no graph POST)', async () => {
+    const mock = await startMock();
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['automations', 'create', 'Bare', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const out = JSON.parse(r.stdout) as { wired: boolean };
+        assert.equal(out.wired, false);
+        assert.equal(mock.builderPosts.length, 0);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('automations list renders existing automations', async () => {
+    const mock = await startMock();
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['automations', 'list', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const rows = JSON.parse(r.stdout) as { id: number; title: string }[];
+        assert.equal(rows[0].title, 'Existing Flow');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});

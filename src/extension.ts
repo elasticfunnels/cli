@@ -22,6 +22,15 @@ import { registerClaudeCommand } from './commands/claude';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerConfigCommand } from './commands/config';
 import { registerWatchCommand } from './commands/watch';
+import { registerLintCommand } from './commands/lint';
+import { registerDomainsCommand } from './commands/domains';
+import { registerCrmCommand } from './commands/crm';
+// Temporarily DISABLED — kept in the tree but not wired up. Emails need a raw
+// code-editor path (not just the GrapesJS builder) and automations need real
+// graph UX before they're safe to ship; re-enable by restoring these two lines
+// and their register…() calls below.
+// import { registerAutomationsCommand } from './commands/automations';
+// import { registerEmailsCommand } from './commands/emails';
 
 function getVersion(): string {
     try {
@@ -72,6 +81,12 @@ Designed for Claude Code, scripts, and humans equally:
     registerInstallHighlighterCommand(program);
     registerConfigCommand(program);
     registerWatchCommand(program);
+    registerLintCommand(program);
+    registerDomainsCommand(program);
+    registerCrmCommand(program);
+    // Disabled for now (see the commented imports above):
+    // registerAutomationsCommand(program);
+    // registerEmailsCommand(program);
 
     return program;
 }

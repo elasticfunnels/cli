@@ -28,8 +28,8 @@ interface PushOpts {
 export function registerPushCommand(program: Command): void {
     program
         .command('push [paths...]')
-        .description(`Push local files to the server. Use file paths relative to the project or brand root.
-
+        .description('Push local files to the server (paths relative to the project or brand root).')
+        .addHelpText('after', `
 Examples:
   ef push pages/about-us.ef                     # push one page
   ef push pages/                                # push all pages under a folder

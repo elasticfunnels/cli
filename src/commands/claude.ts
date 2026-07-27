@@ -176,6 +176,16 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`):
 - \`ef pages push <slugOrPath>\` · \`ef components push <codeOrPath>\` ·
   \`ef scripts push <pathOrCode>\` — push one entity by path or code.
 - \`ef components create <code>\` · \`ef pages create <slug>\` — create an entity.
+- \`ef lint [paths…]\` — statically validate \`.ef\` pages/components/scripts
+  (unclosed \`{{ }}\`/\`[[ ]]\`, unknown \`@directives\`/filters, unbalanced blocks,
+  script parse errors). Exits non-zero on errors; \`--strict\` fails on warnings too.
+- \`ef variables set <key> <value>\` — set one brand variable (dotted keys nest,
+  e.g. \`brand.name\`; JSON-typed values; \`@file\` reads a file). \`ef variables get/pull/push\`.
+- \`ef crm entities | pipelines <entity> | stages <pipeline> | fields <entity> | entries <entity>\`
+  — read CRM. Create/update/delete with \`ef crm <group> create/update/delete\`. Entity args
+  take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.
+  Complex payloads: \`--input-json '{…}'\` / \`--input-file <path|->\` (flags override the JSON);
+  \`--generate-skeleton\` prints an example payload.
 - \`ef config get\` / \`ef config set saveMode direct\` — view/change project config.
 - \`ef preview <slug>\` — editor preview URL.
 - \`ef list pages --json\` — machine-readable listings (every command takes

@@ -177,8 +177,31 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef assets pull <remotePath>` | Pull one asset. |
 | `ef assets delete <remotePath>` | Delete an asset. |
 | `ef variables get` | Print brand variables JSON. |
+| `ef variables set <key> <value>` | Set one variable, then push. Dotted keys nest (`brand.name`); values are JSON-typed (`180`, `true`, `{…}`) or a string; `@file` reads from a file; `--string` forces a literal. |
 | `ef variables pull` | Write `<brandRoot>/variables.json`. |
 | `ef variables push [--file]` | Push the variables JSON to the server. |
+| `ef domains list` | List the brand's domains (alias `ef domains ls`) with status + SSL. |
+| `ef domains add <domain>` | Add a dedicated (customer-owned) domain — kicks off Cloudflare hostname creation. `--subdomain <label>` (+ `--root`) adds a platform subdomain instead. `--records` waits for and prints the DNS records. |
+| `ef domains records <domain>` | Print the DNS records to add: a TXT ownership record + a CNAME to the platform domain. `--wait` polls until the TXT record is ready. |
+| `ef domains validate <domain>` | Queue validation for a dedicated domain (checks DNS + issues SSL). |
+| `ef domains remove <domain>` | Delete a domain from the brand (alias `ef domains rm`). |
+| `ef lint [paths…]` | Statically validate `.ef` pages/components/scripts (template + script syntax). Exits non-zero on errors; `--strict` fails on warnings, `--json` for machine output. |
+| `ef crm entities` / `pipelines <entity>` / `stages <pipeline>` / `fields <entity>` / `entries <entity>` | List CRM objects. `entities`/`pipelines`/`fields`/`entries` accept an entity **id or slug**. |
+| `ef crm entities create` · `pipelines create <entity>` · `stages create <pipeline>` · `fields create <entity>` · `entries create <entity>` | Create CRM objects. Common fields via flags, or the whole payload via `--input-json`/`--input-file` (flags override). `--generate-skeleton` prints an example payload. |
+| `ef crm entries update <entry>` / `move <entry> --stage <id>` / `delete <entry>` | Update an entry (`values` merge), move it to a stage, or delete it. Entries are Elasticsearch docs (string ids). |
+
+### JSON input for complex commands
+
+Commands with rich payloads (currently `ef crm …`) accept an AWS-style JSON input in addition to flags:
+
+```bash
+ef crm entries create leads --generate-skeleton              # print an example payload
+ef crm entries create leads --input-file entry.json          # send a payload file ("-" = stdin)
+ef crm entries create leads --input-json '{"title":"Jane","pipeline_id":1,"stage_id":2,"values":{"budget":5000}}'
+ef crm entries create leads --input-file entry.json --title "Override"   # flags win over JSON fields
+```
+
+`--input-json` and `--input-file` are mutually exclusive; any flags you also pass override the matching JSON fields.
 
 ## Exit codes
 

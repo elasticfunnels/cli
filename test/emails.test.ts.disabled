@@ -1,0 +1,325 @@
+import { test } from 'node:test';
+import * as assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as http from 'http';
+import * as crypto from 'crypto';
+import { spawn } from 'child_process';
+
+const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
+
+const sha256hex = (s: string): string => crypto.createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
+
+interface EmailRow { id: number; code?: string | null; name?: string | null; subject?: string | null; html?: string | null; css?: string | null; config?: unknown; updated_at?: string; }
+interface BuilderPost { idOrCode: string; html?: string; css?: string; config?: unknown; }
+interface Mock {
+    url: string;
+    close: () => Promise<void>;
+    emails: Map<number, EmailRow>;
+    builderPosts: BuilderPost[];
+    creates: Record<string, unknown>[];
+    deletes: string[];
+    seed: (e: EmailRow) => void;
+}
+
+function startMock(): Promise<Mock> {
+    const emails = new Map<number, EmailRow>();
+    const builderPosts: BuilderPost[] = [];
+    const creates: Record<string, unknown>[] = [];
+    const deletes: string[] = [];
+    let nextId = 100;
+
+    const find = (x: string): EmailRow | undefined => {
+        if (/^\d+$/.test(x)) return emails.get(parseInt(x, 10));
+        for (const e of emails.values()) if (e.code === x) return e;
+        return undefined;
+    };
+
+    return new Promise((resolve) => {
+        const server = http.createServer((req, res) => {
+            let b = '';
+            req.on('data', (d) => (b += d));
+            req.on('end', () => {
+                const url = (req.url || '').split('?')[0];
+                const json = (status: number, payload: unknown) => {
+                    res.writeHead(status, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify(payload));
+                };
+                const body = (): Record<string, unknown> => { try { return JSON.parse(b) as Record<string, unknown>; } catch { return {}; } };
+
+                const builder = /\/emails\/([^/]+)\/builder$/.exec(url);
+                if (builder && req.method === 'POST') {
+                    const p = body();
+                    builderPosts.push({ idOrCode: decodeURIComponent(builder[1]), html: p.html as string, css: p.css as string, config: p.config });
+                    const e = find(decodeURIComponent(builder[1]));
+                    if (e) { e.html = p.html as string; if (p.css !== undefined) e.css = p.css as string; if (p.config !== undefined) e.config = p.config; e.updated_at = '2030-01-01T00:00:00Z'; }
+                    return json(200, { id: e?.id ?? 0, name: e?.name ?? '' });
+                }
+
+                const one = /\/emails\/([^/]+)$/.exec(url);
+                if (one) {
+                    const key = decodeURIComponent(one[1]);
+                    if (req.method === 'GET') {
+                        const e = find(key);
+                        return e ? json(200, e) : json(404, {});
+                    }
+                    if (req.method === 'PUT') {
+                        const e = find(key);
+                        if (!e) return json(404, {});
+                        Object.assign(e, body());
+                        e.updated_at = '2030-01-01T00:00:00Z';
+                        return json(200, e);
+                    }
+                    if (req.method === 'DELETE') {
+                        const e = find(key);
+                        deletes.push(key);
+                        if (e) emails.delete(e.id);
+                        return json(200, { success: true });
+                    }
+                }
+
+                if (/\/emails$/.test(url)) {
+                    if (req.method === 'GET') {
+                        // List rows deliberately omit html to prove pull re-fetches the full record.
+                        const rows = [...emails.values()].map((e) => ({ id: e.id, code: e.code, name: e.name, subject: e.subject }));
+                        return json(200, { data: rows, last_page: 1 });
+                    }
+                    if (req.method === 'POST') {
+                        const p = body();
+                        creates.push(p);
+                        const e: EmailRow = { id: nextId++, code: (p.code as string) ?? null, name: (p.name as string) ?? null, subject: (p.subject as string) ?? null, html: '', css: '', config: null };
+                        emails.set(e.id, e);
+                        return json(200, { id: e.id, email: e });
+                    }
+                }
+                json(200, {});
+            });
+        });
+        server.listen(0, '127.0.0.1', () => {
+            const addr = server.address() as { port: number };
+            resolve({
+                url: `http://127.0.0.1:${addr.port}`,
+                close: () => new Promise<void>((r) => server.close(() => r())),
+                emails, builderPosts, creates, deletes,
+                seed: (e) => emails.set(e.id, e),
+            });
+        });
+    });
+}
+
+async function setupProject(apiUrl: string): Promise<{ root: string; brandRoot: string }> {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-emails-'));
+    await fs.promises.mkdir(path.join(root, '.ef'), { recursive: true });
+    await fs.promises.writeFile(
+        path.join(root, '.ef', 'config.json'),
+        JSON.stringify({ apiUrl, brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'direct' }),
+    );
+    await fs.promises.writeFile(path.join(root, '.ef', 'auth'), 'k\n');
+    return { root, brandRoot: path.join(root, 'elasticfunnels') };
+}
+
+function runEf(cwd: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+        const child = spawn(process.execPath, [BIN_PATH, ...args], { cwd, env: { ...process.env, NO_COLOR: '1' } });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => (stdout += d));
+        child.stderr.on('data', (d) => (stderr += d));
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+}
+
+test('emails pull writes emails/<code>.html with front-matter + raw body', async () => {
+    const mock = await startMock();
+    mock.seed({ id: 42, code: 'welcome', name: 'Welcome', subject: 'Hi there', html: '<h1>Hi</h1>', css: 'body{}', config: { grape: 1 } });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['emails', 'pull']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const file = await fs.promises.readFile(path.join(brandRoot, 'emails', 'welcome.html'), 'utf8');
+        assert.match(file, /^<!-- efemail:/);
+        assert.match(file, /"id":42/);
+        assert.match(file, /"code":"welcome"/);
+        assert.match(file, /"subject":"Hi there"/);
+        assert.match(file, /-->\n<h1>Hi<\/h1>/, 'body follows the front-matter line');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails create posts metadata + body and writes the file', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        await fs.promises.writeFile(path.join(root, 'body.html'), '<p>Buy now</p>');
+        const r = await runEf(root, ['emails', 'create', 'promo', '--subject', 'Big Sale', '--file', 'body.html', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.equal(mock.creates.length, 1);
+        assert.equal(mock.creates[0].code, 'promo');
+        assert.equal(mock.creates[0].name, 'promo', 'name defaults to code');
+        assert.equal(mock.creates[0].subject, 'Big Sale');
+        assert.equal(mock.builderPosts.at(-1)!.html, '<p>Buy now</p>');
+        const file = await fs.promises.readFile(path.join(brandRoot, 'emails', 'promo.html'), 'utf8');
+        assert.match(file, /"code":"promo"/);
+        assert.match(file, /<p>Buy now<\/p>/);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails push updates an existing email and PRESERVES its css + GrapesJS config', async () => {
+    const mock = await startMock();
+    mock.seed({ id: 42, code: 'welcome', name: 'Welcome', subject: 'Old', html: '<h1>old</h1>', css: 'body{color:red}', config: { grape: 1 } });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'),
+            '<!-- efemail:{"v":1,"id":42,"code":"welcome","subject":"New Subject"} -->\n<h1>NEW BODY</h1>\n');
+        const r = await runEf(root, ['emails', 'push', 'emails/welcome.html', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const post = mock.builderPosts.at(-1)!;
+        assert.equal(post.html, '<h1>NEW BODY</h1>\n', 'new body pushed');
+        assert.equal(post.css, 'body{color:red}', 'existing css preserved');
+        assert.deepEqual(post.config, { grape: 1 }, 'existing GrapesJS config preserved, not wiped');
+        assert.equal(mock.emails.get(42)!.subject, 'New Subject', 'metadata updated');
+        assert.equal(mock.creates.length, 0, 'no create — it updated in place');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails push creates a new email when the code is unknown', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'fresh.html'),
+            '<!-- efemail:{"v":1,"code":"fresh","subject":"Fresh"} -->\n<p>hello</p>\n');
+        const r = await runEf(root, ['emails', 'push', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.equal(mock.creates.length, 1, 'created because getEmail(fresh) 404s');
+        assert.equal(mock.creates[0].code, 'fresh');
+        assert.equal(mock.builderPosts.at(-1)!.html, '<p>hello</p>\n');
+        // File got its server id stamped back.
+        const file = await fs.promises.readFile(path.join(dir, 'fresh.html'), 'utf8');
+        assert.match(file, /"id":\d+/);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails push REFUSES when the server changed since you pulled (exit 4, nothing pushed)', async () => {
+    const mock = await startMock();
+    const body = '<h1>local</h1>\n';
+    mock.seed({ id: 42, code: 'welcome', html: '<h1>server moved on</h1>', css: '', config: null, updated_at: '2026-02-01T00:00:00Z' });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        // Baseline: not locally edited (baseHash matches body), but remoteUpdatedAt older than the server.
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'),
+            `<!-- efemail:{"v":1,"id":42,"code":"welcome","remoteUpdatedAt":"2026-01-01T00:00:00Z","baseHash":"${sha256hex(body)}"} -->\n${body}`);
+        const r = await runEf(root, ['emails', 'push', 'emails/welcome.html', '--json']);
+        assert.equal(r.code, 4, `expected conflict exit; stderr=${r.stderr}`);
+        const out = JSON.parse(r.stdout) as { ok: boolean; conflicts: { status: string }[] };
+        assert.equal(out.ok, false);
+        assert.equal(out.conflicts[0].status, 'server-newer');
+        assert.equal(mock.builderPosts.length, 0, 'nothing was pushed');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails push --force overwrites the server-newer email and snapshots it to .ef-history', async () => {
+    const mock = await startMock();
+    const body = '<h1>local</h1>\n';
+    mock.seed({ id: 42, code: 'welcome', html: '<h1>server moved on</h1>', css: '', config: null, updated_at: '2026-02-01T00:00:00Z' });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'),
+            `<!-- efemail:{"v":1,"id":42,"code":"welcome","remoteUpdatedAt":"2026-01-01T00:00:00Z","baseHash":"${sha256hex(body)}"} -->\n${body}`);
+        const r = await runEf(root, ['emails', 'push', 'emails/welcome.html', '--force', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.equal(mock.builderPosts.length, 1, 'pushed under --force');
+        const snaps = fs.readdirSync(path.join(brandRoot, '.ef-history', 'emails'));
+        assert.ok(snaps.some((f) => f.startsWith('welcome-')), 'server version snapshotted before overwrite');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails pull KEEPS a locally-edited file (no --force)', async () => {
+    const mock = await startMock();
+    mock.seed({ id: 42, code: 'welcome', html: '<h1>server</h1>', css: '', config: null, updated_at: '2026-03-01T00:00:00Z' });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        const original = '<h1>orig</h1>\n';
+        const edited = '<h1>MY LOCAL EDIT</h1>\n';
+        // baseHash is of the original, but the body on disk is the edited version → locally dirty.
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'),
+            `<!-- efemail:{"v":1,"id":42,"code":"welcome","baseHash":"${sha256hex(original)}"} -->\n${edited}`);
+        const r = await runEf(root, ['emails', 'pull', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const out = JSON.parse(r.stdout) as { pulled: string[]; kept: string[] };
+        assert.deepEqual(out.pulled, [], 'did not overwrite');
+        assert.deepEqual(out.kept, ['emails/welcome.html']);
+        assert.match(await fs.promises.readFile(path.join(dir, 'welcome.html'), 'utf8'), /MY LOCAL EDIT/, 'local edit preserved');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails diff reports server-newer drift', async () => {
+    const mock = await startMock();
+    const body = '<h1>x</h1>\n';
+    mock.seed({ id: 42, code: 'welcome', html: body, css: '', config: null, updated_at: '2026-05-01T00:00:00Z' });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        // Not locally edited (baseHash matches), but server updated_at is newer than the baseline.
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'),
+            `<!-- efemail:{"v":1,"id":42,"code":"welcome","remoteUpdatedAt":"2026-01-01T00:00:00Z","baseHash":"${sha256hex(body)}"} -->\n${body}`);
+        const r = await runEf(root, ['emails', 'diff', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const entries = JSON.parse(r.stdout) as { status: string; id: number }[];
+        assert.equal(entries[0].status, 'server-newer');
+        assert.equal(entries[0].id, 42);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('emails delete removes the server record and the local file', async () => {
+    const mock = await startMock();
+    mock.seed({ id: 42, code: 'welcome', name: 'Welcome', html: '<h1>hi</h1>', css: '', config: null });
+    const { root, brandRoot } = await setupProject(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'emails');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'welcome.html'), '<!-- efemail:{"v":1,"id":42,"code":"welcome"} -->\n<h1>hi</h1>');
+        const r = await runEf(root, ['emails', 'delete', 'welcome', '--force', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.deepEqual(mock.deletes, ['42'], 'delete resolves the code to the numeric id first');
+        assert.equal(mock.emails.has(42), false);
+        assert.equal(fs.existsSync(path.join(dir, 'welcome.html')), false, 'local file removed');
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});

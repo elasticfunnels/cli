@@ -43,8 +43,8 @@ interface DiffEntry {
 export function registerDiffCommand(program: Command): void {
     program
         .command('diff [paths...]')
-        .description(`Show drift between local files and the baselines recorded in .ef-state.json.
-
+        .description('Show drift between local files and the baselines recorded in .ef-state.json.')
+        .addHelpText('after', `
 Without arguments, scans every page/component/script/asset under the brand
 root. With arguments, restricts the scan to the given files or directories.
 

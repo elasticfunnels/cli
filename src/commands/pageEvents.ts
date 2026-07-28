@@ -6,12 +6,67 @@ import { Page } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
-import { writeFileAtomic } from '../utils/fs';
+import { sha256, writeFileAtomic } from '../utils/fs';
+import { readSnapshot, writeSnapshot } from '../sync/baselineSnapshots';
 import { resolvePageBySlug } from './shared';
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
+import { unifiedDiff } from '../sync/merge';
 
 /** Starter graph written when a page has no events yet, so it's editable. */
 const EMPTY_GRAPH = { drawflow: { Home: { data: {} } } };
+
+/** Order-independent JSON serialization, so a graph's hash is stable regardless
+ *  of key order (the server may reorder keys on save). */
+export function canonical(v: unknown): string {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+    if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`;
+}
+export function graphHash(graph: unknown): string {
+    return sha256(Buffer.from(canonical(graph), 'utf8'));
+}
+
+export interface EventsDiffEntry {
+    rel: string;
+    kind: 'events';
+    serverId: number | null;
+    status: 'clean' | 'dirty' | 'server-newer' | 'both-changed' | 'local-only' | 'unknown';
+    note?: string;
+    diff?: string;
+}
+
+/** Diff a `pages/<slug>.events.json` file against the server graph. Used by
+ *  `ef diff pages/x.events.json` so events diff the same way as any other file. */
+export async function eventsDiffEntry(rt: EfRuntime, api: ApiClient, abs: string): Promise<EventsDiffEntry> {
+    const rel = path.relative(rt.brandRoot, abs).split(path.sep).join('/');
+    let local: unknown;
+    try { local = JSON.parse(fs.readFileSync(abs, 'utf8')); } catch {
+        return { rel, kind: 'events', serverId: null, status: 'unknown', note: 'invalid JSON' };
+    }
+    const slug = rel.replace(/^pages\//, '').replace(/\.events\.json$/i, '');
+    let page: Page;
+    try { page = await resolvePageBySlug(api, rt.config.brandId, slug); } catch {
+        return { rel, kind: 'events', serverId: null, status: 'local-only', note: `no page with slug "${slug}"` };
+    }
+    const server = (await api.getPageEvents(rt.config.brandId, page.id)) ?? EMPTY_GRAPH;
+    const localHash = graphHash(local);
+    const serverHash = graphHash(server);
+    const baseline = await readSnapshot(rt.brandRoot, 'pageEvents', page.id);
+    const baseHash = baseline ? sha256(baseline) : null;
+    let status: EventsDiffEntry['status'];
+    if (localHash === serverHash) status = 'clean';
+    else if (baseHash == null) status = 'dirty';
+    else {
+        const localChanged = localHash !== baseHash;
+        const serverChanged = serverHash !== baseHash;
+        status = localChanged && serverChanged ? 'both-changed' : serverChanged ? 'server-newer' : 'dirty';
+    }
+    return {
+        rel, kind: 'events', serverId: page.id, status,
+        diff: status === 'clean' ? undefined : unifiedDiff(JSON.stringify(server, null, 2) + '\n', JSON.stringify(local, null, 2) + '\n', 'server', 'local'),
+    };
+}
 
 /** `pages/<slug>.events.json` beside the page's `.ef` (nested slugs preserved). */
 function eventsRelForPage(page: Page): string {
@@ -30,7 +85,10 @@ async function writeEventsFile(rt: EfRuntime, page: Page, graph: unknown): Promi
 export async function pullEventsForPage(rt: EfRuntime, api: ApiClient, page: Page, opts: { skeleton?: boolean } = {}): Promise<{ rel: string; empty: boolean } | null> {
     const graph = await api.getPageEvents(rt.config.brandId, page.id);
     if (!graph && !opts.skeleton) return null;
-    const rel = await writeEventsFile(rt, page, graph ?? EMPTY_GRAPH);
+    const finalGraph = graph ?? EMPTY_GRAPH;
+    const rel = await writeEventsFile(rt, page, finalGraph);
+    // Baseline for the push-time drift check (lost-update protection).
+    await writeSnapshot(rt.brandRoot, 'pageEvents', page.id, Buffer.from(canonical(finalGraph), 'utf8'));
     return { rel, empty: !graph };
 }
 
@@ -98,15 +156,35 @@ export function registerPageEventsCommand(pages: Command): void {
         });
 
     ev.command('push <slug>')
-        .description('Push pages/<slug>.events.json to the server (validates first).')
+        .description('Push pages/<slug>.events.json (validates first; REFUSES if the server changed since you pulled).')
         .option('--no-validate', 'Skip the pre-push validation.')
         .option('--strict', 'Refuse to push if validation reports errors.')
+        .option('--force', 'Push even if the server\'s graph changed since you pulled (overwrites it).')
         .option('--json', 'Print result as JSON.')
-        .action(async (slug: string, opts: { validate?: boolean; strict?: boolean; json?: boolean }) => {
+        .action(async (slug: string, opts: { validate?: boolean; strict?: boolean; force?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const page = await resolvePageBySlug(api, rt.config.brandId, slug);
             const { rel, graph } = readLocalGraph(rt, page);
+
+            // Lost-update protection. A structured JSON graph can't be text-merged
+            // safely, so we DON'T auto-merge: refuse, and the user picks a side
+            // ("ef pages events diff" to see; --force = keep local; pull --force = take server).
+            if (!opts.force) {
+                const baseline = await readSnapshot(rt.brandRoot, 'pageEvents', page.id);
+                if (baseline) {
+                    const server = await api.getPageEvents(rt.config.brandId, page.id);
+                    const serverHash = graphHash(server ?? EMPTY_GRAPH);
+                    if (serverHash !== sha256(baseline) && serverHash !== graphHash(graph)) {
+                        const msg = `Changes rejected: events for "${page.slug ?? slug}" changed on the server since you pulled. `
+                            + `Run "ef pages events diff ${slug}" to see the difference, then "ef pages events pull ${slug} --force" to take the server's, or "ef pages events push ${slug} --force" to overwrite it.`;
+                        if (opts.json) log.json({ ok: false, conflict: true, rel, message: msg });
+                        else log.error(msg);
+                        process.exitCode = ExitCode.Conflict;
+                        return;
+                    }
+                }
+            }
 
             let report: unknown = null;
             if (opts.validate !== false) {
@@ -120,11 +198,32 @@ export function registerPageEventsCommand(pages: Command): void {
                 }
             }
             await api.setPageEvents(rt.config.brandId, page.id, graph);
+            // Adopt the server's normalized graph (positions, split-test ids) as the
+            // new local file + baseline so the next push isn't a phantom drift.
+            const normalized = await api.getPageEvents(rt.config.brandId, page.id).catch(() => null);
+            if (normalized) await writeEventsFile(rt, page, normalized);
+            await writeSnapshot(rt.brandRoot, 'pageEvents', page.id, Buffer.from(canonical(normalized ?? graph), 'utf8'));
+
             if (opts.json) { log.json({ ok: true, pushed: rel, pageId: page.id, validation: report }); return; }
             const { errors, warnings } = countIssues(report);
             log.success(`Pushed events for "${page.slug ?? slug}" (page #${page.id}).`);
-            if (errors) log.warn(`${errors} validation error(s) — pushed anyway; run "ef pages events push ${slug} --strict" to block on errors.`);
+            if (errors) log.warn(`${errors} validation error(s) — pushed anyway; add --strict to block on errors.`);
             else if (warnings) log.detail(`${warnings} validation warning(s).`);
+        });
+
+    ev.command('diff <slug>')
+        .description('Show the difference between the local events graph and the server\'s (no merge — you decide which to keep).')
+        .option('--json', 'Print { changed, local, server } as JSON.')
+        .action(async (slug: string, opts: { json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const page = await resolvePageBySlug(api, rt.config.brandId, slug);
+            const { rel, graph } = readLocalGraph(rt, page);
+            const server = (await api.getPageEvents(rt.config.brandId, page.id)) ?? EMPTY_GRAPH;
+            const changed = graphHash(graph) !== graphHash(server);
+            if (opts.json) { log.json({ changed, local: graph, server }); return; }
+            if (!changed) { log.success(`No difference — ${rel} matches the server.`); return; }
+            log.raw(unifiedDiff(JSON.stringify(server, null, 2) + '\n', JSON.stringify(graph, null, 2) + '\n', 'server', 'local'));
         });
 
     ev.command('validate <slug>')

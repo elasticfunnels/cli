@@ -10,6 +10,7 @@ import { fetchPagePreviewBundle, readJsonPayloadFile, removeLocalEntity, resolve
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
 import { EfMeta, parseEfMeta, withEfMeta } from '../sync/efMeta';
 import { fileExists, sha256, writeFileAtomic } from '../utils/fs';
+import { registerPageEventsCommand } from './pageEvents';
 import { SyncStateFile } from '../sync/stateFile';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
@@ -61,7 +62,9 @@ async function renameLocalPageFile(rt: EfRuntime, pageId: number, oldRel: string
 export function registerPagesCommand(program: Command): void {
     const cmd = program
         .command('pages')
-        .description('Page-specific actions: list, create, publish, preview, duplicate, delete.');
+        .description('Page-specific actions: list, create, publish, preview, duplicate, delete, events.');
+
+    registerPageEventsCommand(cmd);
 
     cmd.command('list')
         .alias('ls')

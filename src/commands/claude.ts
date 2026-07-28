@@ -186,6 +186,11 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`):
   take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.
   Complex payloads: \`--input-json '{…}'\` / \`--input-file <path|->\` (flags override the JSON);
   \`--generate-skeleton\` prints an example payload.
+- \`ef pages events pull|push|validate|vocabulary <slug>\` — a page's events/funnel
+  graph (split tests, redirects, tags, popups) as \`pages/<slug>.events.json\`. NOT
+  pulled by default; \`ef pull --events\` includes them. Edit the JSON, \`validate\`,
+  then \`push\`. The \`<split-test>\` container lives in the \`.ef\` markup; its variants
+  live in this graph.
 - \`ef config get\` / \`ef config set saveMode direct\` — view/change project config.
 - \`ef preview <slug>\` — editor preview URL.
 - \`ef list pages --json\` — machine-readable listings (every command takes

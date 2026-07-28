@@ -146,6 +146,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pull` | Full sync (pages + components + scripts + assets + variables). |
 | `ef pull <target>` | Targeted pull, e.g. `ef pull pages` or `ef pull pages/about-us.ef`. |
 | `ef pull --merge` | For locally-edited files, **3-way merge** the server version into yours (git-style `<<<<<<<`/`=======`/`>>>>>>>` conflict markers on overlap) instead of keeping local and warning. |
+| `ef pull --events` | Also pull each page's events graph to `pages/<slug>.events.json` (funnel builder / split tests). Off by default. |
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
 | `ef push <paths…>` | Push specific files. **Refuses (exit 4) if the entity changed on the server since you pulled** — "Changes rejected … `ef diff --server` / `ef pull --merge`" — preventing a lost update. Covers pages/components/scripts/assets. |
 | `ef push <paths…> --force` | Overwrite the server even on drift (a copy of yours is kept; the pre-push safety check is skipped). |
@@ -162,6 +163,10 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages duplicate <slug>` | Duplicate a page. |
 | `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. |
 | `ef pages delete <slug>` | Delete a page. |
+| `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
+| `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). |
+| `ef pages events validate <slug>` | Validate the events graph (local, or `--stored` for the server's). |
+| `ef pages events vocabulary <slug>` | Print the valid event-node vocabulary (node types + connection rules). |
 | `ef components create <code>` | Create a new component. |
 | `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |

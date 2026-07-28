@@ -18,6 +18,7 @@ import {
 } from '../sync/sync';
 import { resolveComponentByCodeOrName, resolvePageBySlug } from './shared';
 import { classifyAbsPath } from '../sync/sync';
+import { pullEventsForAllPages } from './pageEvents';
 
 interface PullOpts {
     json?: boolean;
@@ -25,6 +26,7 @@ interface PullOpts {
     adopt?: boolean;
     force?: boolean;
     merge?: boolean;
+    events?: boolean;
 }
 
 /** Make a pull exit non-zero (and warn loudly) if any entity FAILED to fetch —
@@ -104,6 +106,7 @@ Examples:
         .option('--adopt', 'Skip re-downloading files already on disk and unchanged (resume, or adopt an existing/extension folder). Only fetches what is missing or drifted.')
         .option('--force', 'Overwrite local files even if they have unpushed changes (a copy is saved to .ef-history). Without this, pull keeps locally-edited files and warns.')
         .option('--merge', 'For locally-edited files, 3-way merge the server version into yours (git-style conflict markers on overlap) instead of keeping local and warning.')
+        .option('--events', 'Also pull each page\'s events graph to pages/<slug>.events.json (funnel builder / split tests). Off by default.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
@@ -121,8 +124,10 @@ Examples:
 
             if (!target) {
                 const r = await runFullSync(rt, opts);
+                const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
+                if (opts.events && !opts.json) log.info(`  pulled events for ${events.length} page(s)`);
                 if (opts.json) {
-                    log.json({ ok: true, brandRoot: rt.brandRoot, pulled: { ...r, variables: 1 } });
+                    log.json({ ok: true, brandRoot: rt.brandRoot, pulled: { ...r, variables: 1, events: events.length } });
                 }
                 return;
             }
@@ -130,10 +135,11 @@ Examples:
             const t = target.trim();
             if (t === 'pages') {
                 const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
+                const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
                 await ctx.state.save();
                 reportPullFailures(ctx);
-                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
-                log.success(`Pulled ${out.length} pages.`);
+                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel), events: events.length }); return; }
+                log.success(`Pulled ${out.length} pages.${opts.events ? ` Events for ${events.length}.` : ''}`);
                 return;
             }
             if (t === 'components') {

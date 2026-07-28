@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeFileAtomic } from '../utils/fs';
 
-export type SnapshotType = 'page' | 'component' | 'script' | 'asset' | 'templatePage' | 'pageEvents';
+export type SnapshotType = 'page' | 'component' | 'script' | 'asset' | 'templatePage' | 'pageEvents' | 'funnel';
 
 export function snapshotPath(brandRoot: string, type: SnapshotType, id: number | string): string {
     return path.join(brandRoot, '.ef-state', 'snapshots', type, `${id}.bin`);

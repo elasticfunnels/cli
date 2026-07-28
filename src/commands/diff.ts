@@ -13,6 +13,7 @@ import { parseEfMeta } from '../sync/efMeta';
 import { parseScriptMeta } from '../sync/sync';
 import { unifiedDiff } from '../sync/merge';
 import { eventsDiffEntry } from './pageEvents';
+import { funnelDiffEntry } from './funnels';
 import { sha256 } from '../utils/fs';
 import { resolveSyncPathInput } from '../utils/syncPathResolve';
 
@@ -24,7 +25,7 @@ interface DiffOpts {
 
 interface DiffEntry {
     rel: string;
-    kind: 'page' | 'component' | 'script' | 'asset' | 'events';
+    kind: 'page' | 'component' | 'script' | 'asset' | 'events' | 'funnel';
     serverId: number | null;
     /**
      * - `local-only`: file on disk has no server identity (efmeta missing or
@@ -79,6 +80,10 @@ Examples:
                 // graph. Only when explicitly targeted — a full scan stays offline.
                 if (abs.endsWith('.events.json')) {
                     if (explicit) results.push(await eventsDiffEntry(rt, ctx.api, abs));
+                    continue;
+                }
+                if (abs.endsWith('.flow.json')) {
+                    if (explicit) results.push(await funnelDiffEntry(rt, ctx.api, abs));
                     continue;
                 }
                 const cls = classifyAbsPath(rt.brandRoot, abs);

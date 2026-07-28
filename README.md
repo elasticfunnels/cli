@@ -167,6 +167,14 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). |
 | `ef pages events validate <slug>` | Validate the events graph (local, or `--stored` for the server's). |
 | `ef pages events vocabulary <slug>` | Print the valid event-node vocabulary (node types + connection rules). |
+| `ef pages events diff <slug>` / `ef diff pages/<slug>.events.json` | Show the local-vs-server events graph diff (no merge — pick a side). |
+| `ef funnels list` | List funnels. |
+| `ef funnels pull [codeOrId]` | Pull a funnel's builder graph → `funnels/<code>.flow.json`. `--all` for every funnel. |
+| `ef funnels push <codeOrId>` | Push the builder graph. **Refuses (exit 4)** if the server changed since you pulled; `--force` overwrites. No auto-merge (structured JSON). |
+| `ef funnels diff <codeOrId>` / `ef diff funnels/<code>.flow.json` | Show the local-vs-server funnel-graph diff. |
+| `ef funnels create <title> --domain <id>` | Create a funnel (server assigns the code; a domain is required) and write its empty graph. |
+| `ef funnels debug-flow <codeOrId>` / `product-flow <codeOrId>` | Print the compiled read-only flow / product-flow. |
+| `ef funnels delete <codeOrId>` | Delete a funnel (and its local file). |
 | `ef components create <code>` | Create a new component. |
 | `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |

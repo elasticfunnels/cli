@@ -7,12 +7,13 @@ import { loadRuntime } from '../utils/store';
 import { classifyAbsPath } from '../sync/sync';
 import { resolveSyncPathInput } from '../utils/syncPathResolve';
 import { lintEfContent, LintIssue } from '../lint/lintEf';
+import { structuralLintGraph } from '../sync/graph';
 
 interface LintOpts { json?: boolean; quiet?: boolean; strict?: boolean; }
 
 interface FileReport {
     file: string;
-    kind: 'page' | 'component' | 'script';
+    kind: 'page' | 'component' | 'script' | 'events' | 'funnel';
     ok: boolean;
     issues: LintIssue[];
 }
@@ -35,6 +36,15 @@ async function walk(dir: string): Promise<string[]> {
     };
     await recurse(dir);
     return out;
+}
+
+/** Offline lint of a Drawflow graph file: valid JSON + structural shape. */
+function lintGraphContent(content: string): LintIssue[] {
+    let parsed: unknown;
+    try { parsed = JSON.parse(content); } catch (err) {
+        return [{ severity: 'error', message: `Invalid JSON: ${(err as Error).message.split('\n')[0]}` }];
+    }
+    return structuralLintGraph(parsed).map((g) => ({ severity: g.severity, message: g.message }));
 }
 
 export function registerLintCommand(program: Command): void {
@@ -87,6 +97,18 @@ Examples:
             const skipped: string[] = [];
 
             for (const abs of targets) {
+                // Drawflow graph files (events/funnels): offline STRUCTURAL lint only
+                // (valid JSON + drawflow shape). Deep node-rule validation is
+                // server-side — "ef pages events validate".
+                if (abs.endsWith('.events.json') || abs.endsWith('.flow.json')) {
+                    const rel = path.relative(brandRoot, abs).split(path.sep).join('/');
+                    let content: string;
+                    try { content = await fs.promises.readFile(abs, 'utf8'); } catch { continue; }
+                    const gIssues = lintGraphContent(content);
+                    const kind: FileReport['kind'] = abs.endsWith('.flow.json') ? 'funnel' : 'events';
+                    reports.push({ file: rel, kind, ok: !gIssues.some((i) => i.severity === 'error'), issues: opts.quiet ? gIssues.filter((i) => i.severity === 'error') : gIssues });
+                    continue;
+                }
                 const cls = classifyAbsPath(brandRoot, abs);
                 if (!cls || cls.kind === 'asset') {
                     if (explicit) skipped.push(path.relative(brandRoot, abs) || abs);

@@ -16,6 +16,7 @@ import {
     CrmPipeline,
     CrmStage,
     DomainValidationInstructions,
+    Funnel,
     Page,
     PageFolder,
     PageUpdateResponse,
@@ -288,6 +289,60 @@ export class ApiClient {
     async getPageEventsVocabulary(brandId: number, pageId: number): Promise<unknown> {
         const res = await this.raw('GET', `/api/brands/${brandId}/pages/${pageId}/events/node-vocabulary`);
         if (res.status >= 400) throw httpError('Get page events vocabulary', res);
+        return res.data;
+    }
+
+    // ── Funnels ──────────────────────────────────────────────────────
+    // The editable graph is `config` (Drawflow) via /builder; flow/product_flow/
+    // variant_seeds are read-only artifacts regenerated on every save.
+
+    async listFunnels(brandId: number): Promise<Funnel[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/all`);
+        if (res.status === 403 || res.status === 404) return [];
+        if (res.status >= 400) throw httpError('List funnels', res);
+        const body = res.data;
+        if (Array.isArray(body)) return body as Funnel[];
+        const d = (body as { data?: Funnel[] }).data;
+        return Array.isArray(d) ? d : [];
+    }
+
+    async createFunnel(brandId: number, meta: Record<string, unknown>): Promise<Funnel> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/funnels`, { data: meta });
+        if (res.status >= 400) throw httpError('Create funnel', res);
+        const body = res.data as { funnel?: Funnel };
+        return body.funnel ?? (res.data as Funnel);
+    }
+
+    async deleteFunnel(brandId: number, id: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/funnels/${id}`);
+        if (res.status >= 400) throw httpError('Delete funnel', res);
+    }
+
+    /** The editable Drawflow graph (`config`), or null when unset. */
+    async getFunnelBuilder(brandId: number, id: number): Promise<Record<string, unknown> | null> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}/builder`);
+        if (res.status === 404) return null;
+        if (res.status >= 400) throw httpError('Get funnel builder', res);
+        const data = res.data;
+        if (!data || (typeof data === 'string' && data.trim() === '')) return null;
+        if (typeof data !== 'object' || Array.isArray(data)) return null;
+        return Object.keys(data as object).length === 0 ? null : (data as Record<string, unknown>);
+    }
+
+    async setFunnelBuilder(brandId: number, id: number, graph: unknown): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/funnels/${id}/builder`, { data: graph });
+        if (res.status >= 400) throw httpError('Save funnel builder', res);
+    }
+
+    async getFunnelDebugFlow(brandId: number, id: number): Promise<unknown> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}/debug-flow`);
+        if (res.status >= 400) throw httpError('Get funnel debug-flow', res);
+        return res.data;
+    }
+
+    async getFunnelProductFlow(brandId: number, id: number): Promise<unknown> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}/debug-product-flow`);
+        if (res.status >= 400) throw httpError('Get funnel product-flow', res);
         return res.data;
     }
 

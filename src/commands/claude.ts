@@ -186,11 +186,20 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`):
   take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.
   Complex payloads: \`--input-json '{…}'\` / \`--input-file <path|->\` (flags override the JSON);
   \`--generate-skeleton\` prints an example payload.
-- \`ef pages events pull|push|validate|vocabulary <slug>\` — a page's events/funnel
-  graph (split tests, redirects, tags, popups) as \`pages/<slug>.events.json\`. NOT
-  pulled by default; \`ef pull --events\` includes them. Edit the JSON, \`validate\`,
-  then \`push\`. The \`<split-test>\` container lives in the \`.ef\` markup; its variants
-  live in this graph.
+- **Page events + funnel graphs** — Drawflow JSON graphs (split tests, redirects, tags, popups):
+  - \`ef pages events pull|push|diff|validate|vocabulary <slug>\` → \`pages/<slug>.events.json\`
+    (nested slugs preserved). NOT pulled by \`ef pull\` unless \`--events\`.
+  - \`ef funnels pull|push|diff <code>\` → \`funnels/<code>.flow.json\` (the funnel's builder graph);
+    \`ef funnels debug-flow|product-flow <code>\` print the compiled READ-ONLY artifacts.
+  - Structure: \`{ "drawflow": { "Home": { "data": { "<id>": { id, name, data:{type,…}, inputs, outputs, pos_x, pos_y } } } } }\`.
+    The \`<split-test>\` container in the \`.ef\` markup shows the default; its variants live in this graph.
+  - Node types + connection rules (\`only_on\`, \`max_per_output\`, \`one_of_type\`) are the SERVER's
+    source of truth — do NOT hand-invent node types. Validate deeply with \`ef pages events validate\`
+    (server, always current) and structurally with \`ef lint\` (offline JSON/shape).
+  - These are structured JSON, so there is NO auto-merge: if the server changed since you pulled,
+    push REFUSES (exit 4). See the delta with \`ef diff pages/x.events.json\` / \`ef diff funnels/x.flow.json\`,
+    then pick a side — \`--force\` on push (keep local) or \`pull --force\` (take server).
+  - A funnel's \`flow\`/\`product_flow\`/\`variant_seeds\` are read-only (server regenerates on save) — never edit them.
 - \`ef config get\` / \`ef config set saveMode direct\` — view/change project config.
 - \`ef preview <slug>\` — editor preview URL.
 - \`ef list pages --json\` — machine-readable listings (every command takes

@@ -8,24 +8,13 @@ import { c, log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
 import { sha256, writeFileAtomic } from '../utils/fs';
 import { readSnapshot, writeSnapshot } from '../sync/baselineSnapshots';
+import { canonical, graphHash } from '../sync/graph';
 import { resolvePageBySlug } from './shared';
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
 import { unifiedDiff } from '../sync/merge';
 
 /** Starter graph written when a page has no events yet, so it's editable. */
 const EMPTY_GRAPH = { drawflow: { Home: { data: {} } } };
-
-/** Order-independent JSON serialization, so a graph's hash is stable regardless
- *  of key order (the server may reorder keys on save). */
-export function canonical(v: unknown): string {
-    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
-    if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`;
-}
-export function graphHash(graph: unknown): string {
-    return sha256(Buffer.from(canonical(graph), 'utf8'));
-}
 
 export interface EventsDiffEntry {
     rel: string;

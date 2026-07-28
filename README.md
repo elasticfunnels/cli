@@ -163,6 +163,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef components create <code>` | Create a new component. |
+| `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |
 | `ef products list` | List products (alias `ef products ls`; `--classification` to filter). |
 | `ef products get <id>` | Print one product as JSON. |

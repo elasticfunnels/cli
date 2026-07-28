@@ -2,7 +2,7 @@ import * as path from 'path';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
-import { log } from '../utils/log';
+import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { fileExists } from '../utils/fs';
 import { buildSyncContext, pullComponent, pushComponentFile } from '../sync/sync';
@@ -12,7 +12,26 @@ import { relPathForComponent } from '../sync/paths';
 export function registerComponentsCommand(program: Command): void {
     const cmd = program
         .command('components')
-        .description('Component-specific actions: create, push, delete.');
+        .description('Component-specific actions: create, push, preview, delete.');
+
+    cmd.command('preview <codeOrName>')
+        .description('Print the preview URL for a component (draft revision when present).')
+        .option('--published', 'Preview the published version instead of the current draft.')
+        .option('--json', 'Print the URL as JSON.')
+        .action(async (codeOrName: string, opts: { published?: boolean; json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const comp = await resolveComponentByCodeOrName(api, rt.config.brandId, codeOrName);
+            let revisionId: number | null = null;
+            if (!opts.published) {
+                const content = await api.getComponentContent(rt.config.brandId, comp.id).catch(() => null);
+                revisionId = content?.revision_id ?? comp.revision_id ?? null;
+            }
+            const url = await api.getComponentPreviewUrl(rt.config.brandId, comp.id, revisionId);
+            if (opts.json) { log.json({ ok: true, componentId: comp.id, code: comp.code, previewUrl: url, revisionId }); return; }
+            const label = revisionId != null ? c.bold('Preview (draft)') : c.bold('Preview');
+            log.info(`${label} ${url}`);
+        });
 
     cmd.command('create <code>')
         .description('Create a new component on the server (and pull to disk).')

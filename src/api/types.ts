@@ -15,4 +15,5 @@ export type { Product, ProductVariant } from '../models/product';
 export type { Automation } from '../models/automation';
 export type { BrandEmail } from '../models/email';
 export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../models/crm';
+export type { Funnel } from '../models/funnel';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';

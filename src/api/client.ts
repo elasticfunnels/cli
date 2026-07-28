@@ -252,6 +252,45 @@ export class ApiClient {
         return (res.data as { url?: string | null })?.url ?? null;
     }
 
+    // ── Page events (funnel builder graph: split tests, redirects, tags, popups) ──
+
+    /** The Drawflow graph for a page, or null when the page has no events yet
+     *  (the server returns an empty 200). */
+    async getPageEvents(brandId: number, pageId: number): Promise<Record<string, unknown> | null> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/pages/${pageId}/events`);
+        if (res.status === 404) return null;
+        if (res.status >= 400) throw httpError('Get page events', res);
+        const data = res.data;
+        if (!data || (typeof data === 'string' && data.trim() === '')) return null;
+        if (typeof data !== 'object' || Array.isArray(data)) return null;
+        return Object.keys(data as object).length === 0 ? null : (data as Record<string, unknown>);
+    }
+
+    /** Save the Drawflow graph (server normalizes it: render envelope, positions,
+     *  split-test node ids). */
+    async setPageEvents(brandId: number, pageId: number, graph: unknown): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/events`, { data: graph });
+        if (res.status >= 400) throw httpError('Save page events', res);
+    }
+
+    /** Validate a graph (or, with an empty body, the stored one). `strict` makes
+     *  the server reject rather than warn. Returns the validator's report. */
+    async validatePageEvents(brandId: number, pageId: number, graph?: unknown, strict?: boolean): Promise<unknown> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/events/validate`, {
+            data: graph ?? {},
+            params: strict ? { strict_validation: 1 } : {},
+        });
+        if (res.status >= 400) throw httpError('Validate page events', res);
+        return res.data;
+    }
+
+    /** The event-node vocabulary (valid node types + connection rules). */
+    async getPageEventsVocabulary(brandId: number, pageId: number): Promise<unknown> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/pages/${pageId}/events/node-vocabulary`);
+        if (res.status >= 400) throw httpError('Get page events vocabulary', res);
+        return res.data;
+    }
+
     // ── Components ───────────────────────────────────────────────────
 
     async listComponents(brandId: number): Promise<Component[]> {

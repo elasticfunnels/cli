@@ -15,6 +15,8 @@ import {
     safeJoinBrandRoot,
 } from './paths';
 import { assetEditorPayloadToBuffer, needsLocalAssetFallback } from '../api/types';
+import { readSnapshot, writeSnapshot } from './baselineSnapshots';
+import { hasConflictMarkers, threeWayMerge } from './merge';
 import { log } from '../utils/log';
 
 const VERBOSE_BODY_FULL_MAX = 8000;
@@ -205,7 +207,7 @@ async function wouldClobberLocalEdits(ctx: SyncContext, kind: 'page' | 'componen
     return true; // local edited (or unknown baseline) and differs from server → protect
 }
 
-export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
+export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?: boolean; merge?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const page = await ctx.api.getPageContent(ctx.rt.config.brandId, pageId);
     const rel = await nonCollidingRel(ctx, relPathForPage(page), page.id, 'page');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -222,7 +224,13 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
     };
     const body = page.html ?? '';
     if (await wouldClobberLocalEdits(ctx, 'page', rel, body, opts.force)) {
-        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        if (opts.merge) {
+            const outcome = await mergePulledFile(ctx, 'page', page.id, rel, abs, body, (m) => withEfMeta(meta, m), page.updated_at ?? null, page.revision_id ?? null);
+            if (outcome === 'merged-conflicts') log.warn(`Merged ${rel} WITH CONFLICTS — resolve the <<<<<<< markers, then "ef push ${rel}".`);
+            else log.info(`Merged ${rel} cleanly — review, then "ef push ${rel}".`);
+            return { rel, absPath: abs, created: false, skipped: outcome };
+        }
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), re-pull with --force to overwrite (a copy is saved to .ef-history), or "ef pull --merge ${rel}" to merge.`);
         return { rel, absPath: abs, created: false, skipped: 'local-drift' };
     }
     const file = withEfMeta(meta, body);
@@ -239,21 +247,22 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
         serverUpdatedAt: page.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'page', page.id, Buffer.from(body, 'utf8'));
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllPages(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllPages(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean; merge?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const pages = await ctx.api.listPages(ctx.rt.config.brandId);
     return await pullEach(ctx, 'page', pages, async (p) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'page', p.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const r = await pullPage(ctx, p.id, { force: opts.force });
+        const r = await pullPage(ctx, p.id, { force: opts.force, merge: opts.merge });
         return { rel: r.rel, skipped: !!r.skipped };
     });
 }
 
 // ── Components ───────────────────────────────────────────────────────
 
-export async function pullComponent(ctx: SyncContext, componentId: number, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
+export async function pullComponent(ctx: SyncContext, componentId: number, opts: { force?: boolean; merge?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, componentId);
     const rel = await nonCollidingRel(ctx, relPathForComponent(c), c.id, 'component');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -270,7 +279,13 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
     };
     const body = c.html ?? '';
     if (await wouldClobberLocalEdits(ctx, 'component', rel, body, opts.force)) {
-        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        if (opts.merge) {
+            const outcome = await mergePulledFile(ctx, 'component', c.id, rel, abs, body, (m) => withEfMeta(meta, m), c.updated_at ?? null, c.revision_id ?? null);
+            if (outcome === 'merged-conflicts') log.warn(`Merged ${rel} WITH CONFLICTS — resolve the <<<<<<< markers, then "ef push ${rel}".`);
+            else log.info(`Merged ${rel} cleanly — review, then "ef push ${rel}".`);
+            return { rel, absPath: abs, created: false, skipped: outcome };
+        }
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), re-pull with --force to overwrite (a copy is saved to .ef-history), or "ef pull --merge ${rel}" to merge.`);
         return { rel, absPath: abs, created: false, skipped: 'local-drift' };
     }
     const existed = await fileExists(abs);
@@ -287,21 +302,22 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
         serverUpdatedAt: c.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'component', c.id, Buffer.from(body, 'utf8'));
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllComponents(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllComponents(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean; merge?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listComponents(ctx.rt.config.brandId);
     return await pullEach(ctx, 'component', list, async (c) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'component', c.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const r = await pullComponent(ctx, c.id, { force: opts.force });
+        const r = await pullComponent(ctx, c.id, { force: opts.force, merge: opts.merge });
         return { rel: r.rel, skipped: !!r.skipped };
     });
 }
 
 // ── Scripts ──────────────────────────────────────────────────────────
 
-export async function pullScript(ctx: SyncContext, idOrCode: number | string, opts: { force?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
+export async function pullScript(ctx: SyncContext, idOrCode: number | string, opts: { force?: boolean; merge?: boolean } = {}): Promise<{ rel: string; absPath: string; created: boolean; skipped?: string }> {
     const s = await ctx.api.getBackendScript(ctx.rt.config.brandId, idOrCode);
     const rel = relPathForScript(s);
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
@@ -311,7 +327,13 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string, op
     }) + '\n';
     const body = s.content ?? '';
     if (await wouldClobberLocalEdits(ctx, 'script', rel, body, opts.force)) {
-        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), or re-pull with --force to overwrite (a copy is saved to .ef-history).`);
+        if (opts.merge) {
+            const outcome = await mergePulledFile(ctx, 'script', s.id, rel, abs, body, (m) => metaLine + m, s.updated_at ?? null, s.revision_id ?? null);
+            if (outcome === 'merged-conflicts') log.warn(`Merged ${rel} WITH CONFLICTS — resolve the <<<<<<< markers, then "ef push ${rel}".`);
+            else log.info(`Merged ${rel} cleanly — review, then "ef push ${rel}".`);
+            return { rel, absPath: abs, created: false, skipped: outcome };
+        }
+        log.warn(`Kept local ${rel} — it has changes not on the server. Push them ("ef push ${rel}"), re-pull with --force to overwrite (a copy is saved to .ef-history), or "ef pull --merge ${rel}" to merge.`);
         return { rel, absPath: abs, created: false, skipped: 'local-drift' };
     }
     const file = metaLine + body;
@@ -328,14 +350,15 @@ export async function pullScript(ctx: SyncContext, idOrCode: number | string, op
         serverUpdatedAt: s.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'script', s.id, Buffer.from(body, 'utf8'));
     return { rel, absPath: abs, created: !existed };
 }
 
-export async function pullAllScripts(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
+export async function pullAllScripts(ctx: SyncContext, opts: { adopt?: boolean; force?: boolean; merge?: boolean } = {}): Promise<Array<{ rel: string; skipped?: boolean }>> {
     const list = await ctx.api.listBackendScripts(ctx.rt.config.brandId);
     return await pullEach(ctx, 'script', list, async (s) => {
         if (opts.adopt) { const hit = await alreadyOnDisk(ctx, 'script', s.id); if (hit) return { rel: hit.rel, skipped: true }; }
-        const r = await pullScript(ctx, s.id, { force: opts.force });
+        const r = await pullScript(ctx, s.id, { force: opts.force, merge: opts.merge });
         return { rel: r.rel, skipped: !!r.skipped };
     });
 }
@@ -370,6 +393,7 @@ export async function pullAsset(ctx: SyncContext, assetId: number): Promise<{ re
         serverUpdatedAt: payload.updated_at ?? null,
         contentHash: sha256(buf),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'asset', assetId, buf);
     return { rel, absPath: abs, created: !existed };
 }
 
@@ -431,6 +455,132 @@ async function fetchCanonicalBody(
     } catch {
         return null;
     }
+}
+
+// ── Concurrency / lost-update protection ─────────────────────────────
+
+export type DriftKind = 'safe-push' | 'no-change' | 'drift';
+export interface DriftResult {
+    kind: DriftKind;
+    serverBytes?: Buffer;
+    serverUpdatedAt?: string | null;
+    serverRevisionId?: number | null;
+}
+
+/** Current server body as bytes. null when unreachable, or when the server only
+ *  returns a placeholder for a binary asset (can't compare → treat as safe). */
+export async function fetchServerBytes(
+    ctx: SyncContext,
+    kind: 'page' | 'component' | 'script' | 'asset',
+    id: number,
+): Promise<{ bytes: Buffer; updatedAt: string | null; revisionId: number | null } | null> {
+    try {
+        if (kind === 'page') {
+            const p = await ctx.api.getPageContent(ctx.rt.config.brandId, id);
+            return { bytes: Buffer.from(p.html ?? '', 'utf8'), updatedAt: p.updated_at ?? null, revisionId: p.revision_id ?? null };
+        }
+        if (kind === 'component') {
+            const cmp = await ctx.api.getComponentContent(ctx.rt.config.brandId, id);
+            return { bytes: Buffer.from(cmp.html ?? cmp.code ?? '', 'utf8'), updatedAt: cmp.updated_at ?? null, revisionId: cmp.revision_id ?? null };
+        }
+        if (kind === 'script') {
+            const s = await ctx.api.getBackendScript(ctx.rt.config.brandId, id);
+            return { bytes: Buffer.from(s.content ?? '', 'utf8'), updatedAt: s.updated_at ?? null, revisionId: null };
+        }
+        const payload = await ctx.api.getAssetContent(ctx.rt.config.brandId, id);
+        if (needsLocalAssetFallback(payload)) return null;
+        return { bytes: assetEditorPayloadToBuffer(payload), updatedAt: payload.updated_at ?? null, revisionId: null };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Decide whether pushing `localBytes` is safe or whether the server diverged
+ * since the last pull (a lost-update risk). Hash-based, clock-skew-immune:
+ *  - local matches the recorded baseline hash → `no-change` (nothing to push);
+ *  - no baseline recorded (fresh/older state) → `safe-push`;
+ *  - server bytes still equal the baseline (only local changed) → `safe-push`;
+ *  - server bytes already equal what we'd push → `safe-push`;
+ *  - only trailing-whitespace differs (Laravel TrimStrings) → `safe-push`/`no-change`;
+ *  - otherwise the server changed independently → `drift` (caller refuses the push).
+ */
+export async function detectServerDrift(
+    ctx: SyncContext,
+    kind: 'page' | 'component' | 'script' | 'asset',
+    id: number,
+    rel: string,
+    localBytes: Buffer,
+): Promise<DriftResult> {
+    const storedHash = ctx.state.getByPath(kind, rel)?.contentHash ?? null;
+    const localHash = sha256(localBytes);
+    if (storedHash && localHash === storedHash) return { kind: 'no-change' };
+    if (!storedHash) return { kind: 'safe-push' };
+
+    const server = await fetchServerBytes(ctx, kind, id);
+    if (!server) return { kind: 'safe-push' }; // unreachable / placeholder — let the write proceed
+    const serverHash = sha256(server.bytes);
+    const meta = { serverUpdatedAt: server.updatedAt, serverRevisionId: server.revisionId, serverBytes: server.bytes };
+    if (serverHash === storedHash) return { kind: 'safe-push', ...meta }; // only local changed
+    if (serverHash === localHash) return { kind: 'safe-push', ...meta };  // server already == our target
+
+    // Trailing-whitespace-only server diff is not a real conflict.
+    const trimRight = (b: Buffer): string => b.toString('utf8').replace(/[ \t\r\n\v\f\0\u00A0]+$/, '');
+    const baseline = await readSnapshot(ctx.rt.brandRoot, kind, id);
+    if (baseline) {
+        const serverTrim = trimRight(server.bytes);
+        if (trimRight(baseline) === serverTrim) return { kind: 'safe-push', ...meta };
+        if (trimRight(localBytes) === serverTrim) return { kind: 'no-change' };
+    }
+    return { kind: 'drift', ...meta };
+}
+
+/** The exact, stable rejection message a drifted push emits — parseable by AI
+ *  agents/tooling (also surfaced in `ef push --json` as `note: "conflict: …"`). */
+export function driftRejectMessage(rel: string): string {
+    return `Changes rejected: ${rel} changed on the server since you last pulled. `
+        + `Run "ef diff --server ${rel}" to see what differs, then "ef pull --merge ${rel}" to merge them `
+        + `— or "ef push ${rel} --force" to overwrite the server.`;
+}
+
+/**
+ * 3-way merge a locally-edited file with the incoming server body (`ef pull --merge`).
+ * Base = the last-pulled baseline snapshot (empty → whole-file conflict markers).
+ * Writes the merged body with git-style `<<<<<<< / ======= / >>>>>>>` markers when
+ * edits overlap, re-stamps the entity's efmeta, and resets the baseline to the
+ * SERVER body so the pending merge reads as a normal unpushed edit ready to push.
+ */
+async function mergePulledFile(
+    ctx: SyncContext,
+    kind: 'page' | 'component' | 'script',
+    id: number,
+    rel: string,
+    abs: string,
+    serverBody: string,
+    reStamp: (mergedBody: string) => string,
+    serverUpdatedAt: string | null,
+    revisionId: number | null,
+): Promise<'merged' | 'merged-conflicts'> {
+    let localBody = '';
+    try {
+        const localText = await fs.promises.readFile(abs, 'utf8');
+        localBody = kind === 'script' ? parseScriptMeta(localText).body : parseEfMeta(localText).body;
+    } catch { /* no local file → merge against empty base */ }
+    const base = await readSnapshot(ctx.rt.brandRoot, kind, id);
+    const { merged, hadConflicts } = threeWayMerge(base ? base.toString('utf8') : '', localBody, serverBody, {
+        local: `${rel} (local)`,
+        server: `${rel} (server)`,
+    });
+    const file = reStamp(merged);
+    await snapshotToHistory(ctx, rel, file);
+    await writeFileAtomic(abs, file);
+    ctx.state.setEntry(kind, {
+        path: rel, id, type: kind, revisionId,
+        updatedAt: serverUpdatedAt, serverUpdatedAt,
+        contentHash: sha256(Buffer.from(serverBody, 'utf8')),
+    });
+    await writeSnapshot(ctx.rt.brandRoot, kind, id, Buffer.from(serverBody, 'utf8'));
+    return hadConflicts ? 'merged-conflicts' : 'merged';
 }
 
 /**
@@ -525,6 +675,9 @@ export async function pushPageFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseEfMeta(text);
+    if (hasConflictMarkers(body)) {
+        throw new CliError(ExitCode.Conflict, `${rel} has unresolved merge conflict markers (<<<<<<< / ======= / >>>>>>>). Resolve them, then push.`);
+    }
     // Copy-trample guard: a duplicated file keeps the source's efmeta id; pushing
     // it would overwrite the original on the server. Detect it and create a new
     // page instead.
@@ -535,6 +688,9 @@ export async function pushPageFile(
         verboseLogOutgoingBody(rel, body, 'POST …/pages/{id}/editor `html`');
     }
     if (meta && meta.type === 'page' && meta.id && !isCopy) {
+        if (!opts.force && (await detectServerDrift(ctx, 'page', meta.id, rel, Buffer.from(body, 'utf8'))).kind === 'drift') {
+            throw new CliError(ExitCode.Conflict, driftRejectMessage(rel));
+        }
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
         const trackedRev = ctx.state.getByPath('page', rel)?.revisionId ?? null;
         const expectedRev = opts.force ? null : (meta.revisionId ?? trackedRev);
@@ -568,6 +724,7 @@ export async function pushPageFile(
             serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
             contentHash: sha256(Buffer.from(finalBody, 'utf8')),
         });
+        await writeSnapshot(ctx.rt.brandRoot, 'page', meta.id, Buffer.from(finalBody, 'utf8'));
         return {
             rel,
             kind: 'page',
@@ -610,6 +767,7 @@ export async function pushPageFile(
         serverUpdatedAt: new Date().toISOString(),
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'page', created.id, Buffer.from(body, 'utf8'));
     return {
         rel,
         kind: 'page',
@@ -635,6 +793,9 @@ export async function pushComponentFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseEfMeta(text);
+    if (hasConflictMarkers(body)) {
+        throw new CliError(ExitCode.Conflict, `${rel} has unresolved merge conflict markers (<<<<<<< / ======= / >>>>>>>). Resolve them, then push.`);
+    }
     // Copy-trample guard (see pushPageFile): a duplicated component file keeps the
     // source's efmeta id; create a new component instead of overwriting it.
     const isCopy = await isCopyOfExistingFile(ctx, meta, rel);
@@ -644,6 +805,9 @@ export async function pushComponentFile(
         verboseLogOutgoingBody(rel, body, 'POST …/components/{id}/editor `html`');
     }
     if (meta && meta.type === 'component' && meta.id && !isCopy) {
+        if (!opts.force && (await detectServerDrift(ctx, 'component', meta.id, rel, Buffer.from(body, 'utf8'))).kind === 'drift') {
+            throw new CliError(ExitCode.Conflict, driftRejectMessage(rel));
+        }
         const isDraft = opts.draft ?? ctx.rt.config.saveMode === 'draft';
         const trackedRev = ctx.state.getByPath('component', rel)?.revisionId ?? null;
         const expectedRev = opts.force ? null : (meta.revisionId ?? trackedRev);
@@ -672,6 +836,7 @@ export async function pushComponentFile(
             serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
             contentHash: sha256(Buffer.from(finalBody, 'utf8')),
         });
+        await writeSnapshot(ctx.rt.brandRoot, 'component', meta.id, Buffer.from(finalBody, 'utf8'));
         return {
             rel,
             kind: 'component',
@@ -703,6 +868,7 @@ export async function pushComponentFile(
         serverUpdatedAt: new Date().toISOString(),
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'component', created.id, Buffer.from(body, 'utf8'));
     return {
         rel,
         kind: 'component',
@@ -723,14 +889,20 @@ export async function pushScriptFile(
 ): Promise<PushResult> {
     const text = await fs.promises.readFile(abs, 'utf8');
     const { meta, body } = parseScriptMeta(text);
+    if (hasConflictMarkers(body)) {
+        throw new CliError(ExitCode.Conflict, `${rel} has unresolved merge conflict markers (<<<<<<< / ======= / >>>>>>>). Resolve them, then push.`);
+    }
     assertEfmetaMatchesState(ctx, 'script', rel, meta, false);
     if (opts.verbose) {
         verboseLogOutgoingBody(rel, body, 'PUT …/scripts/{id} body');
     }
-    void opts.force; // accepted for symmetry; backend doesn't gate scripts on revision yet.
-
     const code = relPathForScriptCodeFromRel(rel);
     if (meta && meta.type === 'script' && meta.id) {
+        // Scripts have no server-side revision gate, so the client-side drift
+        // check is the ONLY lost-update protection for them.
+        if (!opts.force && (await detectServerDrift(ctx, 'script', meta.id, rel, Buffer.from(body, 'utf8'))).kind === 'drift') {
+            throw new CliError(ExitCode.Conflict, driftRejectMessage(rel));
+        }
         const updated = await ctx.api.updateBackendScript(ctx.rt.config.brandId, meta.id, body);
         const newFirst = serializeScriptEfMeta({ ...meta, slug: updated.code ?? meta.slug, path: rel }) + '\n';
         await writeFileAtomic(abs, newFirst + body);
@@ -743,6 +915,7 @@ export async function pushScriptFile(
             serverUpdatedAt: updated.updated_at ?? null,
             contentHash: sha256(Buffer.from(body, 'utf8')),
         });
+        await writeSnapshot(ctx.rt.brandRoot, 'script', meta.id, Buffer.from(body, 'utf8'));
         return {
             rel,
             kind: 'script',
@@ -769,6 +942,7 @@ export async function pushScriptFile(
         serverUpdatedAt: created.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'script', created.id, Buffer.from(body, 'utf8'));
     return {
         rel,
         kind: 'script',
@@ -783,8 +957,16 @@ export async function pushAssetFile(
     ctx: SyncContext,
     abs: string,
     rel: string,
+    opts: { force?: boolean } = {},
 ): Promise<PushResult> {
     const bytes = await readFileBytes(abs);
+    const existingAsset = ctx.state.getByPath('asset', rel);
+    if (existingAsset && !opts.force
+        && (await detectServerDrift(ctx, 'asset', existingAsset.id, rel, bytes)).kind === 'drift') {
+        // Binary assets can't be text-merged — refuse and let the user choose
+        // --force (keep mine) or "ef pull --force" (take the server's).
+        throw new CliError(ExitCode.Conflict, driftRejectMessage(rel));
+    }
     // server file_path strips the leading "assets/" we use for local layout.
     const remotePath = rel.replace(/^assets\//, '');
     const uploaded = await ctx.api.uploadAssetByPath(ctx.rt.config.brandId, remotePath, bytes);
@@ -799,6 +981,7 @@ export async function pushAssetFile(
         serverUpdatedAt: new Date().toISOString(),
         contentHash: sha256(bytes),
     });
+    await writeSnapshot(ctx.rt.brandRoot, 'asset', uploaded.id, bytes);
     return { rel, kind: 'asset', action: 'updated', serverId: uploaded.id, apiResponse: shrinkPushApiBody(uploaded) ?? {} };
 }
 

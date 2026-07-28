@@ -1,6 +1,6 @@
 {
   "name": "@elasticfunnels/cli",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "ElasticFunnels command-line tool. Folder-scoped auth and full sync, designed to be used by humans, scripts, Claude Code, and any other automation.",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -50,6 +50,7 @@
     "clean": "rm -rf out out-test",
     "test": "npm run clean && tsc -p ./ && tsc -p tsconfig.test.json && node --test 'out-test/test/*.test.js'",
     "test:e2e": "node scripts/e2e-smoke.mjs",
+    "test:conflict": "node scripts/conflict-harness.mjs",
     "ef": "node ./bin/ef.js",
     "prepublishOnly": "npm run lint && npm run test && npm run build:ext && tsc -p ./",
     "release:dry": "npm pack --dry-run",

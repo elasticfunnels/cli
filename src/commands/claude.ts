@@ -206,10 +206,15 @@ prints a warning that it's not live. Change the project default with
 4. \`ef push <paths…>\`. On an HTTP 409 conflict (exit 4): \`ef pull <path>\`,
    re-apply your change, push again.
 
-**Safety:** \`ef pull\` will NOT overwrite a file you've edited locally — it keeps
-your version and warns (use \`--force\` to take the server's). \`ef push\` will NOT
-overwrite a server entity whose efmeta was changed, or that moved on since you
-pulled. Overwritten files are copied to \`.ef-history/\` first.
+**Safety (lost-update protection):** \`ef push\` REFUSES (exit 4) if the entity
+changed on the server since you last pulled — it prints \`Changes rejected: <path>
+changed on the server …\` and uploads nothing, so you can't clobber someone else's
+edit. To resolve: \`ef diff --server <path>\` shows the real server-vs-local diff;
+\`ef pull --merge <path>\` does a git-style 3-way merge (clean auto-merge, or
+\`<<<<<<< / ======= / >>>>>>>\` markers on overlap — a file with unresolved markers
+is itself refused on push); \`ef push <path> --force\` overwrites the server anyway.
+\`ef pull\` also keeps a file you've edited locally and warns (\`--force\` to take the
+server's, \`--merge\` to merge). Overwritten files are copied to \`.ef-history/\` first.
 
 Exit codes: 0 ok · 2 usage · 3 auth · 4 conflict · 5 network · 6 server · 7 not found.`;
 

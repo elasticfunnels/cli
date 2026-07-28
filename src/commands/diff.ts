@@ -6,16 +6,19 @@ import { loadRuntime } from '../utils/store';
 import {
     buildSyncContext,
     classifyAbsPath,
+    fetchServerBytes,
     SyncContext,
 } from '../sync/sync';
 import { parseEfMeta } from '../sync/efMeta';
 import { parseScriptMeta } from '../sync/sync';
+import { unifiedDiff } from '../sync/merge';
 import { sha256 } from '../utils/fs';
 import { resolveSyncPathInput } from '../utils/syncPathResolve';
 
 interface DiffOpts {
     json?: boolean;
     summary?: boolean;
+    server?: boolean;
 }
 
 interface DiffEntry {
@@ -36,8 +39,10 @@ interface DiffEntry {
      *    but no efmeta and no state entry — almost always a brand-new file
      *    that should be pushed via `ef push`.
      */
-    status: 'local-only' | 'clean' | 'dirty' | 'server-newer' | 'unknown';
+    status: 'local-only' | 'clean' | 'dirty' | 'server-newer' | 'both-changed' | 'unknown';
     note?: string;
+    /** Unified server↔local body diff (only populated by --server). */
+    diff?: string;
 }
 
 export function registerDiffCommand(program: Command): void {
@@ -57,6 +62,7 @@ Examples:
   ef diff --json | jq '.[] | select(.status == "dirty")'`)
         .option('--json', 'Print drift entries as JSON.')
         .option('--summary', 'Print only the per-status counts.')
+        .option('--server', 'Fetch server content and show the REAL server-vs-local difference (network). Adds "both-changed" + a unified body diff.')
         .action(async (paths: string[], opts: DiffOpts) => {
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
@@ -69,7 +75,7 @@ Examples:
             for (const abs of targets) {
                 const cls = classifyAbsPath(rt.brandRoot, abs);
                 if (!cls) continue;
-                const entry = await classify(ctx, abs, cls);
+                const entry = opts.server ? await classifyServer(ctx, abs, cls) : await classify(ctx, abs, cls);
                 results.push(entry);
             }
 
@@ -92,6 +98,7 @@ Examples:
             }
             for (const r of dirty) {
                 log.info(`  ${formatStatus(r.status)}  ${r.kind} ${r.rel}${r.note ? c.dim(`  (${r.note})`) : ''}`);
+                if (r.diff) log.raw(r.diff.endsWith('\n') ? r.diff : r.diff + '\n');
             }
             const counts = countByStatus(results);
             log.detail(`scanned=${results.length}  dirty=${counts.dirty ?? 0}  local-only=${counts['local-only'] ?? 0}  server-newer=${counts['server-newer'] ?? 0}  unknown=${counts.unknown ?? 0}`);
@@ -110,8 +117,45 @@ function formatStatus(s: DiffEntry['status']): string {
         case 'dirty': return c.yellow('dirty       ');
         case 'local-only': return c.cyan('local-only  ');
         case 'server-newer': return c.red('server-newer');
+        case 'both-changed': return c.red('both-changed');
         case 'unknown': return c.dim('unknown     ');
     }
+}
+
+/** --server classification: fetch the real server body and compare local ↔ base ↔ server. */
+async function classifyServer(ctx: SyncContext, abs: string, cls: { kind: 'page' | 'component' | 'script' | 'asset'; rel: string }): Promise<DiffEntry> {
+    const stateEntry = ctx.state.getByPath(cls.kind, cls.rel);
+    let localBytes: Buffer;
+    let localBodyStr = '';
+    if (cls.kind === 'asset') {
+        localBytes = await fs.promises.readFile(abs);
+    } else {
+        const text = await fs.promises.readFile(abs, 'utf8');
+        localBodyStr = cls.kind === 'script' ? parseScriptMeta(text).body : parseEfMeta(text).body;
+        localBytes = Buffer.from(localBodyStr, 'utf8');
+    }
+    if (!stateEntry) {
+        return { rel: cls.rel, kind: cls.kind, serverId: null, status: 'local-only', note: 'no baseline recorded — push to create' };
+    }
+    const server = await fetchServerBytes(ctx, cls.kind, stateEntry.id);
+    if (!server) {
+        return { rel: cls.rel, kind: cls.kind, serverId: stateEntry.id, status: 'unknown', note: 'server unreachable or non-comparable (binary placeholder)' };
+    }
+    const localHash = sha256(localBytes);
+    const serverHash = sha256(server.bytes);
+    const baseHash = stateEntry.contentHash ?? null;
+    const localChanged = baseHash ? localHash !== baseHash : true;
+    const serverChanged = baseHash ? serverHash !== baseHash : serverHash !== localHash;
+    let status: DiffEntry['status'];
+    if (serverHash === localHash) status = 'clean';
+    else if (localChanged && serverChanged) status = 'both-changed';
+    else if (serverChanged) status = 'server-newer';
+    else status = 'dirty';
+    const entry: DiffEntry = { rel: cls.rel, kind: cls.kind, serverId: stateEntry.id, status };
+    if (status !== 'clean' && cls.kind !== 'asset') {
+        entry.diff = unifiedDiff(server.bytes.toString('utf8'), localBodyStr, 'server', 'local');
+    }
+    return entry;
 }
 
 async function classify(

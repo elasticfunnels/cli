@@ -145,13 +145,16 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef get <kind> <idOrSlug>` | Fetch one entity. Defaults to printing HTML body; `--json` for full payload. |
 | `ef pull` | Full sync (pages + components + scripts + assets + variables). |
 | `ef pull <target>` | Targeted pull, e.g. `ef pull pages` or `ef pull pages/about-us.ef`. |
+| `ef pull --merge` | For locally-edited files, **3-way merge** the server version into yours (git-style `<<<<<<<`/`=======`/`>>>>>>>` conflict markers on overlap) instead of keeping local and warning. |
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
-| `ef push <paths…>` | Push specific files. Uses optimistic concurrency (`expected_revision_id`). |
+| `ef push <paths…>` | Push specific files. **Refuses (exit 4) if the entity changed on the server since you pulled** — "Changes rejected … `ef diff --server` / `ef pull --merge`" — preventing a lost update. Covers pages/components/scripts/assets. |
+| `ef push <paths…> --force` | Overwrite the server even on drift (a copy of yours is kept; the pre-push safety check is skipped). |
 | `ef push --all` | Push every file under the brand root. |
 | `ef push <paths…> --draft` | Save as a draft instead of publishing (publishing is the default). |
 | `ef push --dry-run` | Print what would be pushed without making any API calls or disk writes. |
 | `ef watch` | Watch the brand root and auto-push files as you save them (`--draft`/`--direct`; Ctrl-C to stop). |
 | `ef diff [paths…]` | Show local-vs-baseline drift across the brand root (or restricted to paths). |
+| `ef diff --server [paths…]` | Fetch server content and show the **real** server-vs-local difference (unified diff + `both-changed` status). |
 | `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). |
 | `ef pages create <slug>` | Create a new page. |
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |

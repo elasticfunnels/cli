@@ -270,6 +270,39 @@ export class ApiClient {
         return res.data as Component;
     }
 
+    /**
+     * Component preview URL. Unlike pages (which expose a JSON preview-url
+     * endpoint), the component route 302-redirects to the public render URL, so
+     * we stop axios following it and read the `Location` header instead.
+     */
+    async getComponentPreviewUrl(brandId: number, idOrCode: number | string, revisionId?: number | null): Promise<string> {
+        let res: AxiosResponse;
+        try {
+            res = await this.http.request({
+                method: 'GET',
+                url: `/api/brands/${brandId}/components/${encodeURIComponent(String(idOrCode))}/preview`,
+                params: revisionId != null ? { revision_id: revisionId } : {},
+                maxRedirects: 0,
+                validateStatus: () => true,
+            });
+        } catch (err) {
+            // Some axios/follow-redirects versions throw on a blocked redirect but
+            // attach the response; recover the Location from it.
+            const r = (err as { response?: AxiosResponse }).response;
+            if (!r) throw err;
+            res = r;
+        }
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Component "${idOrCode}" not found.`);
+        const headers = (res.headers ?? {}) as Record<string, string>;
+        const location = headers.location ?? headers.Location;
+        if (location) return location;
+        const body = res.data as { preview_url?: string; url?: string } | undefined;
+        if (body?.preview_url) return body.preview_url;
+        if (body?.url) return body.url;
+        if (res.status >= 400) throw httpError('Get component preview URL', res);
+        throw new CliError(ExitCode.Server, 'Server did not return a component preview URL.');
+    }
+
     async createComponent(brandId: number, name: string, html = '', code = ''): Promise<Component> {
         const res = await this.raw('POST', `/api/brands/${brandId}/components`, {
             data: { name, code, html, type: 'editor' },

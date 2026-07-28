@@ -154,7 +154,7 @@ Examples:
                     } else if (cls.kind === 'script') {
                         res = await pushScriptFile(ctx, abs, cls.rel, { force: opts.force, verbose: v });
                     } else {
-                        res = await pushAssetFile(ctx, abs, cls.rel);
+                        res = await pushAssetFile(ctx, abs, cls.rel, { force: opts.force });
                     }
                     results.push(res);
                     if (!opts.json) {

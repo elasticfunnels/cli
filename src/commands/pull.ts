@@ -24,6 +24,7 @@ interface PullOpts {
     since?: string;
     adopt?: boolean;
     force?: boolean;
+    merge?: boolean;
 }
 
 /** Make a pull exit non-zero (and warn loudly) if any entity FAILED to fetch —
@@ -48,6 +49,8 @@ export async function runFullSync(rt: EfRuntime, opts: {
     adopt?: boolean;
     /** Overwrite local files even when they have unpushed edits (drift). */
     force?: boolean;
+    /** 3-way merge server changes into locally-edited files (git-style markers). */
+    merge?: boolean;
     onProgress?: SyncContext['onProgress'];
 } = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
@@ -57,7 +60,7 @@ export async function runFullSync(rt: EfRuntime, opts: {
     // `silent` suppresses the per-kind streaming so a caller (e.g. `ef init`)
     // can show its own loader instead.
     const log_ = (msg: string) => { if (!opts.json && !opts.silent) log.info(msg); };
-    const a = { adopt: opts.adopt, force: opts.force };
+    const a = { adopt: opts.adopt, force: opts.force, merge: opts.merge };
     const summary = (kind: string, arr: Array<{ skipped?: boolean }>): string => {
         const skipped = arr.filter((x) => x.skipped).length;
         return skipped ? `${arr.length} ${kind} (${arr.length - skipped} fetched, ${skipped} already current)` : `${arr.length} ${kind}`;
@@ -100,6 +103,7 @@ Examples:
         .option('--since <iso>', 'Only pull entities modified after this ISO timestamp. Uses the server\'s sync-delta endpoints — much faster than a full sync for incremental updates.')
         .option('--adopt', 'Skip re-downloading files already on disk and unchanged (resume, or adopt an existing/extension folder). Only fetches what is missing or drifted.')
         .option('--force', 'Overwrite local files even if they have unpushed changes (a copy is saved to .ef-history). Without this, pull keeps locally-edited files and warns.')
+        .option('--merge', 'For locally-edited files, 3-way merge the server version into yours (git-style conflict markers on overlap) instead of keeping local and warning.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
@@ -125,7 +129,7 @@ Examples:
 
             const t = target.trim();
             if (t === 'pages') {
-                const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force });
+                const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
                 await ctx.state.save();
                 reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
@@ -133,7 +137,7 @@ Examples:
                 return;
             }
             if (t === 'components') {
-                const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force });
+                const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
                 await ctx.state.save();
                 reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
@@ -141,7 +145,7 @@ Examples:
                 return;
             }
             if (t === 'scripts') {
-                const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force });
+                const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
                 await ctx.state.save();
                 reportPullFailures(ctx);
                 if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
@@ -206,7 +210,7 @@ async function runIncrementalPull(
     if (scope === 'all' || scope === 'pages') {
         const delta = await ctx.api.getPagesSyncDelta(rt.config.brandId, sinceIso);
         for (const row of delta) {
-            const r = await pullPage(ctx, row.id, { force: opts.force });
+            const r = await pullPage(ctx, row.id, { force: opts.force, merge: opts.merge });
             out.pages.push(r.rel);
             if (!opts.json) log.detail(`  page  ${r.rel}`);
         }
@@ -244,24 +248,24 @@ async function pullByKindAndKey(
     ctx: Awaited<ReturnType<typeof buildSyncContext>>,
     kind: 'page' | 'component' | 'script' | 'asset',
     key: string,
-    opts: { json?: boolean; force?: boolean },
+    opts: { json?: boolean; force?: boolean; merge?: boolean },
 ): Promise<void> {
     if (kind === 'page') {
         const ref = await resolvePageBySlug(ctx.api, ctx.rt.config.brandId, key);
-        const out = await pullPage(ctx, ref.id, { force: opts.force });
+        const out = await pullPage(ctx, ref.id, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'component') {
         const ref = await resolveComponentByCodeOrName(ctx.api, ctx.rt.config.brandId, key);
-        const out = await pullComponent(ctx, ref.id, { force: opts.force });
+        const out = await pullComponent(ctx, ref.id, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'script') {
-        const out = await pullScript(ctx, key, { force: opts.force });
+        const out = await pullScript(ctx, key, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
@@ -278,12 +282,12 @@ async function pullByKindAndPath(
     ctx: Awaited<ReturnType<typeof buildSyncContext>>,
     kind: 'page' | 'component' | 'script' | 'asset',
     rel: string,
-    opts: { json?: boolean; force?: boolean },
+    opts: { json?: boolean; force?: boolean; merge?: boolean },
 ): Promise<void> {
     if (kind === 'page') {
         const slug = rel.slice('pages/'.length, rel.length - '.ef'.length);
         const ref = await resolvePageBySlug(ctx.api, ctx.rt.config.brandId, slug);
-        const out = await pullPage(ctx, ref.id, { force: opts.force });
+        const out = await pullPage(ctx, ref.id, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
@@ -291,14 +295,14 @@ async function pullByKindAndPath(
     if (kind === 'component') {
         const code = rel.slice('components/'.length, rel.length - '.ef'.length);
         const ref = await resolveComponentByCodeOrName(ctx.api, ctx.rt.config.brandId, code);
-        const out = await pullComponent(ctx, ref.id, { force: opts.force });
+        const out = await pullComponent(ctx, ref.id, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;
     }
     if (kind === 'script') {
         const code = rel.slice('scripts/'.length, rel.length - '.js'.length);
-        const out = await pullScript(ctx, code, { force: opts.force });
+        const out = await pullScript(ctx, code, { force: opts.force, merge: opts.merge });
         await ctx.state.save();
         if (opts.json) log.json({ ok: true, pulled: [out.rel] }); else log.success(`Pulled ${out.rel}.`);
         return;

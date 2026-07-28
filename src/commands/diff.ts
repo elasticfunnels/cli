@@ -12,6 +12,7 @@ import {
 import { parseEfMeta } from '../sync/efMeta';
 import { parseScriptMeta } from '../sync/sync';
 import { unifiedDiff } from '../sync/merge';
+import { eventsDiffEntry } from './pageEvents';
 import { sha256 } from '../utils/fs';
 import { resolveSyncPathInput } from '../utils/syncPathResolve';
 
@@ -23,7 +24,7 @@ interface DiffOpts {
 
 interface DiffEntry {
     rel: string;
-    kind: 'page' | 'component' | 'script' | 'asset';
+    kind: 'page' | 'component' | 'script' | 'asset' | 'events';
     serverId: number | null;
     /**
      * - `local-only`: file on disk has no server identity (efmeta missing or
@@ -67,12 +68,19 @@ Examples:
             const rt = await loadRuntime();
             const ctx = await buildSyncContext(rt);
 
-            const targets = paths && paths.length > 0
+            const explicit = Array.isArray(paths) && paths.length > 0;
+            const targets = explicit
                 ? await collectTargets(rt.brandRoot, rt.config.syncRoot, paths)
                 : await collectAll(rt.brandRoot);
 
             const results: DiffEntry[] = [];
             for (const abs of targets) {
+                // Events graphs (pages/<slug>.events.json) diff against the server
+                // graph. Only when explicitly targeted — a full scan stays offline.
+                if (abs.endsWith('.events.json')) {
+                    if (explicit) results.push(await eventsDiffEntry(rt, ctx.api, abs));
+                    continue;
+                }
                 const cls = classifyAbsPath(rt.brandRoot, abs);
                 if (!cls) continue;
                 const entry = opts.server ? await classifyServer(ctx, abs, cls) : await classify(ctx, abs, cls);

@@ -105,6 +105,49 @@ test('pages events pull writes a starter skeleton when the page has no events', 
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });
 
+test('pages events push REFUSES when the server graph changed since pull; diff shows it; --force overrides', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        // Pull establishes the baseline.
+        assert.equal((await runEf(root, ['pages', 'events', 'pull', 'home', '--json'])).code, 0);
+        const file = path.join(brandRoot, 'pages', 'home.events.json');
+        // Server graph moves (someone else edited); we also edit locally.
+        mock.setEvents(10, { drawflow: { Home: { data: { '1': { id: 1, who: 'SERVER' } } } } });
+        await fs.promises.writeFile(file, JSON.stringify({ drawflow: { Home: { data: { '1': { id: 1, who: 'LOCAL' } } } } }));
+
+        const push = await runEf(root, ['pages', 'events', 'push', 'home', '--json']);
+        assert.equal(push.code, 4, `expected conflict; stderr=${push.stderr}`);
+        assert.match(JSON.parse(push.stdout).message, /Changes rejected/);
+        assert.equal(mock.posts.length, 0, 'nothing pushed on drift');
+
+        const diff = await runEf(root, ['pages', 'events', 'diff', 'home', '--json']);
+        assert.equal(JSON.parse(diff.stdout).changed, true, 'diff reports a difference');
+
+        const forced = await runEf(root, ['pages', 'events', 'push', 'home', '--force', '--json']);
+        assert.equal(forced.code, 0, `--force stderr=${forced.stderr}`);
+        assert.equal(mock.posts.length, 1, '--force pushed local over the server');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('ef diff pages/<slug>.events.json diffs the events file against the server', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        assert.equal((await runEf(root, ['pages', 'events', 'pull', 'home', '--json'])).code, 0);
+        // Freshly pulled → clean.
+        let entries = JSON.parse((await runEf(root, ['diff', 'pages/home.events.json', '--json'])).stdout) as { kind: string; status: string; diff?: string }[];
+        assert.equal(entries[0].kind, 'events');
+        assert.equal(entries[0].status, 'clean');
+        // Edit locally → dirty, with a diff.
+        await fs.promises.writeFile(path.join(brandRoot, 'pages', 'home.events.json'), JSON.stringify({ drawflow: { Home: { data: { '1': { id: 1, who: 'LOCAL' } } } } }));
+        entries = JSON.parse((await runEf(root, ['diff', 'pages/home.events.json', '--json'])).stdout) as { kind: string; status: string; diff?: string }[];
+        assert.equal(entries[0].kind, 'events');
+        assert.equal(entries[0].status, 'dirty');
+        assert.ok(entries[0].diff && /LOCAL/.test(entries[0].diff), 'diff shows the local change');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
 test('pages events push validates then POSTs the local graph', async () => {
     const mock = await startMock();
     const { root, brandRoot } = await setup(mock.url);

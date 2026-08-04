@@ -91,6 +91,37 @@ test('funnels push REFUSES on server drift; ef diff funnels/<code>.flow.json sho
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });
 
+test('funnels push REFUSES a never-pulled file when the server already has a graph; allows fresh-create when it has none', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'funnels');
+        await fs.promises.mkdir(dir, { recursive: true });
+        // Server HAS a builder graph (GRAPH). Author a different one locally without pulling.
+        await fs.promises.writeFile(path.join(dir, 'demo.flow.json'), JSON.stringify({ drawflow: { Home: { data: { '1': { id: 1, who: 'LOCAL' } } } } }));
+        const refused = await runEf(root, ['funnels', 'push', 'demo', '--json']);
+        assert.equal(refused.code, 4, `expected refusal; stderr=${refused.stderr}`);
+        assert.match(JSON.parse(refused.stdout).message, /never pulled/);
+        assert.equal(mock.posts.length, 0, 'nothing pushed — server graph preserved');
+        // --force overrides.
+        assert.equal((await runEf(root, ['funnels', 'push', 'demo', '--force', '--json'])).code, 0);
+        assert.equal(mock.posts.length, 1, '--force pushed');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('funnels push allows a brand-new graph when the server has none (fresh create, no pull needed)', async () => {
+    const mock = await startMock();
+    mock.setGraph(''); // server has no builder graph for this funnel
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        const dir = path.join(brandRoot, 'funnels');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'demo.flow.json'), JSON.stringify({ drawflow: { Home: { data: { '9': { id: 9, name: 'fresh' } } } } }));
+        assert.equal((await runEf(root, ['funnels', 'push', 'demo', '--json'])).code, 0, 'fresh-create allowed with no pull');
+        assert.equal(mock.posts.length, 1, 'fresh graph pushed');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
 test('ef lint flags a broken graph JSON and passes a valid one', async () => {
     const mock = await startMock();
     const { root, brandRoot } = await setup(mock.url);

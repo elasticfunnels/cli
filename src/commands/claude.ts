@@ -187,6 +187,14 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`):
   Complex payloads: \`--input-json '{…}'\` / \`--input-file <path|->\` (flags override the JSON);
   \`--generate-skeleton\` prints an example payload.
 - **Page events + funnel graphs** — Drawflow JSON graphs (split tests, redirects, tags, popups):
+  - **To AUTHOR or edit a graph from a request** ("load the white page unless \`?test=1\`",
+    "split test this component", "redirect affiliate traffic"), use the **\`ef-page-events\` skill**
+    (\`ef claude\` installs it into \`.claude/skills/\`). It has the graph model, the node reference,
+    the two silent-no-op traps (LOAD vs REDIRECT; typed conditions need their compiled \`script_rule\`),
+    and worked examples. Load it before hand-building any \`.events.json\`/\`.flow.json\`.
+  - **Always pull first.** Push REFUSES (exit 4) not only on server drift but also when you never
+    pulled a page/funnel that already has a graph — so a hand-authored or copied file can't clobber
+    server state you never saw. Fresh-create (server has none) is still allowed without a pull.
   - \`ef pages events pull|push|diff|validate|vocabulary <slug>\` → \`pages/<slug>.events.json\`
     (nested slugs preserved). NOT pulled by \`ef pull\` unless \`--events\`.
   - \`ef funnels pull|push|diff <code>\` → \`funnels/<code>.flow.json\` (the funnel's builder graph);
@@ -265,13 +273,55 @@ export async function applyClaudeGuidance(target: string): Promise<'created' | '
     return action;
 }
 
+/**
+ * Locate the bundled Claude Code skills. They ship under `assets/skills/` at the
+ * package root; this file runs from `out/commands/`, so the root is two levels
+ * up. The extra candidate keeps `npm link` / ts-node layouts working in dev.
+ */
+function findSkillsSourceDir(): string | null {
+    const roots = [
+        path.resolve(__dirname, '..', '..', 'assets', 'skills'),
+        path.resolve(__dirname, '..', '..', '..', 'assets', 'skills'),
+    ];
+    for (const dir of roots) {
+        try {
+            if (fs.statSync(dir).isDirectory()) return dir;
+        } catch { /* try next */ }
+    }
+    return null;
+}
+
+/**
+ * Install the bundled skills into `<root>/.claude/skills/<name>/SKILL.md`.
+ * Idempotent: overwrites the managed SKILL.md in place so re-running picks up a
+ * newer CLI's copy. Returns the skill names written (empty if none bundled).
+ */
+export async function installBundledSkills(root: string): Promise<string[]> {
+    const src = findSkillsSourceDir();
+    if (!src) return [];
+    const written: string[] = [];
+    for (const name of fs.readdirSync(src)) {
+        const skillFile = path.join(src, name, 'SKILL.md');
+        try {
+            if (!fs.statSync(skillFile).isFile()) continue;
+        } catch { continue; }
+        const body = await fs.promises.readFile(skillFile, 'utf8');
+        const destDir = path.join(root, '.claude', 'skills', name);
+        await fs.promises.mkdir(destDir, { recursive: true });
+        await writeFileAtomic(path.join(destDir, 'SKILL.md'), body);
+        written.push(name);
+    }
+    return written;
+}
+
 export function registerClaudeCommand(program: Command): void {
     program
         .command('claude')
-        .description('Write ElasticFunnels guidance for Claude Code into CLAUDE.md (idempotent — safe to re-run).')
+        .description('Write ElasticFunnels guidance for Claude Code into CLAUDE.md + install the ef skills (idempotent — safe to re-run).')
         .option('--output <path>', 'Target file (default: CLAUDE.md in the project root).')
         .option('--print', 'Print the guidance to stdout instead of writing a file.')
-        .action(async (opts: { output?: string; print?: boolean }) => {
+        .option('--no-skills', 'Skip installing the bundled Claude Code skills into .claude/skills/.')
+        .action(async (opts: { output?: string; print?: boolean; skills?: boolean }) => {
             if (opts.print) {
                 process.stdout.write(renderClaudeSection() + '\n');
                 return;
@@ -281,5 +331,13 @@ export function registerClaudeCommand(program: Command): void {
             const action = await applyClaudeGuidance(target);
             const verb = action === 'created' ? 'Created' : action === 'updated' ? 'Updated ElasticFunnels section in' : 'Appended ElasticFunnels section to';
             log.success(`${verb} ${target}`);
+
+            if (opts.skills !== false) {
+                const installed = await installBundledSkills(root);
+                if (installed.length > 0) {
+                    log.success(`Installed skill${installed.length > 1 ? 's' : ''} into .claude/skills/: ${installed.join(', ')}.`);
+                    log.detail('Claude Code loads these on demand — e.g. ask it to "create a page event to load the white page unless ?test=1".');
+                }
+            }
         });
 }

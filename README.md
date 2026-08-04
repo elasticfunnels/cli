@@ -173,6 +173,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef funnels pull [codeOrId]` | Pull a funnel's builder graph → `funnels/<code>.flow.json`. `--all` for every funnel. |
 | `ef funnels push <codeOrId>` | Push the builder graph. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a funnel that already has a graph (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
 | `ef funnels diff <codeOrId>` / `ef diff funnels/<code>.flow.json` | Show the local-vs-server funnel-graph diff. |
+| `ef funnels validate <codeOrId>` | Deep-validate the builder graph server-side (same engine as page events: node types, `only_on`/`max_per_output`/`one_of_type`, connection integrity, reachability). `--stored` validates the server's copy; `--json` for the full report. |
 | `ef funnels create <title> --domain <id>` | Create a funnel (server assigns the code; a domain is required) and write its empty graph. |
 | `ef funnels debug-flow <codeOrId>` / `product-flow <codeOrId>` | Print the compiled read-only flow / product-flow. |
 | `ef funnels delete <codeOrId>` | Delete a funnel (and its local file). |

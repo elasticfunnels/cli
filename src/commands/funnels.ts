@@ -197,6 +197,23 @@ export function registerFunnelsCommand(program: Command): void {
             if (entry.diff) log.raw(entry.diff.endsWith('\n') ? entry.diff : entry.diff + '\n');
         });
 
+    cmd.command('validate <codeOrId>')
+        .description('Validate the funnel builder graph (the local file, or --stored for the server\'s). Same engine as page events.')
+        .option('--stored', 'Validate the graph currently on the server instead of the local file.')
+        .option('--json', 'Print the validator report as JSON.')
+        .action(async (codeOrId: string, opts: { stored?: boolean; json?: boolean }) => {
+            const { rt, api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+            const graph = opts.stored ? undefined : readLocalFunnelGraph(rt, funnel.code ?? String(funnel.id)).graph;
+            const report = await api.validateFunnelBuilder(brandId, funnel.id, graph) as { stats?: { errors?: number; warnings?: number }; errors?: unknown[]; warnings?: unknown[] };
+            const errors = report.stats?.errors ?? (Array.isArray(report.errors) ? report.errors.length : 0);
+            const warnings = report.stats?.warnings ?? (Array.isArray(report.warnings) ? report.warnings.length : 0);
+            if (opts.json) { log.json(report); }
+            else if (errors === 0 && warnings === 0) log.success('Funnel graph is valid.');
+            else log.info(`${errors} error(s), ${warnings} warning(s). Run with --json for details.`);
+            if (errors > 0) process.exitCode = ExitCode.Validation;
+        });
+
     cmd.command('create <title>')
         .description('Create a funnel (the server assigns its code), then write its empty builder graph to disk. Requires at least one --domain.')
         .option('--status <status>', 'active | inactive | draft.')

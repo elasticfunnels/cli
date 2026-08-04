@@ -481,7 +481,12 @@ export async function fetchServerBytes(
         }
         if (kind === 'component') {
             const cmp = await ctx.api.getComponentContent(ctx.rt.config.brandId, id);
-            return { bytes: Buffer.from(cmp.html ?? cmp.code ?? '', 'utf8'), updatedAt: cmp.updated_at ?? null, revisionId: cmp.revision_id ?? null };
+            // The editable body is `html`. Do NOT fall back to `code` — that is the
+            // component's slug, not content; using it makes the drift hash differ
+            // from what pullComponent stored (`html ?? ''`) for any component whose
+            // html is empty/null (e.g. freshly created), causing a permanent false
+            // "changed on the server" rejection on every push.
+            return { bytes: Buffer.from(cmp.html ?? '', 'utf8'), updatedAt: cmp.updated_at ?? null, revisionId: cmp.revision_id ?? null };
         }
         if (kind === 'script') {
             const s = await ctx.api.getBackendScript(ctx.rt.config.brandId, id);

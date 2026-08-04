@@ -334,6 +334,13 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Save funnel builder', res);
     }
 
+    /** Dry-run lint of a funnel builder graph. Empty body validates the stored graph. */
+    async validateFunnelBuilder(brandId: number, id: number, graph?: unknown): Promise<unknown> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/funnels/${id}/builder/validate`, { data: graph ?? {} });
+        if (res.status >= 400) throw httpError('Validate funnel builder', res);
+        return res.data;
+    }
+
     async getFunnelDebugFlow(brandId: number, id: number): Promise<unknown> {
         const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}/debug-flow`);
         if (res.status >= 400) throw httpError('Get funnel debug-flow', res);

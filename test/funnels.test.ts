@@ -22,6 +22,12 @@ function startMock(): Promise<Mock> {
                 const url = (req.url || '').split('?')[0];
                 const json = (p: unknown) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(p)); };
                 if (req.method === 'GET' && /\/funnels\/all$/.test(url)) return json([{ id: 5, code: 'demo', title: 'Demo', status: 'active' }]);
+                if (/\/funnels\/5\/builder\/validate$/.test(url) && req.method === 'POST') {
+                    const nodes = ((JSON.parse(b || '{}')?.drawflow?.Home?.data) ?? {});
+                    const bad = Object.values(nodes).some((n: unknown) => (n as { data?: { type?: string } })?.data?.type === 'nope');
+                    const errors = bad ? [{ severity: 'error', code: 'unknown_node_type', message: "unknown type 'nope'" }] : [];
+                    return json({ valid: !bad, errors, warnings: [], issues: errors, hints: [], stats: { nodes: Object.keys(nodes).length, errors: errors.length, warnings: 0 } });
+                }
                 if (/\/funnels\/5\/builder$/.test(url)) {
                     if (req.method === 'GET') { if (graph === '' || graph == null) { res.writeHead(200); return res.end(''); } return json(graph); }
                     if (req.method === 'POST') { try { posts.push(JSON.parse(b)); } catch { posts.push(null); } return json({ ok: true }); }
@@ -119,6 +125,26 @@ test('funnels push allows a brand-new graph when the server has none (fresh crea
         await fs.promises.writeFile(path.join(dir, 'demo.flow.json'), JSON.stringify({ drawflow: { Home: { data: { '9': { id: 9, name: 'fresh' } } } } }));
         assert.equal((await runEf(root, ['funnels', 'push', 'demo', '--json'])).code, 0, 'fresh-create allowed with no pull');
         assert.equal(mock.posts.length, 1, 'fresh graph pushed');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('funnels validate reports the server verdict (valid vs errors) and sets the exit code', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        assert.equal((await runEf(root, ['funnels', 'pull', 'demo', '--json'])).code, 0);
+        const file = path.join(brandRoot, 'funnels', 'demo.flow.json');
+        // Valid graph → exit 0, valid=true.
+        let r = await runEf(root, ['funnels', 'validate', 'demo', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.equal(JSON.parse(r.stdout).valid, true);
+        // Introduce a bad node type → exit Validation (2), errors reported.
+        await fs.promises.writeFile(file, JSON.stringify({ drawflow: { Home: { data: { '1': { id: 1, data: { type: 'nope' } } } } } }));
+        r = await runEf(root, ['funnels', 'validate', 'demo', '--json']);
+        assert.equal(r.code, 2, `expected validation exit; stderr=${r.stderr}`);
+        const report = JSON.parse(r.stdout);
+        assert.equal(report.valid, false);
+        assert.ok(report.errors.some((e: { code: string }) => e.code === 'unknown_node_type'));
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });
 

@@ -49,8 +49,8 @@ ef pages events validate <slug>        # add --strict to treat warnings as error
 ef pages events push <slug>
 ```
 
-Funnels are identical with `ef funnels pull|push|diff <code>` (there is **no**
-`funnels validate` endpoint — see the funnels section).
+Funnels are identical with `ef funnels pull|push|diff|validate <code>` (same
+deep validator as page events — see the funnels section).
 
 ### The safety guarantees (do not fight them)
 
@@ -323,9 +323,11 @@ Same Drawflow model, same always-pull-first / refuse-on-drift safety, same
   `flow`, `product_flow`, and `variant_seeds` are **read-only** — the server
   regenerates them on save. Inspect the compiled artifacts with
   `ef funnels debug-flow <code>` / `ef funnels product-flow <code>`; never edit them.
-- **No `funnels validate` endpoint** — deep node-rule validation isn't available
-  for funnels yet, so `ef lint funnels/<code>.flow.json` (structural) is the only
-  offline check. Build carefully and verify with `ef funnels debug-flow`.
+- **Validate with `ef funnels validate <code>`** — deep, server-side, the same
+  engine as page events (node types, `only_on`/`max_per_output`/`one_of_type`,
+  connection integrity, orphan/reachability). `ef lint funnels/<code>.flow.json`
+  is the offline structural check. Also verify the compiled output with
+  `ef funnels debug-flow`.
 - Funnel node types are their own set (`module: funnels`) — get them from a
   pulled example plus `ef pages events vocabulary` (shared registry) rather than
   assuming they match page events.

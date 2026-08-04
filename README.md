@@ -21,6 +21,12 @@ npm i -g @elasticfunnels/cli
 
 Then run `ef --help`. Requires Node.js ≥ 18.
 
+**Staying current:** `ef` checks npm about once a day (in the background, never
+blocking a command) and prints a one-line `▲ Update available X → Y` nudge to
+stderr on interactive runs when a newer version is out — then just re-run
+`npm i -g @elasticfunnels/cli`. It stays silent in scripts, pipes, CI, and with
+`--json`. Disable entirely with `NO_UPDATE_NOTIFIER=1` (or `EF_NO_UPDATE_NOTIFIER=1`).
+
 ### From source
 
 ```bash
@@ -353,6 +359,9 @@ ef push pages/about-us.ef --json
 - `EF_API_KEY` — used by `ef init` if `--api-key` is not passed and stdin is
   not a TTY (handy for CI, GitHub Actions, etc.).
 - `NO_COLOR` — disables ANSI color in stderr output.
+- `NO_UPDATE_NOTIFIER` / `EF_NO_UPDATE_NOTIFIER` — disables the daily
+  "update available" check. (Also skipped automatically under `CI`, when stderr
+  isn't a TTY, and with `--json`.)
 
 ## Compatibility with the VS Code extension
 

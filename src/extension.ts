@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { CliError, ExitCode } from './utils/exit';
 import { log } from './utils/log';
+import { getUpdateNotice } from './utils/updateNotifier';
 import { registerInitCommand } from './commands/init';
 import { registerResetCommand } from './commands/reset';
 import { registerWhoamiCommand } from './commands/whoami';
@@ -96,6 +97,13 @@ Designed for Claude Code, scripts, and humans equally:
 /** Programmatic entry — exported and called from `bin/ef.js`. */
 export async function run(argv: string[]): Promise<void> {
     const program = buildProgram();
+
+    // "Update available" nudge for global installs. Reads a daily cache and
+    // prints on exit (so it survives process.exit()); a background refresh keeps
+    // the cache fresh without ever delaying the command. Silent in scripts/CI/pipes.
+    const notice = getUpdateNotice(getVersion(), argv);
+    if (notice) process.once('exit', () => { try { process.stderr.write(notice); } catch { /* ignore */ } });
+
     try {
         await program.parseAsync(argv);
     } catch (err) {

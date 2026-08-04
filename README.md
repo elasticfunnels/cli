@@ -138,6 +138,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef init` | Bind this folder to a brand. Interactive or non-interactive (`--api-key`, `--brand-id`). Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
+| `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md` **and** install the `ef-page-events` skill into `.claude/skills/` so Claude Code can author event/funnel graphs from a request ("load the white page unless `?test=1`"). Idempotent; `--no-skills` to skip the skill, `--print` to preview. `ef init` runs this too. |
 | `ef whoami` | Print the active project root, brand, API URL, key prefix. |
 | `ef status` | Connection check, last-pull timestamp, entity counts. |
 | `ef list <kind>` | List pages \| components \| assets \| scripts \| folders \| templates. |
@@ -164,13 +165,13 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
-| `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). |
+| `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
 | `ef pages events validate <slug>` | Validate the events graph (local, or `--stored` for the server's). |
 | `ef pages events vocabulary <slug>` | Print the valid event-node vocabulary (node types + connection rules). |
 | `ef pages events diff <slug>` / `ef diff pages/<slug>.events.json` | Show the local-vs-server events graph diff (no merge — pick a side). |
 | `ef funnels list` | List funnels. |
 | `ef funnels pull [codeOrId]` | Pull a funnel's builder graph → `funnels/<code>.flow.json`. `--all` for every funnel. |
-| `ef funnels push <codeOrId>` | Push the builder graph. **Refuses (exit 4)** if the server changed since you pulled; `--force` overwrites. No auto-merge (structured JSON). |
+| `ef funnels push <codeOrId>` | Push the builder graph. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a funnel that already has a graph (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
 | `ef funnels diff <codeOrId>` / `ef diff funnels/<code>.flow.json` | Show the local-vs-server funnel-graph diff. |
 | `ef funnels create <title> --domain <id>` | Create a funnel (server assigns the code; a domain is required) and write its empty graph. |
 | `ef funnels debug-flow <codeOrId>` / `product-flow <codeOrId>` | Print the compiled read-only flow / product-flow. |

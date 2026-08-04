@@ -7,7 +7,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
-import { applyClaudeGuidance } from './claude';
+import { applyClaudeGuidance, installBundledSkills } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 
@@ -274,6 +274,8 @@ async function runInit(opts: InitOptions): Promise<void> {
         try {
             claudeAction = await applyClaudeGuidance(path.join(runtime.projectRoot, 'CLAUDE.md'));
             log.detail(`CLAUDE.md ${claudeAction} — ElasticFunnels guidance for Claude Code (re-run with "ef claude").`);
+            const skills = await installBundledSkills(runtime.projectRoot);
+            if (skills.length > 0) log.detail(`Installed skill${skills.length > 1 ? 's' : ''} into .claude/skills/: ${skills.join(', ')}.`);
         } catch { /* non-fatal */ }
     }
 

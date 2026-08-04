@@ -148,19 +148,44 @@ test('ef diff pages/<slug>.events.json diffs the events file against the server'
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });
 
-test('pages events push validates then POSTs the local graph', async () => {
+test('pages events push validates then POSTs a brand-new graph when the server has none (fresh create, no pull needed)', async () => {
     const mock = await startMock();
     const { root, brandRoot } = await setup(mock.url);
     try {
-        const dir = path.join(brandRoot, 'pages');
+        // Page 20 (checkout/step-1) has NO events on the server, so authoring locally
+        // without a pull is a safe fresh-create — the always-pull-first guard allows it.
+        const dir = path.join(brandRoot, 'pages', 'checkout');
         await fs.promises.mkdir(dir, { recursive: true });
         const local = { drawflow: { Home: { data: { '1': { id: 1, name: 'page' } } } } };
-        await fs.promises.writeFile(path.join(dir, 'home.events.json'), JSON.stringify(local));
-        const r = await runEf(root, ['pages', 'events', 'push', 'home', '--json']);
+        await fs.promises.writeFile(path.join(dir, 'step-1.events.json'), JSON.stringify(local));
+        const r = await runEf(root, ['pages', 'events', 'push', 'checkout/step-1', '--json']);
         assert.equal(r.code, 0, `stderr=${r.stderr}`);
-        assert.deepEqual(mock.validates, ['10'], 'validated before pushing');
+        assert.deepEqual(mock.validates, ['20'], 'validated before pushing');
         assert.equal(mock.posts.length, 1);
-        assert.equal(mock.posts[0].id, '10');
+        assert.equal(mock.posts[0].id, '20');
         assert.deepEqual(mock.posts[0].body, local, 'the local graph was posted verbatim');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('pages events push REFUSES a never-pulled file when the server already has events (always-pull-first)', async () => {
+    const mock = await startMock();
+    const { root, brandRoot } = await setup(mock.url);
+    try {
+        // Page 10 (home) HAS events on the server. Author a DIFFERENT graph locally
+        // without ever pulling — pushing must refuse rather than clobber the server.
+        const dir = path.join(brandRoot, 'pages');
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(path.join(dir, 'home.events.json'), JSON.stringify({ drawflow: { Home: { data: { '1': { id: 1, who: 'LOCAL' } } } } }));
+
+        const push = await runEf(root, ['pages', 'events', 'push', 'home', '--json']);
+        assert.equal(push.code, 4, `expected refusal; stderr=${push.stderr}`);
+        assert.match(JSON.parse(push.stdout).message, /never pulled/);
+        assert.equal(mock.posts.length, 0, 'nothing pushed — server events preserved');
+        assert.equal(mock.validates.length, 0, 'refused before it even validated');
+
+        // --force overrides the always-pull-first guard.
+        const forced = await runEf(root, ['pages', 'events', 'push', 'home', '--force', '--json']);
+        assert.equal(forced.code, 0, `--force stderr=${forced.stderr}`);
+        assert.equal(mock.posts.length, 1, '--force pushed local over the server');
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });

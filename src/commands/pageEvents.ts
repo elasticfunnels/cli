@@ -161,10 +161,13 @@ export function registerPageEventsCommand(pages: Command): void {
             // ("ef pages events diff" to see; --force = keep local; pull --force = take server).
             if (!opts.force) {
                 const baseline = await readSnapshot(rt.brandRoot, 'pageEvents', page.id);
+                const server = await api.getPageEvents(rt.config.brandId, page.id);
+                const serverHash = graphHash(server ?? EMPTY_GRAPH);
+                const localHash = graphHash(graph);
                 if (baseline) {
-                    const server = await api.getPageEvents(rt.config.brandId, page.id);
-                    const serverHash = graphHash(server ?? EMPTY_GRAPH);
-                    if (serverHash !== sha256(baseline) && serverHash !== graphHash(graph)) {
+                    // We pulled before: refuse if the server moved off our baseline
+                    // (and our local isn't already identical to what's on the server).
+                    if (serverHash !== sha256(baseline) && serverHash !== localHash) {
                         const msg = `Changes rejected: events for "${page.slug ?? slug}" changed on the server since you pulled. `
                             + `Run "ef pages events diff ${slug}" to see the difference, then "ef pages events pull ${slug} --force" to take the server's, or "ef pages events push ${slug} --force" to overwrite it.`;
                         if (opts.json) log.json({ ok: false, conflict: true, rel, message: msg });
@@ -172,6 +175,15 @@ export function registerPageEventsCommand(pages: Command): void {
                         process.exitCode = ExitCode.Conflict;
                         return;
                     }
+                } else if (serverHash !== graphHash(EMPTY_GRAPH) && serverHash !== localHash) {
+                    // Never pulled, but the server already has events: pushing now would
+                    // clobber edits we've never seen. Force a pull first (always-pull-first).
+                    const msg = `Changes rejected: "${page.slug ?? slug}" already has events on the server, but you never pulled them. `
+                        + `Run "ef pages events pull ${slug}" first (then re-apply your change), or "ef pages events push ${slug} --force" to overwrite.`;
+                    if (opts.json) log.json({ ok: false, conflict: true, rel, message: msg });
+                    else log.error(msg);
+                    process.exitCode = ExitCode.Conflict;
+                    return;
                 }
             }
 

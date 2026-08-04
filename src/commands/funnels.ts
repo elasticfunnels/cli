@@ -153,16 +153,27 @@ export function registerFunnelsCommand(program: Command): void {
 
             if (!opts.force) {
                 const baseline = await readSnapshot(rt.brandRoot, 'funnel', funnel.id);
+                const server = await api.getFunnelBuilder(brandId, funnel.id);
+                const serverHash = graphHash(server ?? EMPTY_GRAPH);
+                const localHash = graphHash(graph);
                 if (baseline) {
-                    const server = await api.getFunnelBuilder(brandId, funnel.id);
-                    const serverHash = graphHash(server ?? EMPTY_GRAPH);
-                    if (serverHash !== sha256(baseline) && serverHash !== graphHash(graph)) {
+                    // We pulled before: refuse if the server moved off our baseline
+                    // (and our local isn't already identical to what's on the server).
+                    if (serverHash !== sha256(baseline) && serverHash !== localHash) {
                         const msg = `Changes rejected: funnel "${code}" changed on the server since you pulled. `
                             + `Run "ef diff funnels/${code}.flow.json" to see, then "ef funnels pull ${code} --force" to take the server's or "ef funnels push ${code} --force" to overwrite.`;
                         if (opts.json) log.json({ ok: false, conflict: true, rel, message: msg }); else log.error(msg);
                         process.exitCode = ExitCode.Conflict;
                         return;
                     }
+                } else if (serverHash !== graphHash(EMPTY_GRAPH) && serverHash !== localHash) {
+                    // Never pulled, but the server already has a builder graph: pushing now
+                    // would clobber edits we've never seen. Force a pull first.
+                    const msg = `Changes rejected: funnel "${code}" already has a builder graph on the server, but you never pulled it. `
+                        + `Run "ef funnels pull ${code}" first (then re-apply your change), or "ef funnels push ${code} --force" to overwrite.`;
+                    if (opts.json) log.json({ ok: false, conflict: true, rel, message: msg }); else log.error(msg);
+                    process.exitCode = ExitCode.Conflict;
+                    return;
                 }
             }
             await api.setFunnelBuilder(brandId, funnel.id, graph);

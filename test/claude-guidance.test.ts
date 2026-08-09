@@ -13,24 +13,29 @@ test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', (
 });
 
 /*
- * These lock in facts that were wrong once and cost a live page. An agent
- * followed this guidance literally, called a PascalCase CRM helper that does
- * not exist, and the page render broke — the domain served 404 until it was
- * rolled back. Keep the real names, the casing rule, and the docs links.
+ * This locks in the fact that cost a live page. The CRM functions are
+ * registered TWICE with different casing — PascalCase in the template engine
+ * (CrmAdapter), camelCase in the backend-script runtime (BackendCodeService) —
+ * and the sets are not identical. An agent called `CreateCrmEntry` (template
+ * only) inside a backend script; the undefined function broke the render and
+ * the domain served 404 until it was rolled back.
  */
-test('guidance names the real camelCase CRM functions, never the invented PascalCase ones', () => {
+test('guidance splits CRM functions by runtime instead of picking one casing', () => {
     const s = renderClaudeSection();
-    for (const real of ['setCrmFields', 'getCrmEntries', 'addCrmFieldValue', 'moveCrmToStage', 'ensureCrmEntity']) {
-        assert.ok(s.includes(real), `must name the real function ${real}`);
+
+    // Both real sets must be present, with their own casing.
+    for (const template of ['CreateCrmEntry', 'SetCrmRelation', 'EnsureCrmEntity']) {
+        assert.ok(s.includes(template), `template-engine function ${template} must be listed`);
     }
-    // CreateCrmEntry is the exact call that took a live page down. It may only
-    // appear as an explicit "this does not exist" warning — never in a list of
-    // things to call.
-    assert.ok(s.includes('There is no `CreateCrmEntry`'), 'names the fatal one as non-existent');
-    for (const fake of ['`SetCrmField(s)`', '`GetCrmEntries`', '`MoveCrmToStage`', '`SetCrmRelation`,']) {
-        assert.ok(!s.includes(fake), `must not present ${fake} as a usable helper`);
+    for (const script of ['setCrmFields', 'addCrmFieldValue', 'reassignCrmReference', 'ensureCrmEntity']) {
+        assert.ok(s.includes(script), `backend-script function ${script} must be listed`);
     }
-    assert.match(s, /PascalCase is always wrong/, 'states the casing rule outright');
+
+    // The trap itself, stated explicitly.
+    assert.match(s, /not interchangeable/i, 'says the two sets cannot be swapped');
+    assert.match(s, /only in templates/i, 'marks the template-only functions');
+    assert.match(s, /only in backend scripts/i, 'marks the script-only functions');
+    assert.ok(s.includes('there is no `createCrmEntry`'), 'states that the camelCase spelling does not exist');
     assert.match(s, /404/, 'says what actually happens when the name is wrong');
 });
 

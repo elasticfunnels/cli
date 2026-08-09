@@ -162,27 +162,30 @@ invent directives.
   \`getOrders\`, \`getOrder\`, \`getCustomer\`, \`getCourse(s)\`, \`getBlog(s)\`,
   \`getSubscription(s)\`; \`date(...)\`, \`t('key')\` / \`getTranslation\`, \`getBrand\`,
   \`get/setSessionItem\`, \`dump(x)\`. (The full set is large — check existing files.)
-- **CRM functions** — all \`camelCase\`, all take a **single options object**:
-  \`ensureCrmEntity({slug,…})\`, \`getCrmEntries({slug,…})\`,
-  \`getCrmField({slug,fieldKey,…})\` / \`getCrmFields({slug,fieldKeys,…})\`,
-  \`setCrmField({slug,fieldKey,value,…})\` / \`setCrmFields({slug,fields,…})\`
-  (update **or create**), \`addCrmFieldValue({slug,fieldKey,value,…})\` (new entry),
-  \`getCrmFieldValues\`, \`clearCrmEntries\`, \`moveCrmLead\`, \`moveCrmToStage\`,
-  \`moveCrmToPipeline\`, \`moveCrmToEntity\`, \`reassignCrmReference\`.
-  Full reference: <https://docs.elasticfunnels.io/crm/post-workflow#crm-functions-reference>
-  and <https://docs.elasticfunnels.io/backend-scripts/data-functions>.
-  - ⚠️ **Casing and spelling are load-bearing. Calling a function that does not
-    exist does not degrade — it breaks the whole page render and the live URL
-    starts returning 404.** There is no \`CreateCrmEntry\`, \`SetCrmFields\` or
-    \`SetCrmRelation\`; PascalCase is always wrong. If a name is not on the list
-    above or in the docs, **check the docs before writing it**, push with
-    \`--draft\` first, and load the preview URL to confirm the page still renders.
-  - **Anonymous visitors:** by default these bind to the session customer, so a
+- **CRM functions — the casing depends on WHERE you write them.** All take a
+  single options object, but the two runtimes register different names, and
+  getting this wrong does not degrade gracefully: **an undefined function breaks
+  the whole page render and the live URL starts returning 404.**
+
+  | Where | Casing | Set |
+  | --- | --- | --- |
+  | Templates — \`{{ }}\`/\`@if\` in \`.ef\` files | **PascalCase** | \`EnsureCrmEntity\` \`CreateCrmEntry\` \`GetCrmEntries\` \`GetCrmField(s)\` \`GetCrmFieldValues\` \`SetCrmField(s)\` \`AddCrmFieldValue\` \`ClearCrmEntries\` \`MoveCrmLead\` \`MoveCrmToStage\`/\`ToPipeline\`/\`ToEntity\` \`SetCrmRelation\` \`RemoveCrmRelation\` |
+  | Backend scripts — \`<script scope="backend">\` and \`scripts/*.js\` | **camelCase** | \`ensureCrmEntity\` \`getCrmEntries\` \`getCrmField(s)\` \`getCrmFieldValue(s)\` \`setCrmField(s)\` \`setCrmFieldValue(s)\` \`addCrmFieldValue\` \`clearCrmEntries\` \`moveCrmLead\` \`moveCrmToStage\`/\`ToPipeline\`/\`ToEntity\` \`reassignCrmReference\` |
+
+  - **They are not interchangeable.** \`CreateCrmEntry\`, \`SetCrmRelation\` and
+    \`RemoveCrmRelation\` exist **only in templates** — calling \`createCrmEntry\`
+    in a backend script is an undefined function and takes the page down.
+    \`reassignCrmReference\` exists **only in backend scripts**.
+  - To create an entry from a **backend script**, use
+    \`addCrmFieldValue({slug, fieldKey, value})\` (new entry) or
+    \`setCrmFields({slug, fields})\` (upsert) — there is no \`createCrmEntry\`.
+  - Verify before you ship: push with \`--draft\`, open the preview URL, and
+    confirm the page still renders. A 404 on the live domain is the failure mode.
+  - **Anonymous visitors:** these bind to the session customer by default, so a
     logged-out visitor writes nothing. Pass an explicit
     \`referenceType\`/\`referenceId\` (e.g. \`referenceType: 'quiz_visitor'\` plus a
-    session UUID) to attribute the entry, then \`reassignCrmReference(...)\` once
-    they log in. For a plain email opt-in, prefer an auto-wired \`<form>\`
-    (see Forms → collections) — it needs none of this.
+    session UUID), then \`reassignCrmReference(...)\` once they log in. For a
+    plain email opt-in, prefer a \`<form>\` + collection — none of this applies.
 - **Context** available in \`@if\`/\`{{ }}\`: \`var.*\` (brand variables, e.g.
   \`{{ var.offer_name }}\`); \`request.is_mobile\`/\`is_tablet\`/\`is_customer\`/\`referer\`/\`merchant_code\`;
   \`query.*\` (URL params); \`page\`; \`orders\` (customer orders, newest first; empty
@@ -253,6 +256,15 @@ leaves your markup exactly as written:
 
 Field spec is \`Name[:type[:required]]\`; types: \`text, email, number, checkbox,
 password, textarea, select, hidden\`. Repeat \`--field\` per field.
+
+### A collection **is** a CRM entity
+
+Creating a collection provisions a matching CRM entity behind it — a
+"Form Submissions" pipeline, a first stage, and the collection's fields mirrored
+as CRM fields. So form submissions are CRM records: readable with
+\`ef crm entries <entity>\`, movable through stages, and usable from the CRM
+functions above. You do **not** need a backend script to capture a lead —
+the form writes to CRM by itself.
 
 ### Verify it actually stores
 

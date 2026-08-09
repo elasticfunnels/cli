@@ -4,7 +4,7 @@ A folder-scoped command-line tool for ElasticFunnels. Built for Claude Code,
 Codex, scripts, CI pipelines, and humans.
 
 ```bash
-$ ef init                    # bind this folder to a brand
+$ ef init                    # bind this folder to a brand (browser sign-in)
 $ ef pull                    # full sync (pages, components, scripts, assets, variables)
 $ ef push pages/about-us.ef  # push one page (uses optimistic concurrency)
 $ ef list pages --json       # machine-readable list of pages
@@ -122,12 +122,43 @@ and each brand's files land under `elasticfunnels/<brandId>/…` instead.
 
 ## Auth model
 
-- The CLI uses the same `EF-Access-Key` header the dashboard and the VS Code
-  extension use. Each (user, brand) pair has its own API key — pick yours up
-  from the brand's settings page → API.
-- `ef init` stores the key in `.ef/auth` (chmod 600), the rest of the config
-  in `.ef/config.json`. `.ef/` is added to `.gitignore` automatically when a
-  Git repo is detected.
+**`ef init` signs you in through the browser.** Nothing secret is typed, pasted
+or left in your shell history:
+
+```
+$ ef init
+
+  Your code:  WDJB-MJHT
+  Open:       https://app.elasticfunnels.io/cli-auth?code=WDJB-MJHT
+
+  Approve it in your browser and this will continue on its own.
+```
+
+The CLI holds a secret `device_code`; the short code above is the only thing
+displayed, and on its own it cannot collect anything. You approve in a browser
+session that is already signed in and pick which brand to grant — so `--brand-id`
+is unnecessary. This is the RFC 8628 device-authorization flow.
+
+What you get back is a **per-device token** (`efc_…`): stored server-side as a
+sha256 hash, scoped to one (user, brand) pair, and revocable on its own from
+**Settings → account menu → Connected devices**. Revoking one machine leaves
+every other integration working.
+
+Other ways in, when the browser flow doesn't fit:
+
+| Situation | Command |
+| --- | --- |
+| Machine with no browser (a remote server) | `ef init --code <pairing-code>` — mint it in **Settings → AI tools → advanced**. Works once, expires in 10 minutes. |
+| CI / scripted, unattended | `ef init --api-key <key> --brand-id <id>`, or `$EF_API_KEY`. A non-interactive run refuses the browser flow rather than hanging on it. |
+| Force browser sign-in anyway | `ef init --auth` |
+
+- The legacy per-(user, brand) `EF-Access-Key` from the brand's **Settings → API**
+  page still works everywhere. It is stored in plaintext, is account-wide for the
+  brand, and can only be revoked by regenerating it — which breaks every other
+  integration at once. Prefer the device flow.
+- Either way the credential lands in `.ef/auth` (chmod 600) and the rest of the
+  config in `.ef/config.json`. `.ef/` is added to `.gitignore` automatically when
+  a Git repo is detected.
 - `ef init` refuses to run if the current folder is **already bound** (`.ef/`
   exists) — run `ef reset` first to switch brands. If the folder isn't empty
   but is unbound, it warns and asks for confirmation (skip with `--force`, or
@@ -141,10 +172,12 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 
 | Command | What it does |
 | --- | --- |
-| `ef init` | Bind this folder to a brand. Interactive or non-interactive (`--api-key`, `--brand-id`). Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
+| `ef init` | Bind this folder to a brand. Browser sign-in by default; `--code` for a one-time pairing code, `--api-key`/`--brand-id` (or `$EF_API_KEY`) for unattended runs. Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
-| `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md` **and** install the `ef-page-events` skill into `.claude/skills/` so Claude Code can author event/funnel graphs from a request ("load the white page unless `?test=1`"). Idempotent; `--no-skills` to skip the skill, `--print` to preview. `ef init` runs this too. |
+| `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md`, install the `ef-page-events` skill into `.claude/skills/`, and add a **SessionStart hook** that runs `ef pull --if-stale 30` so a session never starts on stale pages. Idempotent; `--no-skills` / `--no-hook` to skip either, `--print` to preview. `ef init` runs this too. |
+| `ef codex` (alias `ef agents`) | The same guidance, written to `AGENTS.md` — the file Codex and several editors read. Codex has no skills or hooks, so the pull-before-you-work rule lives in the text. `ef init` writes both files. |
+| `ef mcp` | Serve this brand to a desktop AI app (Claude Desktop, ChatGPT Desktop) over **stdio MCP**. Credentials come from the project's `.ef/auth`, so the app's config file holds no secret. `--project <dir>` to point at a folder explicitly. |
 | `ef whoami` | Print the active project root, brand, API URL, key prefix. |
 | `ef status` | Connection check, last-pull timestamp, entity counts. |
 | `ef list <kind>` | List pages \| components \| assets \| scripts \| folders \| templates. |
@@ -155,6 +188,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pull --merge` | For locally-edited files, **3-way merge** the server version into yours (git-style `<<<<<<<`/`=======`/`>>>>>>>` conflict markers on overlap) instead of keeping local and warning. |
 | `ef pull --events` | Also pull each page's events graph to `pages/<slug>.events.json` (funnel builder / split tests). Off by default. |
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
+| `ef pull --if-stale <min>` | Pull only if the last one was longer ago than `<min>`; otherwise exit immediately without touching the network. What the SessionStart hook runs. |
 | `ef push <paths…>` | Push specific files. **Refuses (exit 4) if the entity changed on the server since you pulled** — "Changes rejected … `ef diff --server` / `ef pull --merge`" — preventing a lost update. Covers pages/components/scripts/assets. |
 | `ef push <paths…> --force` | Overwrite the server even on drift (a copy of yours is kept; the pre-push safety check is skipped). |
 | `ef push --all` | Push every file under the brand root. |

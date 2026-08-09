@@ -4,16 +4,27 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
-import { log } from '../utils/log';
+import { c, log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
-import { applyClaudeGuidance, installBundledSkills } from './claude';
+import { GUIDANCE_FILES, applyAgentGuidance, installBundledSkills, installSessionHook } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
+import {
+    DeviceToken,
+    openBrowser,
+    pollForDeviceToken,
+    redeemPairingCode,
+    startDeviceAuthorization,
+} from '../api/deviceAuth';
 
 interface InitOptions {
     apiUrl?: string;
     apiKey?: string;
+    /** Force browser sign-in even if a key is lying around. */
+    auth?: boolean;
+    /** One-time pairing code from the app, for a machine with no browser. */
+    code?: string;
     brandId?: string;
     syncRoot?: string;
     /** `flat` matches VS Code: pages under syncRoot/pages/ (brand id only in config + .ef-state.json). */
@@ -84,11 +95,55 @@ async function confirmFolderIfNotEmpty(dir: string, opts: InitOptions): Promise<
     }
 }
 
+/**
+ * Browser sign-in.
+ *
+ * Prints the short user code and the link, opens a browser if there is one, and
+ * waits. The code on screen is deliberately harmless — it cannot collect a
+ * token without the device code this process is holding — so it is safe to
+ * leave in a scrollback buffer or read out over a call.
+ */
+async function runDeviceSignIn(apiUrl: string, opts: InitOptions): Promise<DeviceToken> {
+    const authorization = await startDeviceAuthorization(apiUrl);
+
+    if (!opts.json) {
+        log.info('');
+        log.info(`  Sign in to ElasticFunnels to connect this folder.`);
+        log.info('');
+        log.info(`  Your code:  ${c.bold(authorization.userCode)}`);
+        log.info(`  Open:       ${c.cyan(authorization.verificationUriComplete)}`);
+        log.info('');
+        log.detail('  Approve it in your browser and this will continue on its own.');
+        log.info('');
+    }
+
+    // Only reach for a browser on an interactive run. In CI or a pipe there is
+    // nothing to open, and spawning a GUI process would be surprising.
+    if (!opts.json && !opts.nonInteractive && process.stdout.isTTY === true) {
+        openBrowser(authorization.verificationUriComplete);
+    }
+
+    const ld = opts.json ? null : loader('Waiting for approval');
+    try {
+        const token = await pollForDeviceToken(apiUrl, authorization, {
+            onTick: (seconds) => ld?.update(`Waiting for approval (${seconds}s)`),
+        });
+        ld?.stop();
+        log.success(`Signed in to ${token.brandName || `brand #${token.brandId}`}.`);
+        return token;
+    } catch (err) {
+        ld?.stop();
+        throw err;
+    }
+}
+
 export function registerInitCommand(program: Command): void {
     program
         .command('init')
-        .description('Bind the current folder to an ElasticFunnels brand. Writes .ef/config.json and .ef/auth (chmod 600 on Unix).')
+        .description('Bind the current folder to an ElasticFunnels brand. Signs in through your browser by default. Writes .ef/config.json and .ef/auth (chmod 600 on Unix).')
         .option('--api-url <url>', `ElasticFunnels API base URL (default: ${Defaults.apiUrl}, or from .vscode/settings.json).`)
+        .option('--auth', 'Sign in through the browser (default when no key is supplied). Nothing secret is typed or pasted.')
+        .option('--code <code>', 'Redeem a one-time pairing code from the app (Settings → Claude Code → advanced). For machines with no browser.')
         .option('--api-key <key>', 'API key for the brand (Settings → All Settings → API). Can also be passed via $EF_API_KEY, or read from .vscode/settings.json.')
         .option('--brand-id <id>', 'Numeric brand id the key belongs to (shown next to the key on the API page; or read from .vscode/settings.json).')
         .option('--sync-root <dir>', `Folder under the project root where pages/components/assets/scripts live (default "${Defaults.syncRoot}", or from .vscode/settings.json).`)
@@ -164,21 +219,50 @@ async function runInit(opts: InitOptions): Promise<void> {
 
     const apiUrl = (opts.apiUrl || vscodeSettings.apiUrl || Defaults.apiUrl).trim();
 
-    // Resolve API key: explicit flag > env var > .vscode/settings.json > prompt.
-    // Block prompting when we can't actually drive a TTY masked input (CI, piped
-    // stdin, no terminal) so the command exits with a clear error, not a hang.
+    /*
+     * Resolve a credential, preferring the one that never puts a secret on a
+     * screen or in shell history.
+     *
+     *   --auth              browser sign-in, explicitly asked for
+     *   --code              one-time pairing code (no browser on this machine)
+     *   --api-key / $EF_API_KEY / .vscode  an existing long-lived key
+     *   (nothing)           browser sign-in — the default
+     *
+     * The device flow also tells us which brand was granted, so `--brand-id`
+     * becomes unnecessary in the common case.
+     */
     let apiKey = (opts.apiKey || process.env.EF_API_KEY || vscodeSettings.apiKey || '').trim();
-    if (!apiKey) {
-        if (opts.nonInteractive) {
-            throw new CliError(ExitCode.Validation, '--api-key is required in --non-interactive mode (or set $EF_API_KEY).');
-        }
-        if (process.stdin.isTTY !== true) {
-            throw new CliError(
-                ExitCode.Validation,
-                'No API key provided and stdin is not a TTY. Pass --api-key, set $EF_API_KEY, or run interactively.',
-            );
-        }
-        apiKey = (await ask('Paste the API key for your brand (Settings → All Settings → API)', { mask: true })).trim();
+    let grantedBrandId: number | null = null;
+    let grantedBrandName: string | null = null;
+
+    /*
+     * Browser sign-in needs a human at a browser. A non-interactive run has
+     * neither, so starting the flow there would burn the full poll timeout and
+     * then fail with a network-ish error. Refuse up front, naming the options
+     * that actually work unattended. `--auth` still forces it, for the case
+     * where the operator is watching a scripted run.
+     */
+    const unattended = opts.nonInteractive === true || process.stdin.isTTY !== true;
+    if (!apiKey && !opts.code && opts.auth !== true && unattended) {
+        throw new CliError(
+            ExitCode.Validation,
+            'No API key, and no way to sign in: the browser flow needs an interactive terminal (stdin is not a TTY). Pass --api-key (or set $EF_API_KEY), or --code <pairing-code> from Settings → Claude Code → advanced. Use --auth to force the browser flow anyway.',
+        );
+    }
+
+    const wantsDeviceFlow = opts.auth === true || (!apiKey && !opts.code);
+
+    if (opts.code) {
+        const token = await redeemPairingCode(apiUrl, opts.code);
+        apiKey = token.accessToken;
+        grantedBrandId = token.brandId;
+        grantedBrandName = token.brandName ?? null;
+        log.success(`Paired with ${grantedBrandName || `brand #${grantedBrandId}`}.`);
+    } else if (wantsDeviceFlow) {
+        const token = await runDeviceSignIn(apiUrl, opts);
+        apiKey = token.accessToken;
+        grantedBrandId = token.brandId;
+        grantedBrandName = token.brandName ?? null;
     }
 
     if (!apiKey) throw new CliError(ExitCode.Validation, 'API key is required.');
@@ -190,7 +274,15 @@ async function runInit(opts: InitOptions): Promise<void> {
     // automatically. Otherwise (older server, or shared key) we ask, and an
     // explicit --brand-id always wins.
     let brandId: number;
-    if (opts.brandId != null) {
+    if (grantedBrandId != null) {
+        // The token was minted for exactly one brand, so this is authoritative —
+        // it cannot be overridden into working. Say so rather than failing the
+        // ping later with a confusing "access denied".
+        if (opts.brandId != null && parseBrandId(opts.brandId, `--brand-id "${opts.brandId}"`) !== grantedBrandId) {
+            log.warn(`Ignoring --brand-id: you approved ${grantedBrandName || `brand #${grantedBrandId}`}, and this credential only works for that brand.`);
+        }
+        brandId = grantedBrandId;
+    } else if (opts.brandId != null) {
         brandId = parseBrandId(opts.brandId, `--brand-id "${opts.brandId}"`);
     } else if (vscodeSettings.brandId != null) {
         brandId = vscodeSettings.brandId;
@@ -272,10 +364,20 @@ async function runInit(opts: InitOptions): Promise<void> {
     let claudeAction: 'created' | 'updated' | 'appended' | null = null;
     if (opts.claude !== false) {
         try {
-            claudeAction = await applyClaudeGuidance(path.join(runtime.projectRoot, 'CLAUDE.md'));
-            log.detail(`CLAUDE.md ${claudeAction} — ElasticFunnels guidance for Claude Code (re-run with "ef claude").`);
+            // Both conventions, because we don't know which tool will open this
+            // folder — Claude Code reads CLAUDE.md, Codex and several editors
+            // read AGENTS.md. Same managed block, so they can't drift.
+            claudeAction = await applyAgentGuidance(path.join(runtime.projectRoot, GUIDANCE_FILES.claude));
+            await applyAgentGuidance(path.join(runtime.projectRoot, GUIDANCE_FILES.codex));
+            log.detail(`${GUIDANCE_FILES.claude} + ${GUIDANCE_FILES.codex} ${claudeAction} — ElasticFunnels guidance for AI tools (re-run with "ef claude" / "ef codex").`);
+
             const skills = await installBundledSkills(runtime.projectRoot);
             if (skills.length > 0) log.detail(`Installed skill${skills.length > 1 ? 's' : ''} into .claude/skills/: ${skills.join(', ')}.`);
+
+            // The rule that matters most and is easiest to forget: start from
+            // current server data. A hook enforces it; guidance only asks.
+            const hook = await installSessionHook(runtime.projectRoot);
+            if (hook !== 'present') log.detail('Added a SessionStart hook (.claude/settings.json) that runs "ef pull --if-stale 30" before each session.');
         } catch { /* non-fatal */ }
     }
 

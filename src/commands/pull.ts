@@ -27,6 +27,8 @@ interface PullOpts {
     force?: boolean;
     merge?: boolean;
     events?: boolean;
+    /** Commander gives this to us as a string; parsed in the action. */
+    ifStale?: string;
 }
 
 /** Make a pull exit non-zero (and warn loudly) if any entity FAILED to fetch —
@@ -107,8 +109,34 @@ Examples:
         .option('--force', 'Overwrite local files even if they have unpushed changes (a copy is saved to .ef-history). Without this, pull keeps locally-edited files and warns.')
         .option('--merge', 'For locally-edited files, 3-way merge the server version into yours (git-style conflict markers on overlap) instead of keeping local and warning.')
         .option('--events', 'Also pull each page\'s events graph to pages/<slug>.events.json (funnel builder / split tests). Off by default.')
+        .option('--if-stale <minutes>', 'Do nothing if the last pull was more recent than this. Cheap enough to run on every session start — see the hook `ef claude` installs.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
+
+            // Checked before anything touches the network: the point of
+            // --if-stale is that the common case costs one config read, so it
+            // can sit on a session-start hook without being felt.
+            if (opts.ifStale != null) {
+                const minutes = Number(opts.ifStale);
+                if (!Number.isFinite(minutes) || minutes < 0) {
+                    throw new CliError(ExitCode.Validation, `--if-stale expects a number of minutes, got "${opts.ifStale}".`);
+                }
+
+                const last = rt.config.lastPulledAt ? Date.parse(rt.config.lastPulledAt) : NaN;
+                // Never pulled → treat as infinitely stale and pull.
+                const ageMs = Number.isFinite(last) ? Date.now() - last : Infinity;
+
+                if (ageMs < minutes * 60_000) {
+                    const ageMin = Math.round(ageMs / 60_000);
+                    if (opts.json) {
+                        log.json({ ok: true, skipped: true, reason: 'fresh', lastPulledAt: rt.config.lastPulledAt, ageMinutes: ageMin });
+                    } else {
+                        log.detail(`Already up to date (last pull ${ageMin}m ago).`);
+                    }
+                    return;
+                }
+            }
+
             const ctx = await buildSyncContext(rt);
 
             // Validate --since up front so a typo doesn't silently disable the filter.

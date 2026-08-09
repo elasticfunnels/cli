@@ -23,9 +23,21 @@ Then run `ef --help`. Requires Node.js ≥ 18.
 
 **Staying current:** `ef` checks npm about once a day (in the background, never
 blocking a command) and prints a one-line `▲ Update available X → Y` nudge to
-stderr on interactive runs when a newer version is out — then just re-run
-`npm i -g @elasticfunnels/cli`. It stays silent in scripts, pipes, CI, and with
-`--json`. Disable entirely with `NO_UPDATE_NOTIFIER=1` (or `EF_NO_UPDATE_NOTIFIER=1`).
+stderr on interactive runs when a newer version is out. Act on it with:
+
+```bash
+ef update            # upgrade in place
+ef update --check    # just report; change nothing
+```
+
+`ef update` works out which package manager installed the copy you are running
+— npm, pnpm, yarn or bun — and runs that one, into the same prefix, so you never
+end up with a second copy while the old one stays on your PATH. It only touches
+a **global** install: a project-local copy or a source checkout is reported with
+the command that is right for it, and nothing is run.
+
+The nudge itself stays silent in scripts, pipes, CI, and with `--json`. Disable
+it entirely with `NO_UPDATE_NOTIFIER=1` (or `EF_NO_UPDATE_NOTIFIER=1`).
 
 ### From source
 
@@ -175,6 +187,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef init` | Bind this folder to a brand. Browser sign-in by default; `--code` for a one-time pairing code, `--api-key`/`--brand-id` (or `$EF_API_KEY`) for unattended runs. Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
+| `ef update` | Update the CLI in place, using whichever package manager installed it (npm/pnpm/yarn/bun) and the same prefix. `--check` reports without installing; `--force` reinstalls the latest anyway. Global installs only — a project-local copy or source checkout is reported, not touched. |
 | `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md`, install the `ef-page-events` skill into `.claude/skills/`, and add a **SessionStart hook** that runs `ef pull --if-stale 30` so a session never starts on stale pages. Idempotent; `--no-skills` / `--no-hook` to skip either, `--print` to preview. `ef init` runs this too. |
 | `ef codex` (alias `ef agents`) | The same guidance, written to `AGENTS.md` — the file Codex and several editors read. Codex has no skills or hooks, so the pull-before-you-work rule lives in the text. `ef init` writes both files. |
 | `ef mcp` | Serve this brand to a desktop AI app (Claude Desktop, ChatGPT Desktop) over **stdio MCP**. Credentials come from the project's `.ef/auth`, so the app's config file holds no secret. `--project <dir>` to point at a folder explicitly. |

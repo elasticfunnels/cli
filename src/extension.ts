@@ -22,6 +22,7 @@ import { registerAskCommand } from './commands/ask';
 import { registerClaudeCommand, registerCodexCommand } from './commands/claude';
 import { registerMcpCommand } from './commands/mcp';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
+import { registerUpdateCommand } from './commands/update';
 import { registerConfigCommand } from './commands/config';
 import { registerWatchCommand } from './commands/watch';
 import { registerLintCommand } from './commands/lint';
@@ -84,6 +85,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerCodexCommand(program);
     registerMcpCommand(program);
     registerInstallHighlighterCommand(program);
+    registerUpdateCommand(program);
     registerConfigCommand(program);
     registerWatchCommand(program);
     registerLintCommand(program);

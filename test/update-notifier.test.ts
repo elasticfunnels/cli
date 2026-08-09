@@ -13,11 +13,11 @@ test('isNewer compares releases numerically, not lexically', () => {
     assert.equal(isNewer('garbage', '0.10.0'), false, 'unparseable never nudges');
 });
 
-test('formatUpdateNotice names both versions and the install command', () => {
+test('formatUpdateNotice names both versions and points at "ef update"', () => {
     const s = formatUpdateNotice('0.10.0', '0.11.0');
     assert.match(s, /0\.10\.0/);
     assert.match(s, /0\.11\.0/);
-    assert.match(s, /npm i -g @elasticfunnels\/cli/);
+    assert.match(s, /ef update/);
 });
 
 test('getUpdateNotice stays silent for --json and --version (scriptable output)', () => {

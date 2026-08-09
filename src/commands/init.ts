@@ -93,7 +93,7 @@ async function confirmFolderIfNotEmpty(dir: string, opts: InitOptions): Promise<
 export function registerInitCommand(program: Command): void {
     program
         .command('init')
-        .description('Bind the current folder to an ElasticFunnels brand. Signs in through your browser by default. Writes .ef/config.json and .ef/auth (chmod 600 on Unix).')
+        .description('Bind the current folder to an ElasticFunnels brand. Signs in through your browser by default. Writes .ef/config.json and .ef/auth (chmod 600 on Unix), runs "ef claude" + "ef codex" (--no-claude to skip), then pulls (--no-pull to skip).')
         .option('--api-url <url>', `ElasticFunnels API base URL (default: ${Defaults.apiUrl}, or from .vscode/settings.json).`)
         .option('--auth', 'Sign in through the browser (default when no key is supplied). Nothing secret is typed or pasted.')
         .option('--code <code>', 'Redeem a one-time pairing code from the app (Settings → Claude Code → advanced). For machines with no browser.')
@@ -110,8 +110,26 @@ export function registerInitCommand(program: Command): void {
         .option('--inherit', 'If a parent directory already has a .ef project, update its config in place instead of creating a new nested project.')
         .option('--force', 'Skip the "folder is not empty" confirmation prompt.')
         .option('--no-pull', 'Bind only — skip the initial full sync.')
-        .option('--no-claude', 'Skip writing ElasticFunnels guidance into CLAUDE.md.')
+        .option('--no-claude', 'Skip the AI-tool setup entirely: no CLAUDE.md/AGENTS.md guidance, no skills, no SessionStart hook.')
         .option('--json', 'Print the resulting config as JSON.')
+        .addHelpText('after', `
+Examples:
+  $ ef init                                  Browser sign-in, then full sync
+  $ ef init --code ABCD-1234                 Headless machine, one-time pairing code
+  $ ef init --api-key <key> --brand-id 42    Unattended / CI
+  $ ef init --no-pull --no-claude            Bind only, nothing else
+
+Besides .ef/config.json and .ef/auth, a default init also sets this folder up
+for AI tools — the same work "ef claude" and "ef codex" do on their own:
+
+  CLAUDE.md               ElasticFunnels guidance (Claude Code reads this)
+  AGENTS.md               the same guidance (Codex and several editors read this)
+  .claude/skills/         the bundled ef-page-events skill
+  .claude/settings.json   a SessionStart hook running "ef pull --if-stale 30"
+
+All of it is idempotent and written between markers, so re-running "ef claude"
+or "ef codex" later updates the managed block and leaves the rest of your file
+alone. Pass --no-claude to skip the lot.`)
         .action(async (opts: InitOptions) => {
             await runInit(opts);
         });

@@ -6,6 +6,8 @@ import {
     BackendScript,
     Brand,
     BrandDomain,
+    BrandCollection,
+    BrandCollectionField,
     BrandEmail,
     BrandTemplate,
     BrandTemplatePage,
@@ -1007,6 +1009,54 @@ export class ApiClient {
         const res = await this.raw('DELETE', `/api/brands/${brandId}/domains/${domainId}`);
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
         if (res.status >= 400) throw httpError('Delete domain', res);
+    }
+
+    // ── Collections (form stores) ───────────────────────────────────
+
+    async listCollections(brandId: number): Promise<BrandCollection[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/all`);
+        if (res.status === 403) {
+            throw new CliError(ExitCode.Auth, 'The collections module is not enabled for this brand (or your credential lacks access).');
+        }
+        if (res.status >= 400) throw httpError('List collections', res);
+        return (Array.isArray(res.data) ? res.data : []) as BrandCollection[];
+    }
+
+    /** `ref` may be a numeric id or the collection code — the server accepts both. */
+    async getCollection(brandId: number, ref: string | number): Promise<BrandCollection> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${encodeURIComponent(String(ref))}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand. Run "ef collections list".`);
+        if (res.status >= 400) throw httpError('Get collection', res);
+        const body = res.data as { collection?: BrandCollection } | BrandCollection;
+        return ('collection' in body && body.collection ? body.collection : body) as BrandCollection;
+    }
+
+    async getCollectionFields(brandId: number, ref: string | number): Promise<BrandCollectionField[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${encodeURIComponent(String(ref))}/fields`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand.`);
+        if (res.status >= 400) throw httpError('Get collection fields', res);
+        const body = res.data as { fields?: BrandCollectionField[] } | BrandCollectionField[];
+        return (Array.isArray(body) ? body : body.fields ?? []) as BrandCollectionField[];
+    }
+
+    async listCollectionEntries(brandId: number, ref: string | number, params?: Record<string, unknown>): Promise<unknown[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${encodeURIComponent(String(ref))}/entries`, { params });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand.`);
+        if (res.status >= 400) throw httpError('List collection entries', res);
+        return crmList<unknown>(res.data);
+    }
+
+    /**
+     * Create a collection. The server generates the `code` — that code is what
+     * a form's `action`/`data-collection` must reference, so callers should read
+     * it off the returned object rather than guessing.
+     */
+    async createCollection(brandId: number, payload: { name: string; fields: BrandCollectionField[] } & Record<string, unknown>): Promise<BrandCollection> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/collections`, { data: payload });
+        if (res.status === 403) throw planOrAuthError(res);
+        if (res.status >= 400) throw httpError('Create collection', res);
+        const body = res.data as { collection?: BrandCollection } | BrandCollection;
+        return ('collection' in body && body.collection ? body.collection : body) as BrandCollection;
     }
 
     // ── Internal HTTP helper ────────────────────────────────────────

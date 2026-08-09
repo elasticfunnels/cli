@@ -453,6 +453,42 @@ export interface PushResult {
  * Adopting the server's version keeps local === server. Returns null on any
  * error so the caller falls back to the pushed body.
  */
+/**
+ * Say which collections a save just created.
+ *
+ * The rewrite is invisible otherwise: the user writes
+ * `<form data-collection="COLLECTION_CODE">`, the server swaps in a real code
+ * and we quietly overwrite their file with it. Naming the code here is what
+ * lets them (or an agent) go look at the right collection afterwards.
+ */
+function reportCollectionsCreated(
+    created: Array<{ code: string; id: number; name?: string }> | undefined,
+    rel: string,
+    body: string,
+): void {
+    if (created?.length) {
+        const list = created.map((col) => `${col.code} (#${col.id})`).join(', ');
+        log.info(`  Created ${created.length} collection${created.length === 1 ? '' : 's'} for ${rel}: ${list}`);
+        return;
+    }
+    // The server silently declines to wire forms on pages containing backend
+    // template syntax — its HTML parser would mangle the directives. Silent is
+    // the problem: the form ships looking fine and collects nothing.
+    if (hasForm(body) && hasBackendTemplateSyntax(body)) {
+        log.warn(`${rel} has a <form> but also backend template syntax ({{ }} or @if/@foreach), so the server skipped form/collection wiring. The form will not store submissions.`);
+        log.detail('  Move the form to a page without {{ }} / @directives, or point it at an existing collection code.');
+    }
+}
+
+/** Mirrors PageEditorController's own guard, so we can explain a skip it makes silently. */
+function hasBackendTemplateSyntax(html: string): boolean {
+    return /@(if|else|endif|foreach|endforeach|extends|block|endblock|component|set)\b/.test(html) || html.includes('{{');
+}
+
+function hasForm(html: string): boolean {
+    return html.includes('<form');
+}
+
 async function fetchCanonicalBody(
     ctx: SyncContext,
     type: 'page' | 'component',
@@ -720,7 +756,13 @@ export async function pushPageFile(
             draft: isDraft,
             revisionId: isDraft ? (meta.revisionId ?? trackedRev) : null,
             expectedRevisionId: expectedRev,
+            // A `<form data-collection="COLLECTION_CODE">` is only turned into a
+            // real collection when this is asked for. Without it the placeholder
+            // ships to the live page and the form collects nothing. The MCP
+            // server has always sent it; `ef push` must behave the same.
+            autoCreateCollections: true,
         });
+        reportCollectionsCreated(res.collections_created, rel, body);
         const newMeta: EfMeta = { ...meta, path: rel };
         // Adopt the server's canonical version (inline-split-test ids, reindent,
         // auto-created collections) so the next push doesn't see a phantom diff.
@@ -766,26 +808,39 @@ export async function pushPageFile(
     const isDraftCreate = opts.draft ?? ctx.rt.config.saveMode === 'draft';
     const res = await ctx.api.updatePageHtml(ctx.rt.config.brandId, created.id, body, {
         draft: isDraftCreate,
+        autoCreateCollections: true,
     });
+    reportCollectionsCreated(res.collections_created, rel, body);
     const newMeta: EfMeta = {
         v: 1, type: 'page', brandId: ctx.rt.config.brandId, id: created.id,
         slug: created.slug ?? slug, name: created.title ?? title,
         path: rel,
     };
-    if (isDraftCreate && res.revision_id != null) {
-        newMeta.revisionId = res.revision_id;
+    // Same canonical read-back the update path does. A brand-new page is the
+    // most likely one to contain a `COLLECTION_CODE` placeholder, and skipping
+    // this left the real code on the server while the local file — the thing an
+    // agent reads next — still said COLLECTION_CODE.
+    const canonical = await fetchCanonicalBody(ctx, 'page', created.id);
+    // Adopt the server's copy only when it actually came back with content. A
+    // freshly-created page can read back empty (the write hasn't surfaced on
+    // the read path yet), and taking that at face value would blank the file we
+    // just pushed.
+    const finalBody = canonical?.body ? canonical.body : body;
+    const canonRev = canonical?.revisionId ?? res.revision_id ?? null;
+    if (isDraftCreate && canonRev != null) {
+        newMeta.revisionId = canonRev;
     }
-    await writeFileAtomic(abs, withEfMeta(newMeta, body));
+    await writeFileAtomic(abs, withEfMeta(newMeta, finalBody));
     ctx.state.setEntry('page', {
         path: rel,
         id: created.id,
         type: 'page',
-        revisionId: isDraftCreate ? (res.revision_id ?? null) : null,
+        revisionId: isDraftCreate ? canonRev : null,
         updatedAt: new Date().toISOString(),
-        serverUpdatedAt: new Date().toISOString(),
-        contentHash: sha256(Buffer.from(body, 'utf8')),
+        serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
+        contentHash: sha256(Buffer.from(finalBody, 'utf8')),
     });
-    await writeSnapshot(ctx.rt.brandRoot, 'page', created.id, Buffer.from(body, 'utf8'));
+    await writeSnapshot(ctx.rt.brandRoot, 'page', created.id, Buffer.from(finalBody, 'utf8'));
     return {
         rel,
         kind: 'page',

@@ -15,7 +15,7 @@ import { formatRelative, renderTable } from '../utils/format';
  * so a domain added by the CLI behaves identically to one added in the app.
  */
 
-function statusLabel(status?: string): string {
+export function statusLabel(status?: string): string {
     switch (status) {
         case 'validated': return 'LIVE';
         case 'pending-cloudflare': return 'pending DNS records';
@@ -28,7 +28,7 @@ function statusLabel(status?: string): string {
 }
 
 /** Resolve a domain by numeric id or by (case-insensitive) domain name. */
-async function resolveDomain(api: ApiClient, brandId: number, ref: string): Promise<BrandDomain> {
+export async function resolveDomain(api: ApiClient, brandId: number, ref: string): Promise<BrandDomain> {
     const id = parseInt(ref, 10);
     if (Number.isFinite(id) && /^\d+$/.test(ref)) {
         return api.getDomain(brandId, id);
@@ -60,7 +60,16 @@ function printRecords(vi: DomainValidationInstructions): void {
 export function registerDomainsCommand(program: Command): void {
     const cmd = program
         .command('domains')
-        .description('Custom domains — list, add, print DNS records, and validate.');
+        .description('Custom domains — list, add, print DNS records, and validate. To point a page at a domain, see "ef pages settings --domain".')
+        .addHelpText('after', `
+Attaching pages to a domain is a page setting, not a domain one:
+
+  $ ef pages settings pricing --domain shop.example.com             assign
+  $ ef pages settings home --domain shop.example.com --homepage     assign + serve at the root
+  $ ef pages settings pricing --domain none                         detach
+
+Typical setup order: "ef domains add", "ef domains records" (create the DNS
+entries), "ef domains validate", then attach pages as above.`);
 
     cmd.command('list')
         .alias('ls')

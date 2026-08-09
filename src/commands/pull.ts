@@ -19,6 +19,7 @@ import {
 import { resolveComponentByCodeOrName, resolvePageBySlug } from './shared';
 import { classifyAbsPath } from '../sync/sync';
 import { pullEventsForAllPages } from './pageEvents';
+import { withReauth } from './authFlow';
 
 interface PullOpts {
     json?: boolean;
@@ -69,22 +70,80 @@ export async function runFullSync(rt: EfRuntime, opts: {
         const skipped = arr.filter((x) => x.skipped).length;
         return skipped ? `${arr.length} ${kind} (${arr.length - skipped} fetched, ${skipped} already current)` : `${arr.length} ${kind}`;
     };
-    log_(`${c.bold('Full sync')}${opts.adopt ? ' (adopting existing files)' : ''} → ${ctx.rt.brandRoot}`);
-    const pages = await pullAllPages(ctx, a);
-    log_(`${c.green('✓')} ${summary('pages', pages)}`);
-    const components = await pullAllComponents(ctx, a);
-    log_(`${c.green('✓')} ${summary('components', components)}`);
-    const scripts = await pullAllScripts(ctx, a);
-    log_(`${c.green('✓')} ${summary('scripts', scripts)}`);
-    const assets = await pullAllAssets(ctx, a);
-    log_(`${c.green('✓')} ${summary('assets', assets)}`);
-    const variables = await pullVariables(ctx);
-    log_(`${c.green('✓')} variables → ${variables.rel}`);
-    await ctx.state.save();
-    rt.config.lastPulledAt = new Date().toISOString();
-    await saveConfig(rt.projectRoot, rt.config);
+
+    const counts = { pages: 0, components: 0, scripts: 0, assets: 0 };
+    const stages: Array<{ key: keyof typeof counts; run: () => Promise<Array<{ skipped?: boolean }>> }> = [
+        { key: 'pages', run: () => pullAllPages(ctx, a) },
+        { key: 'components', run: () => pullAllComponents(ctx, a) },
+        { key: 'scripts', run: () => pullAllScripts(ctx, a) },
+        { key: 'assets', run: () => pullAllAssets(ctx, a) },
+    ];
+
+    /*
+     * Ctrl-C during a sync used to lose every baseline for the files that had
+     * already been written: `state.save()` ran only at the very end, so the
+     * tree was left populated but unrecorded. Handle the signal cooperatively —
+     * let in-flight requests finish, stop starting new ones, and always flush
+     * the state file on the way out.
+     *
+     * A second Ctrl-C means the user wants out now, not a tidy shutdown.
+     */
+    let hardExit = false;
+    const onInterrupt = (): void => {
+        if (hardExit) process.exit(ExitCode.Interrupted);
+        hardExit = true;
+        ctx.aborted = 'interrupt';
+        if (!opts.json) log.warn('\nInterrupted — finishing in-flight downloads and saving progress…');
+    };
+    process.on('SIGINT', onInterrupt);
+    process.on('SIGTERM', onInterrupt);
+
+    let completed = false;
+    try {
+        log_(`${c.bold('Full sync')}${opts.adopt ? ' (adopting existing files)' : ''} → ${ctx.rt.brandRoot}`);
+        for (const stage of stages) {
+            if (ctx.aborted) break;
+            const arr = await stage.run();
+            counts[stage.key] = arr.length;
+            log_(`${c.green('✓')} ${summary(stage.key, arr)}`);
+        }
+        if (!ctx.aborted) {
+            const variables = await pullVariables(ctx);
+            log_(`${c.green('✓')} variables → ${variables.rel}`);
+            completed = true;
+        }
+    } finally {
+        process.off('SIGINT', onInterrupt);
+        process.off('SIGTERM', onInterrupt);
+        // Runs on success, on abort, AND on a thrown error (a 401 from a list
+        // call, a dropped connection). Whatever reached disk gets its baseline
+        // recorded, so the next pull sees an accurate picture instead of
+        // treating every file as unknown.
+        try {
+            await ctx.state.save();
+        } catch (err) {
+            log.warn(`Could not save sync state: ${err instanceof Error ? err.message : String(err)}. The next pull will re-fetch.`);
+        }
+        // Only a complete sync is "a pull". Stamping this on a partial run would
+        // let `--if-stale` skip the retry the user needs.
+        if (completed) {
+            rt.config.lastPulledAt = new Date().toISOString();
+            await saveConfig(rt.projectRoot, rt.config);
+        }
+    }
+
+    if (ctx.aborted === 'interrupt') {
+        throw new CliError(
+            ExitCode.Interrupted,
+            `Stopped. ${counts.pages} pages, ${counts.components} components, ${counts.scripts} scripts, ${counts.assets} assets were saved and recorded — re-run "ef pull" to finish (already-current files are skipped).`,
+        );
+    }
+    if (ctx.aborted === 'auth') {
+        throw new CliError(ExitCode.Auth, 'Credential was rejected partway through the sync, so it was stopped.');
+    }
+
     reportPullFailures(ctx);
-    return { pages: pages.length, components: components.length, scripts: scripts.length, assets: assets.length };
+    return counts;
 }
 
 export function registerPullCommand(program: Command): void {
@@ -137,87 +196,103 @@ Examples:
                 }
             }
 
-            const ctx = await buildSyncContext(rt);
-
-            // Validate --since up front so a typo doesn't silently disable the filter.
-            const sinceIso = opts.since ? validateIso(opts.since) : null;
-
-            if (sinceIso != null && (!target || target === 'pages' || target === 'assets')) {
-                const scope = (target === 'pages' || target === 'assets') ? target : 'all';
-                return await runIncrementalPull(ctx, rt, scope, sinceIso, opts);
-            }
-            if (sinceIso != null) {
-                throw new CliError(ExitCode.Validation, `--since only supports the 'pages' and 'assets' kinds (the API only exposes sync-delta for those). Got target="${target}".`);
-            }
-
-            if (!target) {
-                const r = await runFullSync(rt, opts);
-                const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
-                if (opts.events && !opts.json) log.info(`  pulled events for ${events.length} page(s)`);
-                if (opts.json) {
-                    log.json({ ok: true, brandRoot: rt.brandRoot, pulled: { ...r, variables: 1, events: events.length } });
-                }
-                return;
-            }
-
-            const t = target.trim();
-            if (t === 'pages') {
-                const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
-                const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
-                await ctx.state.save();
-                reportPullFailures(ctx);
-                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel), events: events.length }); return; }
-                log.success(`Pulled ${out.length} pages.${opts.events ? ` Events for ${events.length}.` : ''}`);
-                return;
-            }
-            if (t === 'components') {
-                const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
-                await ctx.state.save();
-                reportPullFailures(ctx);
-                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
-                log.success(`Pulled ${out.length} components.`);
-                return;
-            }
-            if (t === 'scripts') {
-                const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
-                await ctx.state.save();
-                reportPullFailures(ctx);
-                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
-                log.success(`Pulled ${out.length} scripts.`);
-                return;
-            }
-            if (t === 'assets') {
-                const out = await pullAllAssets(ctx, { adopt: opts.adopt });
-                await ctx.state.save();
-                reportPullFailures(ctx);
-                if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
-                log.success(`Pulled ${out.length} assets.`);
-                return;
-            }
-            if (t === 'variables') {
-                const v = await pullVariables(ctx);
-                await ctx.state.save();
-                if (opts.json) { log.json({ ok: true, pulled: [v.rel] }); return; }
-                log.success(`Pulled variables → ${v.rel}.`);
-                return;
-            }
-
-            // Targeted single-entity forms: `ef pull page <slug>`, `ef pull component <code>`, etc.
-            if (key && (t === 'page' || t === 'component' || t === 'script' || t === 'asset')) {
-                return await pullByKindAndKey(ctx, t as 'page' | 'component' | 'script' | 'asset', key, opts);
-            }
-            if (key) {
-                throw new CliError(ExitCode.Validation, `Unexpected extra argument "${key}". Use one of: pages, components, scripts, assets, variables, page <slug>, component <code>, script <code>, asset <path>.`);
-            }
-
-            // Path-based: did the user pass `pages/about-us.ef`?
-            const abs = path.isAbsolute(t) ? t : path.resolve(process.cwd(), t);
-            const cls = classifyAbsPath(rt.brandRoot, abs) ?? classifyRelative(rt.brandRoot, t);
-            if (!cls) {
-                throw new CliError(ExitCode.Validation, `Don't know how to pull "${t}". Try: ef pull pages | ef pull page <slug> | ef pull pages/<slug>.ef`);
-            }
-            return await pullByKindAndPath(ctx, cls.kind, cls.rel, opts);
+            // Everything past this point talks to the API, so any of it can hit
+            // a rejected credential. Wrapping the whole body once means an
+            // interactive user is offered a re-login and the pull is retried,
+            // while a script or the SessionStart hook still just gets the error.
+            await withReauth(rt, opts, (active) => runPull(active, target, key, opts));
         });
+}
+
+/**
+ * The body of `ef pull`, past the freshness check.
+ *
+ * Split out so it can be re-run verbatim against a fresh credential after an
+ * interactive re-login — see `withReauth`. Takes the runtime as a parameter
+ * rather than closing over it for exactly that reason: the retry must use the
+ * new key, not the dead one.
+ */
+async function runPull(rt: EfRuntime, target: string | undefined, key: string | undefined, opts: PullOpts): Promise<void> {
+    const ctx = await buildSyncContext(rt);
+
+    // Validate --since up front so a typo doesn't silently disable the filter.
+    const sinceIso = opts.since ? validateIso(opts.since) : null;
+
+    if (sinceIso != null && (!target || target === 'pages' || target === 'assets')) {
+        const scope = (target === 'pages' || target === 'assets') ? target : 'all';
+        return await runIncrementalPull(ctx, rt, scope, sinceIso, opts);
+    }
+    if (sinceIso != null) {
+        throw new CliError(ExitCode.Validation, `--since only supports the 'pages' and 'assets' kinds (the API only exposes sync-delta for those). Got target="${target}".`);
+    }
+
+    if (!target) {
+        const r = await runFullSync(rt, opts);
+        const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
+        if (opts.events && !opts.json) log.info(`  pulled events for ${events.length} page(s)`);
+        if (opts.json) {
+            log.json({ ok: true, brandRoot: rt.brandRoot, pulled: { ...r, variables: 1, events: events.length } });
+        }
+        return;
+    }
+
+    const t = target.trim();
+    if (t === 'pages') {
+        const out = await pullAllPages(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
+        const events = opts.events ? await pullEventsForAllPages(rt, ctx.api) : [];
+        await ctx.state.save();
+        reportPullFailures(ctx);
+        if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel), events: events.length }); return; }
+        log.success(`Pulled ${out.length} pages.${opts.events ? ` Events for ${events.length}.` : ''}`);
+        return;
+    }
+    if (t === 'components') {
+        const out = await pullAllComponents(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
+        await ctx.state.save();
+        reportPullFailures(ctx);
+        if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
+        log.success(`Pulled ${out.length} components.`);
+        return;
+    }
+    if (t === 'scripts') {
+        const out = await pullAllScripts(ctx, { adopt: opts.adopt, force: opts.force, merge: opts.merge });
+        await ctx.state.save();
+        reportPullFailures(ctx);
+        if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
+        log.success(`Pulled ${out.length} scripts.`);
+        return;
+    }
+    if (t === 'assets') {
+        const out = await pullAllAssets(ctx, { adopt: opts.adopt });
+        await ctx.state.save();
+        reportPullFailures(ctx);
+        if (opts.json) { log.json({ ok: true, pulled: out.map(o => o.rel) }); return; }
+        log.success(`Pulled ${out.length} assets.`);
+        return;
+    }
+    if (t === 'variables') {
+        const v = await pullVariables(ctx);
+        await ctx.state.save();
+        if (opts.json) { log.json({ ok: true, pulled: [v.rel] }); return; }
+        log.success(`Pulled variables → ${v.rel}.`);
+        return;
+    }
+
+    // Targeted single-entity forms: `ef pull page <slug>`, `ef pull component <code>`, etc.
+    if (key && (t === 'page' || t === 'component' || t === 'script' || t === 'asset')) {
+        return await pullByKindAndKey(ctx, t as 'page' | 'component' | 'script' | 'asset', key, opts);
+    }
+    if (key) {
+        throw new CliError(ExitCode.Validation, `Unexpected extra argument "${key}". Use one of: pages, components, scripts, assets, variables, page <slug>, component <code>, script <code>, asset <path>.`);
+    }
+
+    // Path-based: did the user pass `pages/about-us.ef`?
+    const abs = path.isAbsolute(t) ? t : path.resolve(process.cwd(), t);
+    const cls = classifyAbsPath(rt.brandRoot, abs) ?? classifyRelative(rt.brandRoot, t);
+    if (!cls) {
+        throw new CliError(ExitCode.Validation, `Don't know how to pull "${t}". Try: ef pull pages | ef pull page <slug> | ef pull pages/<slug>.ef`);
+    }
+    return await pullByKindAndPath(ctx, cls.kind, cls.rel, opts);
 }
 
 function validateIso(value: string): string {

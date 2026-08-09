@@ -107,8 +107,20 @@ export class ApiClient {
     // ── Connection / brand discovery ─────────────────────────────────
 
     async ping(brandId: number): Promise<boolean> {
+        return (await this.pingDetailed(brandId)).ok;
+    }
+
+    /**
+     * `ping` with the status code kept.
+     *
+     * "Could not reach the brand" and "the server answered, and rejected your
+     * credential" are different problems with different fixes, and collapsing
+     * both to `false` made `ef status` report a revoked token as an unreachable
+     * API — sending people to check their network instead of re-authenticating.
+     */
+    async pingDetailed(brandId: number): Promise<{ ok: boolean; status: number }> {
         const res = await this.raw('GET', `/api/brands/${brandId}/pages/all`, { params: { type: 'editor' } });
-        return res.status === 200;
+        return { ok: res.status === 200, status: res.status };
     }
 
     /**
@@ -119,7 +131,10 @@ export class ApiClient {
     async listBrands(): Promise<Brand[]> {
         const res = await this.raw('GET', '/api/brands/all');
         if (res.status === 401 || res.status === 403) {
-            throw new CliError(ExitCode.Auth, 'API key was rejected. Make sure it\'s a valid ElasticFunnels brand API key.');
+            // Deliberately says nothing about *which* kind of credential to go
+            // fix: the dispatcher appends that, based on what is actually
+            // stored. See utils/credential.ts.
+            throw new CliError(ExitCode.Auth, `Credential was rejected by the server (HTTP ${res.status}).`);
         }
         if (res.status >= 400) throw httpError('List brands', res);
         const body = res.data as Brand[] | { data?: Brand[] };

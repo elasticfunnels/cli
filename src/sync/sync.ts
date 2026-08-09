@@ -75,6 +75,12 @@ export interface SyncContext {
     onProgress?: (kind: 'page' | 'component' | 'script' | 'asset', label: string, done: number, total: number) => void;
     /** Accumulated pull outcomes so callers can exit non-zero on real failures. */
     stats: { failed: number; deleted: number };
+    /**
+     * Cooperative cancellation. Set by Ctrl-C, or by the first auth failure.
+     * In-flight requests are left to finish; nothing new is started. Callers
+     * must still persist whatever landed — see runFullSync.
+     */
+    aborted?: false | 'interrupt' | 'auth';
 }
 
 /**
@@ -92,6 +98,9 @@ async function pullEach<T>(
     let done = 0;
     const failures: string[] = [];
     const out = await mapWithConcurrency(items, DEFAULT_PULL_CONCURRENCY, async (item) => {
+        // Cancelled (Ctrl-C, or a credential that just died): don't start work
+        // we already know will be thrown away or rejected.
+        if (ctx.aborted) return null;
         try {
             const r = await pull(item);
             done++;
@@ -106,12 +115,16 @@ async function pullEach<T>(
             } else {
                 ctx.stats.failed++;
                 failures.push(err instanceof Error ? err.message : String(err));
+                // A rejected credential will reject every remaining item too.
+                // Stop now instead of firing hundreds of doomed requests and
+                // burying the cause under identical warnings.
+                if (err instanceof CliError && err.code === ExitCode.Auth) ctx.aborted = 'auth';
             }
             ctx.onProgress?.(kind, `(skipped a ${kind})`, done, total);
             return null;
         }
     });
-    if (failures.length) {
+    if (failures.length && ctx.aborted !== 'auth') {
         log.warn(`${failures.length} ${kind}${failures.length === 1 ? '' : 's'} FAILED to pull (network/server error — NOT deleted) and were skipped. First: ${failures[0]}. Re-run "ef pull" to retry.`);
     }
     return out.filter((r): r is { rel: string; skipped?: boolean } => r != null).map((r) => ({ rel: r.rel, skipped: r.skipped }));

@@ -5,6 +5,7 @@ import { loader } from '../utils/loader';
 import { loadRuntime } from '../utils/store';
 import { SyncStateFile, STATE_VERSION } from '../sync/stateFile';
 import { CliError, ExitCode } from '../utils/exit';
+import { credentialKind, reauthHint } from '../utils/credential';
 
 export function registerStatusCommand(program: Command): void {
     program
@@ -17,16 +18,27 @@ export function registerStatusCommand(program: Command): void {
 
             let connected = false;
             let connectError: string | null = null;
+            // Distinct from "unreachable": the server answered, it just won't
+            // accept this credential. Different cause, different fix.
+            let credentialRejected = false;
             const counts = { pages: 0, components: 0, scripts: 0, assets: 0 };
 
             const spin = opts.json ? null : loader('Checking connection');
             try {
                 try {
-                    connected = await api.ping(rt.config.brandId);
+                    const ping = await api.pingDetailed(rt.config.brandId);
+                    connected = ping.ok;
+                    if (!ping.ok && (ping.status === 401 || ping.status === 403)) {
+                        credentialRejected = true;
+                        connectError = `Credential rejected (HTTP ${ping.status}). ${reauthHint(credentialKind(rt.apiKey))}`;
+                    } else if (!ping.ok) {
+                        connectError = `Server responded HTTP ${ping.status}.`;
+                    }
                 } catch (err) {
                     connectError = err instanceof Error ? err.message : String(err);
                     if (err instanceof CliError && err.code === ExitCode.Auth) {
-                        connectError = `Auth rejected: ${err.message}`;
+                        credentialRejected = true;
+                        connectError = `${err.message} ${reauthHint(credentialKind(rt.apiKey))}`;
                     }
                 }
 
@@ -58,6 +70,8 @@ export function registerStatusCommand(program: Command): void {
                     syncRoot: rt.config.syncRoot,
                     connected,
                     connectError,
+                    credentialRejected,
+                    credential: credentialKind(rt.apiKey),
                     lastPulledAt: rt.config.lastPulledAt ?? null,
                     lastPagesSyncAt: state.lastPagesSyncAt,
                     lastAssetsSyncAt: state.lastAssetsSyncAt,
@@ -74,7 +88,10 @@ export function registerStatusCommand(program: Command): void {
 
             log.info(`${c.bold('Project')}     ${rt.projectRoot}`);
             log.info(`${c.bold('Brand')}       ${rt.config.brandId}`);
-            log.info(`${c.bold('API')}         ${rt.config.apiUrl} ${connected ? c.green('(reachable)') : c.red('(unreachable)')}`);
+            const health = connected
+                ? c.green('(reachable)')
+                : credentialRejected ? c.red('(reachable — credential rejected)') : c.red('(unreachable)');
+            log.info(`${c.bold('API')}         ${rt.config.apiUrl} ${health}`);
             if (!connected && connectError) log.detail(connectError);
             log.info(`${c.bold('Save mode')}   ${rt.config.saveMode}`);
             log.info(`${c.bold('Last pull')}   ${rt.config.lastPulledAt ?? 'never'}`);
@@ -83,7 +100,10 @@ export function registerStatusCommand(program: Command): void {
             log.info(`${c.bold('Scripts')}     ${counts.scripts}`);
             log.info(`${c.bold('Assets')}      ${counts.assets}`);
             if (stateTooNew) {
-                log.warn(`State file is schema v${state.getLoadedVersion()} but this CLI is v${STATE_VERSION}. Sync will run but local state will not be updated. Run "npm i -g @elasticfunnels/cli@latest".`);
+                log.warn(`State file is schema v${state.getLoadedVersion()} but this CLI is v${STATE_VERSION}. Sync will run but local state will not be updated. Run "ef update".`);
             }
+            // A health check that reports a dead credential and still exits 0 is
+            // how the problem stays hidden from whatever is scripting it.
+            if (credentialRejected) process.exitCode = ExitCode.Auth;
         });
 }

@@ -4,19 +4,14 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
-import { c, log } from '../utils/log';
+import { log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
 import { GUIDANCE_FILES, applyAgentGuidance, installBundledSkills, installSessionHook } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
-import {
-    DeviceToken,
-    openBrowser,
-    pollForDeviceToken,
-    redeemPairingCode,
-    startDeviceAuthorization,
-} from '../api/deviceAuth';
+import { redeemPairingCode } from '../api/deviceAuth';
+import { runDeviceSignIn } from './authFlow';
 
 interface InitOptions {
     apiUrl?: string;
@@ -92,48 +87,6 @@ async function confirmFolderIfNotEmpty(dir: string, opts: InitOptions): Promise<
     const ok = await confirm('Set up this brand in the current folder?', false);
     if (!ok) {
         throw new CliError(ExitCode.Validation, 'Aborted. Run "ef init" in a new or empty folder, or pass --force.');
-    }
-}
-
-/**
- * Browser sign-in.
- *
- * Prints the short user code and the link, opens a browser if there is one, and
- * waits. The code on screen is deliberately harmless — it cannot collect a
- * token without the device code this process is holding — so it is safe to
- * leave in a scrollback buffer or read out over a call.
- */
-async function runDeviceSignIn(apiUrl: string, opts: InitOptions): Promise<DeviceToken> {
-    const authorization = await startDeviceAuthorization(apiUrl);
-
-    if (!opts.json) {
-        log.info('');
-        log.info(`  Sign in to ElasticFunnels to connect this folder.`);
-        log.info('');
-        log.info(`  Your code:  ${c.bold(authorization.userCode)}`);
-        log.info(`  Open:       ${c.cyan(authorization.verificationUriComplete)}`);
-        log.info('');
-        log.detail('  Approve it in your browser and this will continue on its own.');
-        log.info('');
-    }
-
-    // Only reach for a browser on an interactive run. In CI or a pipe there is
-    // nothing to open, and spawning a GUI process would be surprising.
-    if (!opts.json && !opts.nonInteractive && process.stdout.isTTY === true) {
-        openBrowser(authorization.verificationUriComplete);
-    }
-
-    const ld = opts.json ? null : loader('Waiting for approval');
-    try {
-        const token = await pollForDeviceToken(apiUrl, authorization, {
-            onTick: (seconds) => ld?.update(`Waiting for approval (${seconds}s)`),
-        });
-        ld?.stop();
-        log.success(`Signed in to ${token.brandName || `brand #${token.brandId}`}.`);
-        return token;
-    } catch (err) {
-        ld?.stop();
-        throw err;
     }
 }
 

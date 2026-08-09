@@ -164,6 +164,28 @@ Other ways in, when the browser flow doesn't fit:
 | CI / scripted, unattended | `ef init --api-key <key> --brand-id <id>`, or `$EF_API_KEY`. A non-interactive run refuses the browser flow rather than hanging on it. |
 | Force browser sign-in anyway | `ef init --auth` |
 
+### When a credential stops working
+
+Disconnect a device (or regenerate a brand key) and the next command fails with
+exit 3. **Run `ef login`** — it replaces `.ef/auth` and nothing else, so the
+brand binding, your settings and every synced file survive:
+
+```bash
+ef login                    # browser sign-in
+ef login --code ABCD-1234   # headless machine
+ef login --api-key <key>    # unattended / CI
+```
+
+The new credential has to be for the brand the folder is already bound to;
+approving a different one is refused rather than silently leaving a config and
+a token that disagree. To actually switch brands, use `ef reset` then `ef init`.
+
+On an interactive terminal `ef pull` offers this inline — it prints the failure,
+asks *"Sign in again now?"*, and retries the pull with the new credential. In a
+script, a pipe, CI, or under `--json` it never prompts (that would hang the
+caller, including the `ef claude` SessionStart hook); it exits 3 with the fix in
+the message.
+
 - The legacy per-(user, brand) `EF-Access-Key` from the brand's **Settings → API**
   page still works everywhere. It is stored in plaintext, is account-wide for the
   brand, and can only be revoked by regenerating it — which breaks every other
@@ -185,6 +207,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | Command | What it does |
 | --- | --- |
 | `ef init` | Bind this folder to a brand. Browser sign-in by default; `--code` for a one-time pairing code, `--api-key`/`--brand-id` (or `$EF_API_KEY`) for unattended runs. Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
+| `ef login` (alias `ef auth`) | Sign in again for this folder, replacing only the stored credential. Use after disconnecting a device or regenerating a key. `--code` / `--api-key` for headless and CI. Keeps the brand binding and every synced file. |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
 | `ef update` | Update the CLI in place, using whichever package manager installed it (npm/pnpm/yarn/bun) and the same prefix. `--check` reports without installing; `--force` reinstalls the latest anyway. Global installs only — a project-local copy or source checkout is reported, not touched. |
@@ -201,7 +224,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pull --merge` | For locally-edited files, **3-way merge** the server version into yours (git-style `<<<<<<<`/`=======`/`>>>>>>>` conflict markers on overlap) instead of keeping local and warning. |
 | `ef pull --events` | Also pull each page's events graph to `pages/<slug>.events.json` (funnel builder / split tests). Off by default. |
 | `ef pull --since <iso>` | Incremental pull using the server's sync-delta endpoints (pages and assets only). |
-| `ef pull --if-stale <min>` | Pull only if the last one was longer ago than `<min>`; otherwise exit immediately without touching the network. What the SessionStart hook runs. |
+| `ef pull --if-stale <min>` | Pull only if the last one was longer ago than `<min>`; otherwise exit immediately without touching the network. What the SessionStart hook runs. Only a **complete** sync counts — an interrupted or failed one doesn't suppress the retry. |
 | `ef push <paths…>` | Push specific files. **Refuses (exit 4) if the entity changed on the server since you pulled** — "Changes rejected … `ef diff --server` / `ef pull --merge`" — preventing a lost update. Covers pages/components/scripts/assets. |
 | `ef push <paths…> --force` | Overwrite the server even on drift (a copy of yours is kept; the pre-push safety check is skipped). |
 | `ef push --all` | Push every file under the brand root. |
@@ -289,6 +312,7 @@ Stable so scripts can branch on them.
 | `5` | Network: DNS, timeout, connection refused |
 | `6` | Server: backend 5xx or unexpected response |
 | `7` | Not found: the file or entity you asked for doesn't exist |
+| `130` | Interrupted (Ctrl-C). Whatever had downloaded is saved and recorded — re-run to finish. |
 
 ## Drift detection (`ef diff`)
 

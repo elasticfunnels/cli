@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { renderClaudeSection, applyClaudeGuidance, installBundledSkills } from '../src/commands/claude';
+import { renderClaudeSection, applyAgentGuidance, installBundledSkills } from '../src/commands/claude';
 
 test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', () => {
     const s = renderClaudeSection();
@@ -12,13 +12,13 @@ test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', (
     }
 });
 
-test('applyClaudeGuidance creates, then updates in place (idempotent — no duplicate block)', async () => {
+test('applyAgentGuidance creates, then updates in place (idempotent — no duplicate block)', async () => {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-claude-'));
     const target = path.join(dir, 'CLAUDE.md');
     try {
-        assert.equal(await applyClaudeGuidance(target), 'created');
+        assert.equal(await applyAgentGuidance(target), 'created');
         const first = await fs.promises.readFile(target, 'utf8');
-        assert.equal(await applyClaudeGuidance(target), 'updated');
+        assert.equal(await applyAgentGuidance(target), 'updated');
         const second = await fs.promises.readFile(target, 'utf8');
         assert.equal(second, first, 'idempotent re-run produces identical content');
         assert.equal(second.match(/ef:begin/g)?.length, 1, 'exactly one managed block');
@@ -49,12 +49,12 @@ test('installBundledSkills writes ef-page-events into .claude/skills/ with valid
     }
 });
 
-test('applyClaudeGuidance appends to an existing CLAUDE.md without clobbering it', async () => {
+test('applyAgentGuidance appends to an existing CLAUDE.md without clobbering it', async () => {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-claude-'));
     const target = path.join(dir, 'CLAUDE.md');
     try {
         await fs.promises.writeFile(target, '# My project\n\nExisting notes.\n');
-        assert.equal(await applyClaudeGuidance(target), 'appended');
+        assert.equal(await applyAgentGuidance(target), 'appended');
         const out = await fs.promises.readFile(target, 'utf8');
         assert.ok(out.includes('# My project'), 'keeps existing content');
         assert.ok(out.includes('Existing notes.'));

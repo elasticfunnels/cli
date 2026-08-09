@@ -19,7 +19,8 @@ import { registerAssetsCommand } from './commands/assets';
 import { registerVariablesCommand } from './commands/variables';
 import { registerDiffCommand } from './commands/diff';
 import { registerAskCommand } from './commands/ask';
-import { registerClaudeCommand } from './commands/claude';
+import { registerClaudeCommand, registerCodexCommand } from './commands/claude';
+import { registerMcpCommand } from './commands/mcp';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerConfigCommand } from './commands/config';
 import { registerWatchCommand } from './commands/watch';
@@ -80,6 +81,8 @@ Designed for Claude Code, scripts, and humans equally:
     registerDiffCommand(program);
     registerAskCommand(program);
     registerClaudeCommand(program);
+    registerCodexCommand(program);
+    registerMcpCommand(program);
     registerInstallHighlighterCommand(program);
     registerConfigCommand(program);
     registerWatchCommand(program);

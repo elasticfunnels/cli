@@ -17,3 +17,5 @@ export type { BrandEmail } from '../models/email';
 export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../models/crm';
 export type { Funnel } from '../models/funnel';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';
+export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';
+export { COLLECTION_FIELD_TYPES } from '../models/collection';

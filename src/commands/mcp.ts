@@ -108,14 +108,26 @@ const TOOLS: ToolDefinition[] = [
             additionalProperties: false,
         },
         run: async (args, { api, rt }) => {
-            const res: any = await api.updatePageHtml(rt.config.brandId, Number(args.page_id), String(args.html), {
+            const pageId = Number(args.page_id);
+            const res: any = await api.updatePageHtml(rt.config.brandId, pageId, String(args.html), {
                 draft: !!args.draft,
                 autoCreateCollections: true,
             });
+            // The server rewrites the HTML it was given — `COLLECTION_CODE`
+            // placeholders become real codes, forms get an `action`. Returning
+            // only a revision id left the model believing its own draft was
+            // what shipped, so its next edit would re-send the placeholder and
+            // undo the rewrite. Hand back what the page actually says now.
+            const canonical = await api.getPageContent(rt.config.brandId, pageId).catch(() => null);
             return {
                 ok: true,
                 published: !args.draft,
-                revision_id: res?.revision_id ?? null,
+                revision_id: canonical?.revision_id ?? res?.revision_id ?? null,
+                collections_created: res?.collections_created ?? [],
+                html: canonical?.html ?? null,
+                note: canonical?.html
+                    ? 'The server may have rewritten your HTML (collection codes, form actions). "html" is the saved version — use it as the base for your next edit.'
+                    : undefined,
             };
         },
     },

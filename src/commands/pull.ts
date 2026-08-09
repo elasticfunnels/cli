@@ -20,6 +20,7 @@ import { resolveComponentByCodeOrName, resolvePageBySlug } from './shared';
 import { classifyAbsPath } from '../sync/sync';
 import { pullEventsForAllPages } from './pageEvents';
 import { withReauth } from './authFlow';
+import { guidanceVersion, refreshGuidanceIfStale } from './claude';
 
 interface PullOpts {
     json?: boolean;
@@ -171,6 +172,17 @@ Examples:
         .option('--if-stale <minutes>', 'Do nothing if the last pull was more recent than this. Cheap enough to run on every session start — see the hook `ef claude` installs.')
         .action(async (target: string | undefined, key: string | undefined, opts: PullOpts) => {
             const rt = await loadRuntime();
+
+            // Re-stamp CLAUDE.md / AGENTS.md if they were written by an older
+            // CLI. Done here, before the --if-stale shortcut, because the
+            // SessionStart hook's usual outcome is "already fresh, exit" — and
+            // that is precisely the moment an agent is about to read them.
+            try {
+                const refreshed = await refreshGuidanceIfStale(rt.projectRoot);
+                if (refreshed.length && !opts.json) {
+                    log.detail(`Updated ${refreshed.join(' + ')} for CLI v${guidanceVersion()}.`);
+                }
+            } catch { /* guidance is a convenience; never block a pull */ }
 
             // Checked before anything touches the network: the point of
             // --if-stale is that the common case costs one config read, so it

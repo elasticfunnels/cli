@@ -14,6 +14,7 @@ import { registerPageEventsCommand } from './pageEvents';
 import { SyncStateFile } from '../sync/stateFile';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
+import { resolveDomain, statusLabel as domainStatusLabel } from './domains';
 
 /**
  * When a page's slug changes on the server, move its local `.ef` file to match
@@ -98,22 +99,42 @@ export function registerPagesCommand(program: Command): void {
         });
 
     cmd.command('settings <slug>')
-        .description('Update page settings (slug, domain, folder, status, SEO) — separate from the editor HTML.')
+        .description('Update page settings — assign a domain, make it that domain\'s homepage, change slug/folder/status/SEO. Separate from the editor HTML.')
+        .addHelpText('after', `
+Examples:
+  # Put this page on a domain (name or numeric id both work)
+  $ ef pages settings pricing --domain shop.example.com
+
+  # ...and make it what visitors see at the domain root
+  $ ef pages settings home --domain shop.example.com --homepage
+
+  # Take a page off homepage duty without unassigning the domain
+  $ ef pages settings home --no-homepage
+
+  # Detach the page from any domain
+  $ ef pages settings pricing --domain none
+
+Run "ef domains list" to see the brand's domains and their status. A domain has
+to be validated before it actually serves traffic — "ef domains records <domain>"
+prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--title <title>', 'Page title.')
         .option('--slug <slug>', 'New URL slug.')
-        .option('--domain-id <id>', 'Numeric brand-domain id.', (v) => parseInt(v, 10))
+        .option('--domain <name-or-id>', 'Assign the page to this brand domain — a domain name ("shop.example.com") or its numeric id. Use "none" to detach.')
+        .option('--domain-id <id>', 'Same as --domain, but numeric id only (kept for scripts).', (v) => parseInt(v, 10))
+        .option('--homepage', 'Serve this page at the domain root — i.e. make it the domain\'s homepage.')
+        .option('--no-homepage', 'Stop serving this page at the domain root.')
         .option('--folder-id <id>', 'Numeric folder id.', (v) => parseInt(v, 10))
         .option('--status <status>', 'published | draft | offline | imported.')
-        .option('--is-index', 'Mark this page as the domain index (homepage).')
-        .option('--no-is-index', 'Unmark this page as the domain index.')
+        .option('--is-index', 'Deprecated spelling of --homepage.')
+        .option('--no-is-index', 'Deprecated spelling of --no-homepage.')
         .option('--seo-title <text>', 'SEO title.')
         .option('--seo-description <text>', 'SEO description.')
         .option('--seo-blur-title <text>', 'SEO blur title.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
-            title?: string; slug?: string; domainId?: number; folderId?: number;
-            status?: string; isIndex?: boolean; seoTitle?: string; seoDescription?: string;
+            title?: string; slug?: string; domain?: string; domainId?: number; folderId?: number;
+            status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
             seoBlurTitle?: string; file?: string; json?: boolean;
         }) => {
             const rt = await loadRuntime();
@@ -124,10 +145,34 @@ export function registerPagesCommand(program: Command): void {
             const flags: Record<string, unknown> = {};
             if (opts.title !== undefined) flags.title = opts.title;
             if (opts.slug !== undefined) flags.slug = opts.slug;
-            if (opts.domainId !== undefined) flags.domain_id = opts.domainId;
             if (opts.folderId !== undefined) flags.folder_id = opts.folderId;
             if (opts.status !== undefined) flags.status = opts.status;
-            if (opts.isIndex !== undefined) flags.is_index = opts.isIndex;
+
+            // Domain: accept a name so nobody has to look an id up first — that
+            // extra step is most of the reason this was thought impossible.
+            let domainLabel: string | null = null;
+            if (opts.domain !== undefined) {
+                const ref = opts.domain.trim();
+                if (/^(none|null|-)$/i.test(ref)) {
+                    flags.domain_id = null;
+                    domainLabel = 'none';
+                } else {
+                    const resolved = await resolveDomain(api, rt.config.brandId, ref);
+                    flags.domain_id = resolved.id;
+                    domainLabel = `${resolved.domain} (#${resolved.id})`;
+                    if (resolved.status && resolved.status !== 'validated') {
+                        log.warn(`Domain ${resolved.domain} is "${domainStatusLabel(resolved.status)}" — the page is assigned, but the domain won't serve traffic until it validates. See "ef domains records ${resolved.domain}".`);
+                    }
+                }
+            } else if (opts.domainId !== undefined) {
+                flags.domain_id = opts.domainId;
+                domainLabel = `#${opts.domainId}`;
+            }
+
+            // `--homepage` is the discoverable name; `--is-index` is what the
+            // server field is called and stays supported.
+            const asHomepage = opts.homepage !== undefined ? opts.homepage : opts.isIndex;
+            if (asHomepage !== undefined) flags.is_index = asHomepage;
             if (opts.seoTitle !== undefined) flags.seo_title = opts.seoTitle;
             if (opts.seoDescription !== undefined) flags.seo_description = opts.seoDescription;
             if (opts.seoBlurTitle !== undefined) flags.seo_blur_title = opts.seoBlurTitle;
@@ -145,8 +190,14 @@ export function registerPagesCommand(program: Command): void {
             // so disk, efmeta and state match the new slug.
             const renamed = await renameLocalPageFile(rt, page.id, relPathForPage(page), relPathForPage(updated), updated);
 
-            if (opts.json) { log.json({ ok: true, page: updated, renamed }); return; }
+            if (opts.json) { log.json({ ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null }); return; }
             log.success(`Updated settings for page #${page.id} (${updated.slug ?? page.slug}).`);
+            if (domainLabel) {
+                log.detail(domainLabel === 'none' ? '  Detached from its domain.' : `  Domain → ${domainLabel}`);
+            }
+            if (asHomepage !== undefined) {
+                log.detail(asHomepage ? '  Now served at the domain root (homepage).' : '  No longer the domain homepage.');
+            }
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });
 

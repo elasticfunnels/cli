@@ -24,6 +24,7 @@ import { registerMcpCommand } from './commands/mcp';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerUpdateCommand } from './commands/update';
 import { registerLoginCommand } from './commands/login';
+import { registerCollectionsCommand } from './commands/collections';
 import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
 import { registerWatchCommand } from './commands/watch';
@@ -94,6 +95,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerWatchCommand(program);
     registerLintCommand(program);
     registerDomainsCommand(program);
+    registerCollectionsCommand(program);
     registerCrmCommand(program);
     registerFunnelsCommand(program);
     // Disabled for now (see the commented imports above):

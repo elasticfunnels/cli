@@ -23,6 +23,8 @@ import { registerClaudeCommand, registerCodexCommand } from './commands/claude';
 import { registerMcpCommand } from './commands/mcp';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerUpdateCommand } from './commands/update';
+import { registerLoginCommand } from './commands/login';
+import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
 import { registerWatchCommand } from './commands/watch';
 import { registerLintCommand } from './commands/lint';
@@ -57,7 +59,8 @@ the current directory (Git-style).
 
 Designed for Claude Code, scripts, and humans equally:
   • All commands accept --json for machine-readable output.
-  • Exit codes are stable: 0=ok 2=usage 3=auth 4=conflict 5=network 6=server.
+  • Exit codes are stable: 0=ok 2=usage 3=auth 4=conflict 5=network 6=server
+    7=notfound 130=interrupted.
   • No global state. cd into a different project, get a different brand.`)
         .version(getVersion(), '-v, --version', 'Print the CLI version.')
         .helpOption('-h, --help', 'Show help for a command.')
@@ -65,6 +68,7 @@ Designed for Claude Code, scripts, and humans equally:
 
     // Register every command. Each registrar attaches subcommands and options.
     registerInitCommand(program);
+    registerLoginCommand(program);
     registerResetCommand(program);
     registerWhoamiCommand(program);
     registerStatusCommand(program);
@@ -113,7 +117,10 @@ export async function run(argv: string[]): Promise<void> {
         await program.parseAsync(argv);
     } catch (err) {
         if (err instanceof CliError) {
-            log.error(err.message);
+            // A rejected credential gets the fix appended here, once, based on
+            // which kind is actually stored — so every endpoint's 401 says the
+            // same true thing. See utils/credential.ts.
+            log.error(augmentAuthError(err).message);
             process.exit(err.code);
         }
         // commander throws CommanderError for invalid usage — those are

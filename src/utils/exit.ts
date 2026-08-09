@@ -17,6 +17,8 @@ export const ExitCode = {
     Server: 6,
     /** File the user pointed at does not exist or cannot be read. */
     NotFound: 7,
+    /** Ctrl-C / SIGTERM. 128 + SIGINT(2), the shell convention. */
+    Interrupted: 130,
 } as const;
 
 export type ExitCodeValue = typeof ExitCode[keyof typeof ExitCode];

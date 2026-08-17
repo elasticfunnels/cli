@@ -27,6 +27,7 @@ import { registerLoginCommand } from './commands/login';
 import { registerCollectionsCommand } from './commands/collections';
 import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
+import { registerSeoCommand } from './commands/seo';
 import { registerWatchCommand } from './commands/watch';
 import { registerLintCommand } from './commands/lint';
 import { registerDomainsCommand } from './commands/domains';
@@ -95,6 +96,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerWatchCommand(program);
     registerLintCommand(program);
     registerDomainsCommand(program);
+    registerSeoCommand(program);
     registerCollectionsCommand(program);
     registerCrmCommand(program);
     registerFunnelsCommand(program);

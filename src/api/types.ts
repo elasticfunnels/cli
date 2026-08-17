@@ -18,4 +18,6 @@ export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../mo
 export type { Funnel } from '../models/funnel';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';
 export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';
+export type { BrandSeoConfig, SeoPage, SeoExclusionReason } from '../models/seo';
+export { SEO_EXCLUSION_REASON } from '../models/seo';
 export { COLLECTION_FIELD_TYPES } from '../models/collection';

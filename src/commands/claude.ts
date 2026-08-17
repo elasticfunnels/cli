@@ -360,6 +360,7 @@ Most-used, by task:
 | Preview / live URL | \`ef preview <slug>\` |
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
+| Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
@@ -382,6 +383,16 @@ Most-used, by task:
   script parse errors). Exits non-zero on errors; \`--strict\` fails on warnings too.
 - \`ef variables set <key> <value>\` — set one brand variable (dotted keys nest,
   e.g. \`brand.name\`; JSON-typed values; \`@file\` reads a file). \`ef variables get/pull/push\`.
+- **Discovery files (\`sitemap.xml\`, \`llms.txt\`, \`robots.txt\`)** — two levels, and BOTH are
+  needed before a page appears anywhere:
+  1. \`ef seo set sitemap|llms|robots true\` — the brand serves that file at all. Every one is
+     off by default, and while off the path 404s exactly as it always has.
+  2. \`ef pages settings <slug> --sitemap\` — this page is listed in it. Also off by default,
+     per page, because most pages in a brand are funnel steps, upsells and checkouts that must
+     never be advertised. \`--no-sitemap\` removes it again.
+  \`ef seo status\` shows both levels at once; \`ef seo pages\` lists the exact URLs published.
+  A page marked "Prevent Search Engine Indexing" is never listed, whatever the flag says, and a
+  \`{param}\` route slug can never be listed (it stands for many URLs, not one).
 - \`ef crm entities | pipelines <entity> | stages <pipeline> | fields <entity> | entries <entity>\`
   — read CRM. Create/update/delete with \`ef crm <group> create/update/delete\`. Entity args
   take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.

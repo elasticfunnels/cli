@@ -240,7 +240,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |
 | `ef pages preview <slug>` | Print preview + live URLs (draft revision from editor when present). |
 | `ef pages duplicate <slug>` | Duplicate a page. |
-| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. |
+| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
@@ -282,6 +282,10 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef domains records <domain>` | Print the DNS records to add: a TXT ownership record + a CNAME to the platform domain. `--wait` polls until the TXT record is ready. |
 | `ef domains validate <domain>` | Queue validation for a dedicated domain (checks DNS + issues SSL). |
 | `ef domains remove <domain>` | Delete a domain from the brand (alias `ef domains rm`). |
+| `ef seo status` | Which discovery files (`sitemap.xml`, `llms.txt`, `robots.txt`) this brand serves, and how many pages they list. |
+| `ef seo set <key> <value>` | Turn a file on/off or set its content. Keys: `sitemap`, `llms`, `robots` (booleans), `site-name`, `site-summary`, `llms-notes`, `robots-extra` (text). |
+| `ef seo get [key]` | Print the SEO settings, or one key (pipeable on stdout). |
+| `ef seo pages` | List the pages that appear in the discovery files, with the exact URL each one publishes. |
 | `ef lint [paths…]` | Statically validate `.ef` pages/components/scripts (template + script syntax). Exits non-zero on errors; `--strict` fails on warnings, `--json` for machine output. |
 | `ef crm entities` / `pipelines <entity>` / `stages <pipeline>` / `fields <entity>` / `entries <entity>` | List CRM objects. `entities`/`pipelines`/`fields`/`entries` accept an entity **id or slug**. |
 | `ef crm entities create` · `pipelines create <entity>` · `stages create <pipeline>` · `fields create <entity>` · `entries create <entity>` | Create CRM objects. Common fields via flags, or the whole payload via `--input-json`/`--input-file` (flags override). `--generate-skeleton` prints an example payload. |

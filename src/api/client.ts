@@ -8,6 +8,7 @@ import {
     BrandDomain,
     BrandCollection,
     BrandCollectionField,
+    BrandSeoConfig,
     BrandEmail,
     BrandTemplate,
     BrandTemplatePage,
@@ -23,6 +24,7 @@ import {
     PageFolder,
     PageUpdateResponse,
     Product,
+    SeoPage,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
 import { requestStart, requestEnd } from '../utils/loader';
@@ -544,6 +546,45 @@ export class ApiClient {
             data: { variables: JSON.stringify(variables ?? {}) },
         });
         if (res.status >= 400) throw httpError('Set brand variables', res);
+    }
+
+    // ── SEO / discovery files ────────────────────────────────────────
+
+    /** Brand-level sitemap.xml / llms.txt / robots.txt settings. */
+    async getBrandSeo(brandId: number): Promise<BrandSeoConfig> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/seo`);
+        if (res.status >= 400) throw httpError('Get SEO settings', res);
+        const body = res.data as { data?: BrandSeoConfig } | BrandSeoConfig;
+        const data = ('data' in body && body.data ? body.data : body) as BrandSeoConfig;
+        return {
+            sitemap_enabled: Boolean(data?.sitemap_enabled),
+            llms_enabled: Boolean(data?.llms_enabled),
+            robots_enabled: Boolean(data?.robots_enabled),
+            site_name: data?.site_name ?? null,
+            site_name_effective: data?.site_name_effective ?? null,
+            site_summary: data?.site_summary ?? null,
+            llms_notes: data?.llms_notes ?? null,
+            robots_extra: data?.robots_extra ?? null,
+        };
+    }
+
+    /**
+     * Patch the SEO settings. The server merges into the stored bag, so a
+     * partial payload changes only the keys it names.
+     */
+    async setBrandSeo(brandId: number, patch: Record<string, unknown>): Promise<BrandSeoConfig> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/seo`, { data: patch });
+        if (res.status >= 400) throw httpError('Update SEO settings', res);
+        const body = res.data as { seo_config?: BrandSeoConfig };
+        return (body?.seo_config ?? {}) as BrandSeoConfig;
+    }
+
+    /** The pages currently listed in this brand's discovery files. */
+    async listSeoPages(brandId: number): Promise<SeoPage[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/seo/pages`);
+        if (res.status >= 400) throw httpError('List SEO pages', res);
+        const body = res.data as SeoPage[] | { data?: SeoPage[] };
+        return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
     }
 
     // ── Assets ───────────────────────────────────────────────────────

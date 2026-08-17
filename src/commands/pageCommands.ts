@@ -114,6 +114,13 @@ Examples:
   # Detach the page from any domain
   $ ef pages settings pricing --domain none
 
+  # Publish this page in the brand's sitemap.xml and llms.txt (off by default)
+  $ ef pages settings pricing --sitemap
+  $ ef pages settings pricing --no-sitemap
+
+Listing a page only has an effect once the brand serves the files — see
+"ef seo status" and "ef seo set sitemap true".
+
 Run "ef domains list" to see the brand's domains and their status. A domain has
 to be validated before it actually serves traffic — "ef domains records <domain>"
 prints the DNS records, "ef domains validate <domain>" triggers the check.`)
@@ -130,12 +137,14 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--seo-title <text>', 'SEO title.')
         .option('--seo-description <text>', 'SEO description.')
         .option('--seo-blur-title <text>', 'SEO blur title.')
+        .option('--sitemap', 'List this page in the brand\'s sitemap.xml and llms.txt.')
+        .option('--no-sitemap', 'Stop listing this page in sitemap.xml and llms.txt.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
             title?: string; slug?: string; domain?: string; domainId?: number; folderId?: number;
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
-            seoBlurTitle?: string; file?: string; json?: boolean;
+            seoBlurTitle?: string; sitemap?: boolean; file?: string; json?: boolean;
         }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
@@ -176,6 +185,10 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.seoTitle !== undefined) flags.seo_title = opts.seoTitle;
             if (opts.seoDescription !== undefined) flags.seo_description = opts.seoDescription;
             if (opts.seoBlurTitle !== undefined) flags.seo_blur_title = opts.seoBlurTitle;
+            // Opt this page into the brand's sitemap.xml / llms.txt. Off for
+            // every page until asked, because most pages in a brand are funnel
+            // steps and checkouts that must never be advertised.
+            if (opts.sitemap !== undefined) flags.include_in_sitemap = opts.sitemap;
 
             const payload: Record<string, unknown> = { ...base, ...flags };
             if (Object.keys(payload).length === 0) {
@@ -190,13 +203,18 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             // so disk, efmeta and state match the new slug.
             const renamed = await renameLocalPageFile(rt, page.id, relPathForPage(page), relPathForPage(updated), updated);
 
-            if (opts.json) { log.json({ ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null }); return; }
+            if (opts.json) { log.json({ ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null, sitemap: opts.sitemap ?? null }); return; }
             log.success(`Updated settings for page #${page.id} (${updated.slug ?? page.slug}).`);
             if (domainLabel) {
                 log.detail(domainLabel === 'none' ? '  Detached from its domain.' : `  Domain → ${domainLabel}`);
             }
             if (asHomepage !== undefined) {
                 log.detail(asHomepage ? '  Now served at the domain root (homepage).' : '  No longer the domain homepage.');
+            }
+            if (opts.sitemap !== undefined) {
+                log.detail(opts.sitemap
+                    ? '  Listed in sitemap.xml and llms.txt — if the brand serves them ("ef seo status").'
+                    : '  No longer listed in sitemap.xml or llms.txt.');
             }
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });

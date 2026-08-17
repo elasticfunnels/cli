@@ -23,6 +23,7 @@ import {
     Page,
     PageFolder,
     PageUpdateResponse,
+    PageVariant,
     Product,
     SeoPage,
 } from './types';
@@ -91,17 +92,38 @@ function crmModel<T>(data: unknown, ...keys: string[]): T {
  * Same endpoints, same payloads — so a file produced by the CLI and a
  * file produced by the extension are byte-identical for the same content.
  */
+/**
+ * Auth scheme for {@link ApiClient}. Structurally matches `EfAuth` in
+ * `utils/store` (kept as its own type here to avoid a module cycle). Omitted →
+ * `EF-Access-Key`, the human CLI's per-brand key. `bearer` sends
+ * `Authorization: Bearer <key>` plus an optional `x-runner-id`, which is how a
+ * brand-scoped agent token authenticates — the backend identifies the caller by
+ * that runner id on every claim, event and completion.
+ */
+export interface ApiAuth {
+    scheme?: 'ef-access-key' | 'bearer';
+    runnerId?: string;
+}
+
 export class ApiClient {
     private http: AxiosInstance;
-    constructor(public readonly apiUrl: string, public readonly apiKey: string) {
+    constructor(public readonly apiUrl: string, public readonly apiKey: string, auth?: ApiAuth) {
+        const headers: Record<string, string> = {
+            Accept: 'application/json',
+            'User-Agent': `ef-cli/${packageVersion()}`,
+        };
+        if (auth?.scheme === 'bearer') {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            if (auth.runnerId) headers['x-runner-id'] = auth.runnerId;
+        } else {
+            // Default path, byte-identical to before: omitting `auth` leaves every
+            // existing caller on the EF-Access-Key header it already sent.
+            headers['EF-Access-Key'] = apiKey;
+        }
         this.http = axios.create({
             baseURL: apiUrl,
             timeout: 60000,
-            headers: {
-                Accept: 'application/json',
-                'EF-Access-Key': apiKey,
-                'User-Agent': `ef-cli/${packageVersion()}`,
-            },
+            headers,
             // Don't throw on >=400 inside the helper paths that want to inspect status; we
             // wrap normal calls in try/catch in callers.
             validateStatus: (s) => s >= 200 && s < 600,
@@ -235,6 +257,48 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Update page settings', res);
         const body = res.data as { page?: Page } | Page;
         return ('page' in body && body.page ? body.page : body) as Page;
+    }
+
+    // ── Page variants (whole-page split tests) ───────────────────────
+    // Variants are siblings of a parent page, not copies: they share the
+    // family and take traffic under one URL. Creating one returns only the new
+    // page id, so callers read the assigned slug back via listVariants.
+
+    /**
+     * Add a variant to `pageId`'s family. `fromActive` seeds it from whichever
+     * sibling currently serves traffic rather than from the parent — which is
+     * what you want when the parent is stale and the live variant is the real
+     * baseline.
+     */
+    async createPageVariant(brandId: number, pageId: number, opts?: { fromActive?: boolean }): Promise<{ page_id: number }> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/page-variant`, {
+            data: opts?.fromActive ? { from_active: true } : {},
+        });
+        if (res.status >= 400) throw httpError('Create page variant', res);
+        return res.data as { page_id: number };
+    }
+
+    /** Add a variant seeded from one specific sibling, named explicitly. */
+    async createVariantFromVariant(brandId: number, pageId: number, sourceVariantId: number): Promise<{ page_id: number }> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/create-variant`, {
+            data: { source_variant_id: sourceVariantId },
+        });
+        if (res.status >= 400) throw httpError('Create variant from variant', res);
+        return res.data as { page_id: number };
+    }
+
+    /**
+     * List a page's variant family. `showAll` includes archived/inactive rows;
+     * without it you get the family as it currently serves. `current_page_id`
+     * falls back to the requested id so callers always have an anchor.
+     */
+    async listVariants(brandId: number, pageId: number, opts?: { showAll?: boolean }): Promise<{ variants: PageVariant[]; current_page_id: number }> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/pages/${pageId}/variants`, {
+            params: opts?.showAll ? { show_all: 1 } : {},
+        });
+        if (res.status >= 400) throw httpError('List variants', res);
+        const body = res.data as { variants?: PageVariant[]; current_page_id?: number };
+        return { variants: Array.isArray(body.variants) ? body.variants : [], current_page_id: body.current_page_id ?? pageId };
     }
 
     async listPageFolders(brandId: number): Promise<PageFolder[]> {

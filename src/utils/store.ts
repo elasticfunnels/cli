@@ -48,13 +48,29 @@ export interface EfConfig {
     lastPulledAt?: string | null;
 }
 
+/**
+ * How {@link EfRuntime.apiKey} is presented to the API. Omitted → the
+ * `EF-Access-Key` header the human CLI has always sent. `bearer` is the
+ * agent-token path, set only by {@link makeRuntime}.
+ */
+export interface EfAuth {
+    scheme?: 'ef-access-key' | 'bearer';
+    /** Runner identity, sent as `x-runner-id` alongside a bearer token. */
+    runnerId?: string;
+}
+
 export interface EfRuntime {
     /** Resolved project root (where `.ef/` lives). */
     projectRoot: string;
     /** Loaded config object. */
     config: EfConfig;
-    /** Loaded API key (read from `.ef/auth`). */
+    /** Loaded API key (read from `.ef/auth`, or handed in by {@link makeRuntime}). */
     apiKey: string;
+    /**
+     * Auth scheme for `apiKey`. Left undefined on every disk-loaded runtime, so
+     * the CLI's own commands keep sending exactly what they sent before.
+     */
+    auth?: EfAuth;
     /**
      * Directory that contains `pages/`, `components/`, `.ef-state.json`.
      * `nested`: projectRoot/syncRoot/brandId — `flat`: projectRoot/syncRoot
@@ -101,6 +117,51 @@ export function computeBrandRoot(projectRoot: string, config: Pick<EfConfig, 'sy
         return base;
     }
     return path.join(base, String(config.brandId));
+}
+
+/**
+ * Build an {@link EfRuntime} entirely in memory, with no `.ef/` folder on disk.
+ *
+ * Every other runtime in this CLI is loaded from `.ef/config.json` + `.ef/auth`,
+ * which is right for a human working in a checkout and wrong for an automated
+ * caller: it would mean writing a brand-scoped token to the filesystem of a
+ * throwaway workspace. This constructor takes the credential as an argument and
+ * never persists it — only `.ef-state.json` is written under `brandRoot`, and
+ * that holds no secrets.
+ *
+ * `brandRoot` is the directory that will hold `pages/`, `components/`,
+ * `scripts/`, `variables.json` and `.ef-state.json`. History is disabled: a
+ * temp workspace has nothing to roll back to.
+ */
+export function makeRuntime(args: {
+    apiUrl: string;
+    apiKey: string;
+    brandId: number;
+    brandRoot: string;
+    syncLayout?: EfConfig['syncLayout'];
+    saveMode?: EfConfig['saveMode'];
+    auth?: EfAuth;
+}): EfRuntime {
+    const config: EfConfig = {
+        apiUrl: args.apiUrl,
+        brandId: args.brandId,
+        // Unused on this path — brandRoot is explicit — but kept for shape parity.
+        syncRoot: DEFAULT_SYNC_ROOT,
+        syncLayout: args.syncLayout === 'nested' ? 'nested' : 'flat',
+        saveMode: args.saveMode ?? 'draft',
+        historyKeep: 0,
+        historyTtlDays: 0,
+        lastPulledAt: null,
+    };
+    return {
+        // No `.ef/` exists, so projectRoot is nominal; pointing it at brandRoot
+        // keeps any incidental relative lookup inside the workspace.
+        projectRoot: args.brandRoot,
+        config,
+        apiKey: args.apiKey,
+        auth: args.auth,
+        brandRoot: args.brandRoot,
+    };
 }
 
 export async function loadConfig(projectRoot: string): Promise<EfConfig> {

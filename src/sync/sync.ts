@@ -161,7 +161,9 @@ async function alreadyOnDisk(ctx: SyncContext, kind: 'page' | 'component' | 'scr
 const warnedStateFiles = new Set<string>();
 
 export async function buildSyncContext(rt: EfRuntime): Promise<SyncContext> {
-    const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+    // `rt.auth` is undefined on every disk-loaded runtime, so this remains the
+    // EF-Access-Key call it has always been; only makeRuntime() populates it.
+    const api = new ApiClient(rt.config.apiUrl, rt.apiKey, rt.auth);
     const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);
     if (state.brandId !== rt.config.brandId) state.setBrandId(rt.config.brandId);
     if (state.isVersionTooNew() && !warnedStateFiles.has(state.statePath)) {
@@ -417,6 +419,59 @@ export async function pullAllAssets(ctx: SyncContext, opts: { adopt?: boolean } 
         const r = await pullAsset(ctx, a.id);
         return r ? { rel: r.rel } : null;
     });
+}
+
+/**
+ * Pull specific assets by path, on demand. `pullAllAssets` is the wrong tool for
+ * an automated caller working in a temp workspace: it downloads a brand's whole
+ * media library to reach one image. These resolve a path to an id and fetch just
+ * that file, and unlike the bulk pull they THROW when an asset is missing or
+ * fails, because the caller asked for that specific file by name.
+ */
+export async function pullAssets(ctx: SyncContext, paths: string[]): Promise<Array<{ path: string; localPath: string }>> {
+    const out: Array<{ path: string; localPath: string }> = [];
+    for (const p of paths) {
+        const remote = p.replace(/\\/g, '/').replace(/^\/+/, '').replace(/^assets\//, '');
+        const ref = await ctx.api.getAssetByPath(ctx.rt.config.brandId, remote);
+        if (!ref) {
+            throw new CliError(ExitCode.NotFound, `Asset "${remote}" not found.`);
+        }
+        const pulled = await pullAsset(ctx, ref.id);
+        if (!pulled || pulled.skipped) {
+            throw new CliError(ExitCode.Server, `Asset "${remote}" could not be pulled${pulled?.skipped ? ` (${pulled.skipped})` : ''}.`);
+        }
+        out.push({ path: pulled.rel, localPath: pulled.absPath });
+    }
+    return out;
+}
+
+/** Convenience wrapper: pull a single asset. */
+export async function pullOneAsset(ctx: SyncContext, assetPath: string): Promise<{ path: string; localPath: string }> {
+    const [only] = await pullAssets(ctx, [assetPath]);
+    return only;
+}
+
+/**
+ * Drop temp-pulled assets from a workspace once the work is done. Assets are
+ * read-only reads that are never pushed back, so the directory is pure waste
+ * after the fact. Best-effort by design — a workspace that cannot be tidied is
+ * not worth failing a turn over. Returns how many files were removed.
+ */
+export async function cleanupPulledAssets(tempDir: string): Promise<number> {
+    const assetsDir = path.join(tempDir, 'assets');
+    let count = 0;
+    const countFiles = async (dir: string): Promise<void> => {
+        let entries: fs.Dirent[] = [];
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) await countFiles(p);
+            else if (e.isFile()) count++;
+        }
+    };
+    await countFiles(assetsDir);
+    try { await fs.promises.rm(assetsDir, { recursive: true, force: true }); } catch { /* tolerated */ }
+    return count;
 }
 
 // ── Variables ────────────────────────────────────────────────────────

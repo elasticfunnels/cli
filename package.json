@@ -68,5 +68,16 @@
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
     "typescript": "^5.4.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./out/extension.d.ts",
+      "default": "./out/extension.js"
+    },
+    "./agent": {
+      "types": "./out/agent.d.ts",
+      "default": "./out/agent.js"
+    },
+    "./package.json": "./package.json"
   }
 }

@@ -190,6 +190,21 @@ How to report it:
 Never recommend declaring a winner the server has not declared. If someone asks
 you to call it early, say what the server says and let them decide.
 
+### Read the project's own record first
+
+`elasticfunnels/split-tests.md`, when it exists, is where this project writes
+down what each test was *for*: the hypothesis, which arm is the control, and
+what winning would mean. The server has none of that — it has variant keys and
+numbers.
+
+Read it before reporting on a test. It is the difference between "variant B is
+at 3.1%" and "the listicle opener beat the self-assessment control, which is
+what we predicted". If a test you are asked about has no entry, say so rather
+than inventing the intent.
+
+When a winner is declared, add the date and the deciding number to that test's
+entry — the file is append-only history, not a status board.
+
 ---
 
 ## Scripting and reporting

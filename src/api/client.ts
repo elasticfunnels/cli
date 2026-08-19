@@ -1428,6 +1428,13 @@ export interface AnalyticsQuery {
     limit?: number;
 }
 
+/** Best available display label for a grouped row; never an empty string. */
+function labelFor(rowLabel: unknown, key: string): string {
+    if (rowLabel != null && rowLabel !== '' && rowLabel !== 0) return String(rowLabel);
+    if (key.trim() !== '') return key;
+    return '(unlabeled)';
+}
+
 /**
  * Escape a grouping field for the URL path.
  *
@@ -1486,10 +1493,12 @@ function normalizeGroupRows(data: unknown): AnalyticsGroupRow[] {
         rows.push({
             key: (row.row_key as string | number) ?? key,
             // `row_label` is 0 rather than a string on the catch-all "no
-            // attribution" bucket, so fall back to the object key.
-            label: row.row_label != null && row.row_label !== '' && row.row_label !== 0
-                ? String(row.row_label)
-                : key,
+            // attribution" bucket, so fall back to the object key — and when
+            // that is empty too, to a visible placeholder. A row whose label is
+            // "" prints as a blank line that reads as a rendering glitch; the
+            // numbers next to it are real and someone has to be able to see
+            // that the LABEL is what went missing.
+            label: labelFor(row.row_label, key),
             metrics,
         });
     }

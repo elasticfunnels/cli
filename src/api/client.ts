@@ -26,6 +26,15 @@ import {
     PageVariant,
     Product,
     SeoPage,
+    AnalyticsCard,
+    AnalyticsCardCatalog,
+    AnalyticsMetricDef,
+    AnalyticsMetricData,
+    AnalyticsGroupRow,
+    SplitTest,
+    SplitTestSignificance,
+    DashboardConfig,
+    DashboardPreset,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
 import { requestStart, requestEnd } from '../utils/loader';
@@ -651,6 +660,196 @@ export class ApiClient {
         return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
     }
 
+    // ── Analytics ────────────────────────────────────────────────────
+
+    /**
+     * The metric registry this brand can actually read.
+     *
+     * Not a constant, and deliberately not baked into the CLI: the list is
+     * assembled server-side per request from the brand's plan modules, the
+     * caller's role permissions and a hidden-groups gate. Two brands on the
+     * same release see different metrics, so `ef stats` discovers them rather
+     * than shipping a list that would rot or lie.
+     */
+    async listAnalyticsMetrics(brandId: number, opts?: { splitTests?: boolean }): Promise<AnalyticsMetricDef[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/analytics/metrics`, {
+            // The endpoint switches registries on the presence of the key, not
+            // its value — it filters to split-test-capable metrics when asked.
+            params: opts?.splitTests ? { split_test_id: 0 } : {},
+        });
+        if (res.status >= 400) throw httpError('List analytics metrics', res);
+        const body = res.data as Record<string, AnalyticsMetricDef> | AnalyticsMetricDef[];
+        if (Array.isArray(body)) return body;
+        return Object.entries(body ?? {}).map(([type, def]) => ({ ...def, type: def.type ?? type }));
+    }
+
+    /**
+     * The card catalog: which dashboard cards exist, and which report scopes
+     * each one can resolve in.
+     *
+     * Discovered for the same reason the metric registry is — the server has
+     * already dropped the cards this brand has no integration for and the ones
+     * this key's role may not read, so two brands legitimately see different
+     * lists. `scope` narrows it to the cards that can answer for one page /
+     * funnel / split test; the vocabulary comes back in the response rather than
+     * being spelled out here, so a new scope needs no CLI release.
+     */
+    async listAnalyticsCards(brandId: number, opts?: { scope?: string }): Promise<AnalyticsCardCatalog> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/analytics/cards`, {
+            params: opts?.scope ? { scope: opts.scope } : {},
+        });
+        // The server answers an unknown scope with the list of real ones. Passing
+        // that through beats a bare "422": the caller mistyped a name and the
+        // reply already holds the correction.
+        if (res.status === 422) {
+            const body = res.data as { message?: string; scopes?: string[] };
+            const known = Array.isArray(body?.scopes) && body.scopes.length
+                ? ` Valid scopes: ${body.scopes.join(', ')}.`
+                : '';
+            throw new CliError(ExitCode.Validation, `${body?.message ?? 'Unknown scope.'}${known}`);
+        }
+        // The catalog endpoint is newer than the rest of the analytics surface,
+        // so a brand on an older server has every other `ef stats` command
+        // working and only this one missing. Say that, instead of reporting a
+        // bare 404 that reads like a broken CLI or a bad brand id.
+        if (res.status === 404) {
+            throw new CliError(
+                ExitCode.NotFound,
+                'This ElasticFunnels server does not expose the card catalog yet — it needs a newer server release. Every other "ef stats" command works without it.',
+            );
+        }
+        if (res.status >= 400) throw httpError('List analytics cards', res);
+        const body = res.data as {
+            data?: AnalyticsCard[];
+            categories?: Record<string, string>;
+            scopes?: string[];
+            scope?: string | null;
+        };
+        return {
+            cards: Array.isArray(body?.data) ? body.data : [],
+            categories: body?.categories ?? {},
+            scopes: Array.isArray(body?.scopes) ? body.scopes : [],
+            scope: body?.scope ?? null,
+        };
+    }
+
+    /**
+     * Metric values for a date range.
+     *
+     * Note the response can carry metrics you did not ask for: `MetricResolver`
+     * pulls in whatever a requested metric is computed from (asking for
+     * `conversion_rate` also returns `sessions` and `customers`). Callers that
+     * want exactly their selection have to filter it back down.
+     */
+    async getAnalyticsMetrics(
+        brandId: number,
+        opts: AnalyticsQuery & { metrics: string[] },
+    ): Promise<AnalyticsMetricData> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/analytics/metrics/data`, {
+            // This endpoint accepts a comma string; the grouped one below insists
+            // on an array. Same subsystem, two conventions — absorbed here so no
+            // command has to know.
+            params: { ...analyticsParams(opts), selected_metrics: opts.metrics.join(',') },
+        });
+        if (res.status >= 400) throw httpError('Read analytics metrics', res);
+        return (res.data ?? {}) as AnalyticsMetricData;
+    }
+
+    /**
+     * The same metrics, broken down by one dimension (page, product, country,
+     * utm_source, day, …). `listAnalyticsGroupingFields` enumerates what is
+     * groupable for this brand.
+     */
+    async getAnalyticsGrouped(
+        brandId: number,
+        field: string,
+        opts: AnalyticsQuery & { metrics: string[] },
+    ): Promise<AnalyticsGroupRow[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/analytics/metrics/${encodeGroupField(field)}/data`, {
+            // Array form is mandatory here — a comma string is rejected 422.
+            params: { ...analyticsParams(opts), 'selected_metrics[]': opts.metrics },
+        });
+        if (res.status >= 400) throw httpError(`Read analytics grouped by ${field}`, res);
+        return normalizeGroupRows(res.data);
+    }
+
+    /** Which dimensions this brand may group by, keyed by category. */
+    async listAnalyticsGroupingFields(brandId: number): Promise<Record<string, { name: string; fields: Record<string, { name: string; description?: string }> }>> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/analytics/reports/grouping-fields`);
+        if (res.status >= 400) throw httpError('List grouping fields', res);
+        return (res.data ?? {}) as Record<string, { name: string; fields: Record<string, { name: string; description?: string }> }>;
+    }
+
+    // ── Split tests ──────────────────────────────────────────────────
+
+    async listSplitTests(brandId: number, params?: Record<string, unknown>): Promise<SplitTest[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/split-tests`, {
+            params: { per_page: 100, ...params },
+        });
+        if (res.status >= 400) throw httpError('List split tests', res);
+        const body = res.data as SplitTest[] | { data?: SplitTest[] };
+        return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
+    }
+
+    async getSplitTest(brandId: number, splitTestId: number): Promise<SplitTest> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/split-tests/${splitTestId}`);
+        if (res.status >= 400) throw httpError('Get split test', res);
+        const body = res.data as { data?: SplitTest } | SplitTest;
+        return ((body as { data?: SplitTest })?.data ?? body) as SplitTest;
+    }
+
+    /**
+     * The server's own significance verdict for a test.
+     *
+     * Read, never recomputed. The backend corrects alpha for the number of
+     * arms and withholds a winner until every arm clears a power-based sample
+     * floor; a second implementation here would eventually disagree with the
+     * dashboard, and the disagreement would surface as "the CLI says we won".
+     */
+    async getSplitTestSignificance(
+        brandId: number,
+        splitTestId: number,
+        from: string,
+        to: string,
+    ): Promise<SplitTestSignificance> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/split-tests/${splitTestId}/significance`, {
+            params: { from, to },
+        });
+        if (res.status >= 400) throw httpError('Read split test significance', res);
+        return (res.data ?? {}) as SplitTestSignificance;
+    }
+
+    /**
+     * Per-variant metric values for one test.
+     *
+     * The dimension is `split-test:<id>` — the grouping field carries the test
+     * id rather than it travelling as a filter, which is what lets the server
+     * resolve variant keys (`v0`, `v1`) to the names configured on that test.
+     */
+    async getSplitTestMetrics(
+        brandId: number,
+        splitTestId: number,
+        opts: AnalyticsQuery & { metrics: string[] },
+    ): Promise<AnalyticsGroupRow[]> {
+        return this.getAnalyticsGrouped(brandId, `split-test:${splitTestId}`, opts);
+    }
+
+    // ── Dashboards ───────────────────────────────────────────────────
+
+    async listDashboards(brandId: number): Promise<DashboardConfig[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/dashboards`);
+        if (res.status >= 400) throw httpError('List dashboards', res);
+        const body = res.data as { data?: DashboardConfig[] } | DashboardConfig[];
+        return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
+    }
+
+    async listDashboardPresets(brandId: number): Promise<DashboardPreset[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/dashboards/presets`);
+        if (res.status >= 400) throw httpError('List dashboard presets', res);
+        const body = res.data as { data?: DashboardPreset[] } | DashboardPreset[];
+        return Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data! : []);
+    }
+
     // ── Assets ───────────────────────────────────────────────────────
 
     async listAssets(brandId: number): Promise<Asset[]> {
@@ -1205,6 +1404,98 @@ export class ApiClient {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * The shared shape of an analytics read: a day range, the zone those days are
+ * interpreted in, and optional scope filters.
+ */
+export interface AnalyticsQuery {
+    /** Inclusive first day, `YYYY-MM-DD`. */
+    start: string;
+    /** Inclusive last day, `YYYY-MM-DD`. */
+    end: string;
+    /**
+     * IANA zone. Always sent by the CLI: when it is absent the server falls
+     * back to `America/Los_Angeles` rather than to the brand's own zone, which
+     * silently shifts every day boundary for a brand outside that offset.
+     */
+    tz: string;
+    pageId?: number;
+    funnelId?: number;
+    splitTestId?: number;
+    affiliateId?: number | string;
+    /** Rows to return on a grouped read. */
+    limit?: number;
+}
+
+/**
+ * Escape a grouping field for the URL path.
+ *
+ * `encodeURIComponent` is right for the general case but wrong for the one
+ * field that carries a payload: split-test dimensions are `split-test:<id>`,
+ * and percent-encoding the colon to `%3A` is not what the app sends. A colon
+ * is a legal path-segment character (RFC 3986 §3.3), so it is put back.
+ */
+function encodeGroupField(field: string): string {
+    return encodeURIComponent(field).replace(/%3A/gi, ':');
+}
+
+/** Query params common to every analytics endpoint. Omits what was not set. */
+function analyticsParams(q: AnalyticsQuery): Record<string, unknown> {
+    const params: Record<string, unknown> = { start: q.start, end: q.end, tz: q.tz };
+    if (q.pageId != null) params.page_id = q.pageId;
+    if (q.funnelId != null) params.funnel_id = q.funnelId;
+    if (q.splitTestId != null) params.split_test_id = q.splitTestId;
+    if (q.affiliateId != null) params.aff_id = q.affiliateId;
+    if (q.limit != null) params.limit = q.limit;
+    return params;
+}
+
+/**
+ * Flatten a grouped response into rows.
+ *
+ * The endpoint returns an object keyed by a display string ("Index (8879)"),
+ * with the real id and label repeated inside each row. Two things get handled
+ * here: keys beginning with `_` are envelope metadata (`_meta` and friends),
+ * not data — mapping them produces a junk row — and each remaining value is a
+ * bag of `{metric: {value, formatted}}` mixed with `row_key`/`row_label`, so
+ * the metrics have to be separated from the row's own identity fields.
+ */
+function normalizeGroupRows(data: unknown): AnalyticsGroupRow[] {
+    const body = (data as { data?: unknown })?.data ?? data;
+    if (!body || typeof body !== 'object') return [];
+
+    const rows: AnalyticsGroupRow[] = [];
+    for (const [key, raw] of Object.entries(body as Record<string, unknown>)) {
+        if (key.startsWith('_')) continue;
+        if (!raw || typeof raw !== 'object') continue;
+        const row = raw as Record<string, unknown>;
+
+        const metrics: AnalyticsGroupRow['metrics'] = {};
+        for (const [name, cell] of Object.entries(row)) {
+            if (name === 'row_key' || name === 'row_label') continue;
+            if (cell && typeof cell === 'object' && 'value' in (cell as object)) {
+                const c = cell as { value: unknown; formatted?: unknown };
+                metrics[name] = {
+                    value: typeof c.value === 'number' ? c.value : Number(c.value ?? 0),
+                    formatted: (c.formatted ?? null) as string | number | null,
+                };
+            }
+        }
+
+        rows.push({
+            key: (row.row_key as string | number) ?? key,
+            // `row_label` is 0 rather than a string on the catch-all "no
+            // attribution" bucket, so fall back to the object key.
+            label: row.row_label != null && row.row_label !== '' && row.row_label !== 0
+                ? String(row.row_label)
+                : key,
+            metrics,
+        });
+    }
+    return rows;
+}
+
 
 function httpError(label: string, res: AxiosResponse): CliError {
     const status = res.status;

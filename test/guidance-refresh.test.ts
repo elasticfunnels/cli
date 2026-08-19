@@ -3,7 +3,10 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyAgentGuidance, guidanceVersion, refreshGuidanceIfStale, stampedGuidanceVersion } from '../src/commands/claude';
+import { spawn } from 'child_process';
+import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, guidanceVersion, refreshGuidanceIfStale, stampedGuidanceVersion } from '../src/commands/claude';
+
+const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
 
 /**
  * The guidance documents how the CLI behaves, so after an upgrade a project's
@@ -103,5 +106,121 @@ test('both CLAUDE.md and AGENTS.md are refreshed when both exist', async () => {
         assert.deepEqual((await refreshGuidanceIfStale(dir)).sort(), ['AGENTS.md', 'CLAUDE.md']);
     } finally {
         await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('the Cursor rule is refreshed alongside the other two, frontmatter intact', async () => {
+    const dir = await tmp();
+    try {
+        const cursorRule = path.join(dir, GUIDANCE_FILES.cursor);
+        await applyAgentGuidance(cursorRule, { frontmatter: CURSOR_FRONTMATTER });
+        await applyAgentGuidance(path.join(dir, 'CLAUDE.md'));
+        for (const f of [cursorRule, path.join(dir, 'CLAUDE.md')]) await backdate(f, '0.2.0');
+
+        const refreshed = await refreshGuidanceIfStale(dir);
+        assert.ok(refreshed.includes(GUIDANCE_FILES.cursor), `cursor rule not refreshed; got ${JSON.stringify(refreshed)}`);
+
+        const after = await fs.promises.readFile(cursorRule, 'utf8');
+        assert.equal(stampedGuidanceVersion(after), guidanceVersion());
+        assert.ok(after.startsWith('---\n'), 'frontmatter survived the refresh');
+        assert.equal(after.match(/ef:begin/g)?.length, 1, 'no duplicate block');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('ANY command re-stamps stale guidance, not just ef pull', async () => {
+    // Claude Code gets this free — its SessionStart hook pulls. Cursor and
+    // Codex have no hook, so a pull-only refresh left them reading guidance for
+    // whatever version was current the last time someone happened to pull.
+    // `ef config get` is entirely local, so this asserts the refresh without a
+    // network call anywhere in it.
+    const dir = await tmp();
+    try {
+        await fs.promises.mkdir(path.join(dir, '.ef'), { recursive: true });
+        await fs.promises.writeFile(
+            path.join(dir, '.ef', 'config.json'),
+            JSON.stringify({ apiUrl: 'http://127.0.0.1:1', brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'direct' }),
+        );
+        await fs.promises.writeFile(path.join(dir, '.ef', 'auth'), 'k\n');
+
+        const targets = ['CLAUDE.md', 'AGENTS.md', GUIDANCE_FILES.cursor];
+        for (const f of targets) {
+            await applyAgentGuidance(path.join(dir, f), { frontmatter: CURSOR_FRONTMATTER });
+            await backdate(path.join(dir, f), '0.3.0');
+        }
+
+        await new Promise<void>((resolve) => {
+            const child = spawn(process.execPath, [BIN_PATH, 'config', 'get'], {
+                cwd: dir, env: { ...process.env, NO_COLOR: '1' },
+            });
+            child.on('close', () => resolve());
+        });
+
+        // The child runs the built CLI, which stamps the real package version.
+        // `guidanceVersion()` in-process resolves against the test tree and
+        // reports 0.0.0, so the shipped version is the thing to compare to.
+        const shipped = (JSON.parse(
+            await fs.promises.readFile(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'),
+        ) as { version: string }).version;
+
+        for (const f of targets) {
+            const text = await fs.promises.readFile(path.join(dir, f), 'utf8');
+            assert.notEqual(stampedGuidanceVersion(text), '0.3.0', `${f} was left stale`);
+            assert.equal(stampedGuidanceVersion(text), shipped, `${f} was not re-stamped to the shipped version`);
+        }
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('a project with no guidance files is not given any by a passing command', async () => {
+    // The refresh runs after every command now, so the opt-out has to hold
+    // there too — otherwise `ef init --no-claude` would silently undo itself.
+    const dir = await tmp();
+    try {
+        await fs.promises.mkdir(path.join(dir, '.ef'), { recursive: true });
+        await fs.promises.writeFile(
+            path.join(dir, '.ef', 'config.json'),
+            JSON.stringify({ apiUrl: 'http://127.0.0.1:1', brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'direct' }),
+        );
+        await fs.promises.writeFile(path.join(dir, '.ef', 'auth'), 'k\n');
+
+        await new Promise<void>((resolve) => {
+            const child = spawn(process.execPath, [BIN_PATH, 'config', 'get'], {
+                cwd: dir, env: { ...process.env, NO_COLOR: '1' },
+            });
+            child.on('close', () => resolve());
+        });
+
+        assert.equal(fs.existsSync(path.join(dir, 'CLAUDE.md')), false);
+        assert.equal(fs.existsSync(path.join(dir, 'AGENTS.md')), false);
+        assert.equal(fs.existsSync(path.join(dir, '.cursor')), false);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('detectAgentTool reads the environment, and admits when it cannot tell', () => {
+    // It may only ever decide which row to highlight — never which files get
+    // written — so a wrong guess must stay cosmetic.
+    const saved = { ...process.env };
+    try {
+        for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CURSOR_TRACE_ID', 'CURSOR_AGENT', 'CODEX_SANDBOX', 'CODEX_HOME']) delete process.env[k];
+        assert.equal(detectAgentTool(), null);
+
+        process.env.CLAUDECODE = '1';
+        assert.equal(detectAgentTool(), 'claude');
+        delete process.env.CLAUDECODE;
+
+        process.env.CURSOR_TRACE_ID = 'abc';
+        assert.equal(detectAgentTool(), 'cursor');
+        delete process.env.CURSOR_TRACE_ID;
+
+        process.env.CODEX_HOME = '/tmp';
+        assert.equal(detectAgentTool(), 'codex');
+    } finally {
+        for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+        Object.assign(process.env, saved);
     }
 });

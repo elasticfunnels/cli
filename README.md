@@ -212,9 +212,10 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
 | `ef update` | Update the CLI in place, using whichever package manager installed it (npm/pnpm/yarn/bun) and the same prefix. `--check` reports without installing; `--force` reinstalls the latest anyway. Global installs only — a project-local copy or source checkout is reported, not touched. |
-| `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md`, install the `ef-page-events` skill into `.claude/skills/`, and add a **SessionStart hook** that runs `ef pull --if-stale 30` so a session never starts on stale pages. Idempotent; `--no-skills` / `--no-hook` to skip either, `--print` to preview. `ef init` runs this too. |
-| `ef codex` (alias `ef agents`) | The same guidance, written to `AGENTS.md` — the file Codex and several editors read. Codex has no skills or hooks, so the pull-before-you-work rule lives in the text. `ef init` writes both files. |
-| — | The managed block is **stamped with the CLI version** that wrote it, and any `ef pull` re-stamps a block written by an older CLI. So after `ef update`, each project's guidance refreshes itself on next use instead of describing a tool that has moved on. Files without a managed block (e.g. `ef init --no-claude`) are never created or touched. |
+| `ef claude` | Write ElasticFunnels guidance into `CLAUDE.md`, install the bundled skills (`ef-page-events`, `ef-stats`) into `.claude/skills/`, and add a **SessionStart hook** that runs `ef pull --if-stale 30` so a session never starts on stale pages. Idempotent; `--no-skills` / `--no-hook` to skip either, `--print` to preview. `ef init` runs this too. |
+| `ef codex` (alias `ef agents`) | The same guidance, written to `AGENTS.md` — the file Codex and several editors read. Codex has no skills or hooks, so the pull-before-you-work rule lives in the text. |
+| `ef cursor` | The same guidance again, as a Cursor project rule at `.cursor/rules/elasticfunnels.mdc` (YAML frontmatter + the managed block). The frontmatter is written **once**, on create — narrow the rule with `globs` or `alwaysApply: false` and your edit survives every later refresh. `ef init` writes all three files. |
+| — | The managed block is **stamped with the CLI version** that wrote it, and **any** command re-stamps a block written by an older CLI. So after `ef update`, each project's guidance refreshes itself on next use instead of describing a tool that has moved on. Files without a managed block (e.g. `ef init --no-claude`) are never created or touched. |
 | `ef mcp` | Serve this brand to a desktop AI app (Claude Desktop, ChatGPT Desktop) over **stdio MCP**. Credentials come from the project's `.ef/auth`, so the app's config file holds no secret. `--project <dir>` to point at a folder explicitly. |
 | `ef whoami` | Print the active project root, brand, API URL, key prefix. |
 | `ef status` | Connection check, last-pull timestamp, entity counts. |
@@ -286,6 +287,14 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef seo set <key> <value>` | Turn a file on/off or set its content. Keys: `sitemap`, `llms`, `robots` (booleans), `site-name`, `site-summary`, `llms-notes`, `robots-extra` (text). |
 | `ef seo get [key]` | Print the SEO settings, or one key (pipeable on stdout). |
 | `ef seo pages` | List the pages that appear in the discovery files, with the exact URL each one publishes. |
+| `ef stats` | Headline metrics for a date range: `--metrics revenue,sessions,cpc`, `--range today\|yesterday\|7d\|30d\|mtd\|qtd\|ytd\|<n>d`, or explicit `--from`/`--to`. Scope with `--page`/`--funnel`/`--split-test`/`--aff`. `--raw` prints the server payload unreduced. |
+| `ef stats metrics` | The metric keys **this brand** exposes, grouped. Discovered per request, not hardcoded — the registry is assembled server-side from the brand's plan modules and your role permissions, so it differs between brands on the same release. `--split-tests` for the split-test-valid subset. |
+| `ef stats by <field>` | The same metrics broken down by one dimension — `page`, `product`, `country`, `utm_source`, `day`, `device`, … `--limit`, `--sort <metric>`. Time dimensions come back in time order; everything else biggest-first. |
+| `ef stats fields` | Every dimension `ef stats by` can group on, by category. |
+| `ef stats cards` | The dashboard cards this brand has, and the report scopes each one can **resolve** in. `--scope page\|funnel\|split_test\|component_split_test` narrows to the cards that can answer for that scope; `--category <key>` to one family. A card missing a scope is one whose data source ignores that filter — it would answer with the brand's figure under a narrower heading. |
+| `ef stats splits` | List the brand's split tests. |
+| `ef stats split <id>` | One test's per-variant metrics plus the **server's** significance verdict (p-value, power, sample floor, winner). Read rather than recomputed, so it can't disagree with the dashboard about who won. |
+| `ef stats dashboards` | Saved dashboards and the available presets. |
 | `ef lint [paths…]` | Statically validate `.ef` pages/components/scripts (template + script syntax). Exits non-zero on errors; `--strict` fails on warnings, `--json` for machine output. |
 | `ef crm entities` / `pipelines <entity>` / `stages <pipeline>` / `fields <entity>` / `entries <entity>` | List CRM objects. `entities`/`pipelines`/`fields`/`entries` accept an entity **id or slug**. |
 | `ef crm entities create` · `pipelines create <entity>` · `stages create <pipeline>` · `fields create <entity>` · `entries create <entity>` | Create CRM objects. Common fields via flags, or the whole payload via `--input-json`/`--input-file` (flags override). `--generate-skeleton` prints an example payload. |
@@ -319,6 +328,86 @@ Stable so scripts can branch on them.
 | `6` | Server: backend 5xx or unexpected response |
 | `7` | Not found: the file or entity you asked for doesn't exist |
 | `130` | Interrupted (Ctrl-C). Whatever had downloaded is saved and recorded — re-run to finish. |
+
+## Guidance for AI tools
+
+`ef init` (and `ef claude` / `ef codex` / `ef cursor` on their own) writes the
+same ElasticFunnels guidance into every place an AI tool looks for it:
+
+| File | Read by |
+| --- | --- |
+| `CLAUDE.md` | Claude Code |
+| `AGENTS.md` | Codex, and several editors |
+| `.cursor/rules/elasticfunnels.mdc` | Cursor |
+
+All three carry one **managed block** between `<!-- ef:begin -->` markers,
+stamped with the CLI version that wrote it. Everything outside the markers is
+yours and is never touched — including a Cursor rule's frontmatter.
+
+**They keep themselves current.** Any command that finds a project re-stamps a
+block written by an older CLI, so after `ef update` the guidance refreshes on
+next use instead of quietly describing a tool that has moved on. This can't
+happen during `ef update` itself — that process *is* the old binary, so
+stamping there would mark the old guidance as current and suppress the real
+refresh. It writes nothing when the block is already current, and never creates
+a file that wasn't there, so `ef init --no-claude` stays opted out.
+
+You do **not** need to run `ef claude` / `ef codex` / `ef cursor` after an
+install or an update — `ef init` writes all three, whichever tool you use, and
+they refresh themselves after that. Those commands exist for refreshing one on
+demand, or for adding guidance to a project that skipped it.
+
+Two **skills** install into `.claude/skills/` (Claude Code loads them on
+demand; Codex and Cursor have no skill mechanism, so their rules live in the
+guidance text instead):
+
+- **`ef-page-events`** — authoring Drawflow page-event and funnel graphs:
+  split tests, redirects, "load the white page unless…", conditions, popups.
+- **`ef-stats`** — reading analytics correctly. Mostly it exists to prevent
+  four specific wrong answers: a timezone-shifted day boundary read as a real
+  drop, an unavailable metric reported as zero, the resolver's extra metrics
+  treated as requested, and a split test called before the server's sample
+  floor is met.
+
+Skip the lot with `ef init --no-claude`; a project that opted out is never
+given these files behind your back.
+
+## Analytics (`ef stats`)
+
+`ef stats` reads the same analytics API the web dashboard uses, through the same
+per-brand credential as every other command. So the numbers are always *this*
+brand's — the key in `.ef/auth` does not open any other — and there is no
+account-wide roll-up to ask for.
+
+```bash
+ef stats                                             # last 7 days, headline metrics
+ef stats --range today
+ef stats --metrics revenue,net_revenue,aov,cpc --range 30d
+ef stats --from 2026-08-01 --to 2026-08-18 --tz Europe/Bucharest
+ef stats by country --metrics sessions,revenue --limit 10
+ef stats by day --metrics revenue --range 14d
+ef stats split 321                                   # per-variant + significance
+ef stats --json | jq '.metrics[] | {metric, value}'
+```
+
+**Days are counted in a timezone, and the CLI always sends one.** Left to
+itself the API falls back to `America/Los_Angeles` — not to the brand's own
+zone — which silently shifts every day boundary for a brand outside that
+offset, with nothing in the output to show it happened. `ef stats` sends this
+machine's zone by default; override per-run with `--tz`, or per-project by
+adding `analyticsTz` to `.ef/config.json`.
+
+Two smaller things worth knowing:
+
+- **The metric list is discovered, not fixed.** `ef stats metrics` asks the
+  server what this brand can report on. A brand's plan modules and your role
+  permissions both filter it, so a metric that exists for one brand may simply
+  be absent for another. Requesting one that isn't available reports it as
+  unavailable rather than as zero.
+- **A response can contain metrics you didn't request.** The server resolves
+  dependencies — ask for `conversion_rate` and it also computes `sessions` and
+  `customers`. `ef stats` reports back the selection you asked for, in the
+  order you asked for it; `--raw` shows everything the server sent.
 
 ## Drift detection (`ef diff`)
 

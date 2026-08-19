@@ -336,31 +336,30 @@ Same Drawflow model, same always-pull-first / refuse-on-drift safety, same
 
 ---
 
-## `node_code` — why a correct split test can still report nothing
+## `node_code` — the graph's durable identity
 
-Every node in the split-test chain needs a `node_code`: a stable 16-character
-id that analytics uses to map a variant back to its configured name.
+Every node carries a `node_code`: a stable 16-character id. It is not
+cosmetic. The runtime writes the chosen split-test arm's code into the
+`st_res_<id>` cookie, analytics groups variants by it, `winner_node_code`
+points at it, and funnel step URLs are built from it
+(`/f/<funnel_code>/<node_code>`).
 
-**The server never creates one.** The save endpoint reads `node_code` and
-leaves it null if absent; it is minted by the visual builder when you drag a
-node in, and by the programmatic split-test API — neither of which is involved
-when you author the graph as JSON.
+It used to be minted only in the browser, on the canvas's `nodeCreated` event,
+so a graph written through the API had none — and the runtime handed that null
+to `res.cookie()`, which serialises it as the literal string `j:null`. Both
+arms then wrote the same value, so the test recorded no split at all while
+appearing to run perfectly. Current servers mint any missing code on every
+page-events write, and `ef pages events push` fills them too for brands on an
+older release.
 
-The failure this causes is nasty because nothing looks wrong. The graph
-validates. The test goes live and splits traffic correctly. Only days later,
-`ef stats split <id>` reports the arms as `j:null` and `` instead of the names
-you gave them, and the test has to be re-run.
+**Neither side ever rewrites a code that already exists**, and you must not
+either. A live test's recorded sessions are tied to its codes; a fresh one
+orphans that history, which makes the reporting go quiet rather than visibly
+wrong — much harder to notice.
 
-`ef pages events push` now mints any missing codes for you and tells you it
-did, so **push through the CLI and this is handled**. What you must not do is
-regenerate a code that already exists — a live test's recorded sessions are
-tied to it, and a new code orphans that history, which makes the reporting go
-quiet rather than obviously wrong. `ef pages events push` never rewrites an
-existing code, and neither should you.
-
-If you write a graph by hand and want the codes visible up front, give each
-`split_test`, `split_test_weight`, `page_variant` and `component_split_test`
-node a `"node_code": "<16 lowercase alphanumerics>"` in its `data`.
+So: push through the CLI and this is handled. If you write codes by hand, use
+16 lowercase alphanumerics and give every node one, not just the split-test
+chain.
 
 ---
 

@@ -1,34 +1,36 @@
 /**
- * `node_code` — the stable per-node identifier an events graph needs, and
- * that nothing server-side will give you.
+ * `node_code` — the graph's durable identity, filled in before a push.
  *
- * The events save endpoint reads `node_code` and never generates one
- * (`$node['data']['node_code'] ?? null`). It is minted by the visual builder
- * when a node is dragged in, and by the programmatic split-test API — neither
- * of which is involved when a graph is authored as JSON and pushed. So a
- * hand-written graph keeps exactly the codes it was given, and none where it
- * was given none.
+ * It is not cosmetic. The runtime writes the chosen split-test arm's code into
+ * the `st_res_<id>` cookie, analytics groups variants by it, `winner_node_code`
+ * points at it, and funnel step URLs are built from it
+ * (`/f/<funnel_code>/<node_code>`).
  *
- * That failure is silent and lands far away: the graph validates, the split
- * test runs and splits traffic correctly, and only the reporting breaks —
- * analytics has no key to map a variant back to its configured name, so
- * `ef stats split <id>` shows rows like `j:null` and `` instead of "A -
- * Self-assessment" and "B - Listicle". By then the test has been live for days.
+ * It was historically minted only in the browser — the canvas generates one on
+ * drawflow's `nodeCreated` — so a graph written through the API never had any,
+ * and the runtime handed a null to express `res.cookie()`, which serialises it
+ * as the literal string `j:null`. Both arms then wrote the same value, so the
+ * test recorded no split at all while appearing to run correctly.
  *
- * Filling the gap on the way out is a repair, not a preference: a node without
- * a code is never the intended state.
+ * The server now mints missing codes on every page-events write, so this is a
+ * COMPATIBILITY FALLBACK rather than the primary mechanism: the CLI ships
+ * independently of the server it talks to, and a brand on an older release
+ * still needs its graphs to carry codes.
+ *
+ * It is safe to run against a current server. Both sides only ever FILL a
+ * missing code and neither rewrites an existing one, so a code supplied here is
+ * preserved verbatim, and one supplied by neither is minted server-side.
  */
 
-/** Node data types whose absence of a code breaks split-test reporting. */
-const CODE_REQUIRED_TYPES = new Set([
-    'split_test',
-    'split_test_weight',
-    'component_split_test',
-    'page_variant',
-    'dynamic_container',
-    'script_rule',
-]);
-
+/**
+ * Every node gets a code, matching what the server mints.
+ *
+ * Not just the split-test chain: `entry` needs one too, because funnel step
+ * URLs are built from it. Narrowing this to the nodes whose absence visibly
+ * breaks reporting would leave the CLI and the server disagreeing about what a
+ * normalised graph looks like, which shows up later as phantom drift in
+ * `ef diff`.
+ */
 /**
  * Same shape the server's own builder mints: 16 chars of lowercase
  * alphanumerics. Matching the format matters because these codes are compared
@@ -53,12 +55,12 @@ export interface NodeCodeFill {
 }
 
 /**
- * Give every node that needs one a `node_code`, in place.
+ * Give every node lacking one a `node_code`, in place.
  *
- * Deliberately additive: an existing code is never rewritten. Codes are how a
- * running split test's history ties together, so regenerating one would orphan
- * the sessions already recorded against it — the reporting would go quiet
- * rather than wrong, which is worse.
+ * Deliberately additive, and the server makes the same bargain: an existing
+ * code is never rewritten. Codes are how a running split test's history ties
+ * together, so regenerating one would orphan the sessions already recorded
+ * against it — the reporting would go quiet rather than wrong, which is worse.
  */
 export function ensureNodeCodes(graph: unknown): NodeCodeFill {
     const filled: string[] = [];
@@ -73,8 +75,10 @@ export function ensureNodeCodes(graph: unknown): NodeCodeFill {
         const data = (raw as { data?: Record<string, unknown> }).data;
         if (!data || typeof data !== 'object') continue;
 
+        // A node with no type is malformed; the validator reports that, and
+        // stamping an identity onto it would only make the report confusing.
         const type = typeof data.type === 'string' ? data.type : '';
-        if (!CODE_REQUIRED_TYPES.has(type)) continue;
+        if (type === '') continue;
 
         const existing = data.node_code;
         if (typeof existing === 'string' && existing.trim() !== '') { kept++; continue; }
@@ -85,5 +89,9 @@ export function ensureNodeCodes(graph: unknown): NodeCodeFill {
     return { filled, kept };
 }
 
-/** Exported for tests and for `ef lint`: which node types must carry a code. */
-export const NODE_CODE_REQUIRED_TYPES: ReadonlySet<string> = CODE_REQUIRED_TYPES;
+/**
+ * Same shape the server mints. Kept in sync deliberately: two generators that
+ * disagree on format turn "which of these is the real code" into a question
+ * someone has to answer at the worst possible moment.
+ */
+export const NODE_CODE_PATTERN = /^[0-9a-z]{16}$/;

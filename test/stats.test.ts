@@ -393,3 +393,37 @@ test('ef stats cards explains an older server instead of reporting a bare 404', 
         await fs.promises.rm(root, { recursive: true, force: true });
     }
 });
+
+test('a variant whose label is empty prints something visible, not a blank row', async () => {
+    // Seen for real: a split test reported variants as "j:null" and "" — the
+    // numbers were right and the labels were mangled upstream. A row that
+    // renders as an empty line reads as a rendering glitch, which sends the
+    // reader looking in the wrong place for the fault.
+    const server = http.createServer((req, res) => {
+        const url = req.url || '';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (/\/analytics\/metrics\/split-test:9\/data/.test(url)) {
+            res.end(JSON.stringify({
+                '': { sessions: { value: 4, formatted: 4 }, row_key: '', row_label: '' },
+                'j:null': { sessions: { value: 1, formatted: 1 }, row_key: 'j:null', row_label: null },
+            }));
+            return;
+        }
+        res.end(JSON.stringify({ id: 9, name: 'Broken labels', type: 'page' }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as { port: number }).port;
+    const root = await setupBrand(`http://127.0.0.1:${port}`);
+    try {
+        const res = await runEf(root, ['stats', 'split', '9', '--metrics', 'sessions', '--json']);
+        assert.equal(res.status, 0, `stderr=${res.stderr}`);
+        const out = JSON.parse(res.stdout) as { variants: Array<{ variant: string }> };
+        for (const v of out.variants) {
+            assert.notEqual(v.variant.trim(), '', 'every variant row carries a visible label');
+        }
+        assert.ok(out.variants.some(v => v.variant === '(unlabeled)'), 'the empty one is named as such');
+    } finally {
+        await new Promise<void>((r) => server.close(() => r()));
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});

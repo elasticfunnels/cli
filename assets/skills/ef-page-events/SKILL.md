@@ -333,3 +333,42 @@ Same Drawflow model, same always-pull-first / refuse-on-drift safety, same
   assuming they match page events.
 - Create: `ef funnels create "<title>" --domain <id>` (a domain is required; the
   **server assigns the code**). Then pull it before editing.
+
+---
+
+## Record the test you just created
+
+A split test's numbers live on the server; **why** you ran it does not. The
+hypothesis, which variant is which, and what "winning" would mean exist only in
+the conversation that created it — and they are exactly what the next person,
+or the next session, needs in order to read the result.
+
+So after creating or changing a split test, append an entry to
+`elasticfunnels/split-tests.md` (create the file if it is not there):
+
+```markdown
+## #503 — Herpafend Prelander A/B (page: herpafend-pre, id 16109)
+- Created 2026-08-19. Status: running.
+- Variants: A "Self-assessment" 50% (original) · B "Listicle" 50% (herpafend-pre-v2, id 16110)
+- Hypothesis: a self-assessment opener qualifies harder and lifts CVR downstream.
+- Winning means: B beats A on `conversion_rate` at the server's own verdict.
+- Check with: `ef stats split 503`
+```
+
+Rules that keep the file worth reading:
+
+- **Append, never rewrite.** Old entries are the record of what was tried; a
+  test that lost is as useful to the next person as one that won.
+- **Always include the split test id** — it is the join key to
+  `ef stats split <id>`, and the only stable handle. Page slugs get renamed.
+- **Name every variant and its weight**, including the implicit one. A weight
+  node with no `page_variant` child is the *original* page; say so, or nobody
+  can tell later which arm was the control.
+- **Update the entry when you declare a winner**, with the date and the number
+  that decided it.
+- It lives in `elasticfunnels/` so it is committed with the project and a
+  teammate gets it too. It never syncs to the server — the CLI knows to leave
+  it alone.
+
+Read this file before answering "how is the test doing" — it is what turns a
+variant label into a decision.

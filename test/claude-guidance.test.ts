@@ -211,3 +211,21 @@ test('ef status names the missing guidance, and stays quiet once it is declined'
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });
+
+test('guidance and skills agree on where a split test\'s intent is recorded', () => {
+    // A test\'s numbers are on the server; the hypothesis and which arm is the
+    // control exist only in the conversation that created it. If the creating
+    // skill and the reading skill disagree about the filename, the record is
+    // written where nothing looks for it.
+    const guide = renderClaudeSection();
+    assert.match(guide, /elasticfunnels\/split-tests\.md/);
+
+    const root = path.resolve(__dirname, '..', '..', 'assets', 'skills');
+    const events = fs.readFileSync(path.join(root, 'ef-page-events', 'SKILL.md'), 'utf8');
+    const stats = fs.readFileSync(path.join(root, 'ef-stats', 'SKILL.md'), 'utf8');
+
+    assert.match(events, /elasticfunnels\/split-tests\.md/, 'the skill that creates tests writes the record');
+    assert.match(stats, /elasticfunnels\/split-tests\.md/, 'the skill that reads tests consults it');
+    assert.match(events, /[Aa]ppend, never rewrite|append-only/, 'losing tests stay in the history');
+    assert.match(events, /split test id/i, 'the id is the join key, since slugs get renamed');
+});

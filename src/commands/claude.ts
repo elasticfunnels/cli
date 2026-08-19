@@ -387,6 +387,7 @@ Most-used, by task:
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
+| Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |
 | Fix a rejected credential | \`ef login\` |
 | Update the CLI itself | \`ef update\` (\`--check\` to just look) |
@@ -422,6 +423,13 @@ Most-used, by task:
   \`ef seo status\` shows both levels at once; \`ef seo pages\` lists the exact URLs published.
   A page marked "Prevent Search Engine Indexing" is never listed, whatever the flag says, and a
   \`{param}\` route slug can never be listed (it stands for many URLs, not one).
+- **\`elasticfunnels/split-tests.md\`** — the project's record of *why* each split
+  test exists. The server stores a test's numbers; the hypothesis, which arm is
+  the control, and what winning would mean live only here. After creating or
+  changing a split test, append an entry keyed by the split test id (page slugs
+  get renamed; the id does not). Read it before reporting on a test. It is
+  committed with the project, and never syncs to the server.
+
 - **Analytics (\`ef stats\`)** — read-only, and scoped to this brand by the same key as
   everything else. \`ef stats\` for headline numbers, \`ef stats by <field>\` to break them
   down (\`page\`, \`country\`, \`utm_source\`, \`day\`, \`device\`, …), \`ef stats split <id>\` for a

@@ -363,6 +363,14 @@ guidance text instead):
 
 - **`ef-page-events`** — authoring Drawflow page-event and funnel graphs:
   split tests, redirects, "load the white page unless…", conditions, popups.
+Both skills share one convention: after creating or changing a split test, the
+agent appends an entry to **`elasticfunnels/split-tests.md`** — the split test
+id, which arm is the control, the hypothesis, and what winning would mean. The
+server stores a test's numbers but none of its intent, so without this a result
+is a variant label and a percentage with nothing to judge it against. The file
+is committed with the project (a teammate gets the context too) and never syncs
+to the server — `ef push` knows to leave it alone.
+
 - **`ef-stats`** — reading analytics correctly. Mostly it exists to prevent
   four specific wrong answers: a timezone-shifted day boundary read as a real
   drop, an unavailable metric reported as zero, the resolver's extra metrics

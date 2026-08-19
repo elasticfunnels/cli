@@ -25,6 +25,20 @@ interface PushOpts {
     verbose?: boolean;
 }
 
+/**
+ * Notes files that live in the brand root on purpose and never sync.
+ *
+ * `split-tests.md` is written by an agent next to the pages it describes, so it
+ * travels with the project and a teammate gets the context too. It is not a
+ * syncable entity, and warning "unknown kind" about a file the guidance itself
+ * tells people to keep there is noise on every `ef push --all`.
+ */
+const PROJECT_NOTES_FILES = new Set(['split-tests.md']);
+
+function isProjectNotesFile(brandRoot: string, abs: string): boolean {
+    return path.dirname(abs) === brandRoot && PROJECT_NOTES_FILES.has(path.basename(abs));
+}
+
 export function registerPushCommand(program: Command): void {
     program
         .command('push [paths...]')
@@ -99,7 +113,9 @@ Examples:
                 for (const abs of files) {
                     const cls = classifyAbsPath(rt.brandRoot, abs);
                     if (!cls) {
-                        if (!opts.json) log.warn(`would skip ${abs}: not under ${rt.brandRoot} or unknown kind.`);
+                        if (!opts.json && !isProjectNotesFile(rt.brandRoot, abs)) {
+                            log.warn(`would skip ${abs}: not under ${rt.brandRoot} or unknown kind.`);
+                        }
                         continue;
                     }
                     if (opts.verbose && !opts.json) log.detail(`[verbose] ${abs}`);
@@ -135,7 +151,9 @@ Examples:
             for (const abs of files) {
                 const cls = classifyAbsPath(rt.brandRoot, abs);
                 if (!cls) {
-                    if (!opts.json) log.warn(`Skipping ${abs}: not under ${rt.brandRoot} or unknown kind.`);
+                    if (!opts.json && !isProjectNotesFile(rt.brandRoot, abs)) {
+                        log.warn(`Skipping ${abs}: not under ${rt.brandRoot} or unknown kind.`);
+                    }
                     continue;
                 }
                 if (opts.verbose && !opts.json) {

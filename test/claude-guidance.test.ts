@@ -229,3 +229,16 @@ test('guidance and skills agree on where a split test\'s intent is recorded', ()
     assert.match(events, /[Aa]ppend, never rewrite|append-only/, 'losing tests stay in the history');
     assert.match(events, /split test id/i, 'the id is the join key, since slugs get renamed');
 });
+
+test('guidance tells the agent to check the CLI version but not to install it', () => {
+    // Two halves, and both matter. The notifier suppresses itself whenever
+    // stderr is not a TTY — always true for an agent — so without being told,
+    // an agent never learns the CLI is stale and quietly follows guidance for a
+    // version it is not running. But `ef update` is a GLOBAL install: it
+    // changes a binary shared with every other project on the machine, can need
+    // sudo, and swaps the tool mid-task. Check, report, let the human decide.
+    const text = renderClaudeSection();
+    assert.match(text, /ef update --check/, 'the read-only check is named');
+    assert.match(text, /[Dd]o not run `ef update` yourself/, 'installing is off-limits');
+    assert.match(text, /global install/i, 'and the reason why is given');
+});

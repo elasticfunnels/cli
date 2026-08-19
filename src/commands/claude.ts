@@ -54,11 +54,33 @@ export function stampedGuidanceVersion(text: string): string | null {
     return m ? m[1] : null;
 }
 
-/** Where each tool looks for project instructions. */
+/**
+ * Where each tool looks for project instructions.
+ *
+ * Cursor is the odd one out: its project rules live as `.mdc` files under
+ * `.cursor/rules/`, each needing YAML frontmatter to say when the rule applies.
+ * The guidance body is identical to the other two — only the wrapper differs.
+ */
 export const GUIDANCE_FILES = {
     claude: 'CLAUDE.md',
     codex: 'AGENTS.md',
+    cursor: path.join('.cursor', 'rules', 'elasticfunnels.mdc'),
 } as const;
+
+/**
+ * Frontmatter for the Cursor rule, written only when the file is created.
+ *
+ * `alwaysApply: true` because this is the project's core operating manual, not
+ * a rule about one file type — the same standing that CLAUDE.md has by simply
+ * existing. A re-run never rewrites this block, so a user who narrows it (adds
+ * `globs`, flips it to false) keeps their edit.
+ */
+export const CURSOR_FRONTMATTER = `---
+description: "ElasticFunnels project — the elasticfunnels/ folder is synced with the server by the \`ef\` CLI. Covers pulling, pushing, page/component files, domains, SEO, CRM and analytics."
+alwaysApply: true
+---
+
+`;
 
 const GUIDE = `# ElasticFunnels project
 
@@ -364,6 +386,7 @@ Most-used, by task:
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
+| How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |
 | Fix a rejected credential | \`ef login\` |
 | Update the CLI itself | \`ef update\` (\`--check\` to just look) |
 | Check config / identity | \`ef status\` · \`ef whoami\` · \`ef config get\` |
@@ -393,6 +416,21 @@ Most-used, by task:
   \`ef seo status\` shows both levels at once; \`ef seo pages\` lists the exact URLs published.
   A page marked "Prevent Search Engine Indexing" is never listed, whatever the flag says, and a
   \`{param}\` route slug can never be listed (it stands for many URLs, not one).
+- **Analytics (\`ef stats\`)** — read-only, and scoped to this brand by the same key as
+  everything else. \`ef stats\` for headline numbers, \`ef stats by <field>\` to break them
+  down (\`page\`, \`country\`, \`utm_source\`, \`day\`, \`device\`, …), \`ef stats split <id>\` for a
+  split test. Three rules matter more than the flags:
+  1. **Days are counted in a timezone.** Left unset the API counts LA days, not this brand's.
+     Pass \`--tz\`, or set it once with \`ef config set analyticsTz <zone>\`. A "drop" that
+     appears when nobody changed anything is usually a boundary shift, not a real one.
+  2. **Metric keys are per-brand.** Run \`ef stats metrics\` before assuming one exists — plan
+     modules and role permissions filter the list. A key that is absent is *unavailable*, which
+     is not the same as zero. Dashboard cards are discovered the same way, and additionally say
+     WHERE they resolve: \`ef stats cards --scope page\` lists the ones a page report can show.
+  3. **Never recompute a split test's significance.** \`ef stats split <id>\` reports the
+     server's verdict, which corrects alpha for the number of arms and withholds a winner until
+     the sample floor is met. A second calculation will eventually disagree with the dashboard.
+
 - \`ef crm entities | pipelines <entity> | stages <pipeline> | fields <entity> | entries <entity>\`
   — read CRM. Create/update/delete with \`ef crm <group> create/update/delete\`. Entity args
   take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.
@@ -480,7 +518,10 @@ export function renderClaudeSection(): string {
  * AGENTS.md path). Idempotent: replaces the managed block in place, appends it
  * to an existing file, or creates the file. Returns what it did.
  */
-export async function applyAgentGuidance(target: string): Promise<'created' | 'updated' | 'appended'> {
+export async function applyAgentGuidance(
+    target: string,
+    opts?: { frontmatter?: string },
+): Promise<'created' | 'updated' | 'appended'> {
     const section = renderClaudeSection();
     let existing = '';
     try { existing = await fs.promises.readFile(target, 'utf8'); } catch { /* new file */ }
@@ -489,6 +530,9 @@ export async function applyAgentGuidance(target: string): Promise<'created' | 'u
     let action: 'created' | 'updated' | 'appended';
     const begin = BEGIN_RE.exec(existing);
     if (begin && existing.includes(END)) {
+        // Everything before the marker is preserved verbatim — which is what
+        // keeps a Cursor rule's frontmatter, and any hand-written preamble in a
+        // CLAUDE.md, intact across re-runs and version refreshes.
         const before = existing.slice(0, begin.index);
         const after = existing.slice(existing.indexOf(END) + END.length);
         next = `${before}${section}${after}`;
@@ -497,7 +541,7 @@ export async function applyAgentGuidance(target: string): Promise<'created' | 'u
         next = `${existing.replace(/\s*$/, '')}\n\n${section}\n`;
         action = 'appended';
     } else {
-        next = `${section}\n`;
+        next = `${opts?.frontmatter ?? ''}${section}\n`;
         action = 'created';
     }
     await writeFileAtomic(target, next);
@@ -534,6 +578,23 @@ export async function refreshGuidanceIfStale(projectRoot: string): Promise<strin
         } catch { /* missing or unwritable — leave it alone */ }
     }
     return updated;
+}
+
+/**
+ * Which AI tool is running this command, when it can be told from the
+ * environment.
+ *
+ * Used only to point the user at the file that is theirs — never to decide
+ * which files get written. That distinction is the whole point: the tool is a
+ * property of the *person*, and a project is shared, so a per-machine answer
+ * must not become a per-repo one.
+ */
+export function detectAgentTool(): 'claude' | 'cursor' | 'codex' | null {
+    const env = process.env;
+    if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return 'claude';
+    if (env.CURSOR_TRACE_ID || env.CURSOR_AGENT) return 'cursor';
+    if (env.CODEX_SANDBOX || env.CODEX_HOME) return 'codex';
+    return null;
 }
 
 /**
@@ -646,7 +707,7 @@ export function registerClaudeCommand(program: Command): void {
                 const installed = await installBundledSkills(root);
                 if (installed.length > 0) {
                     log.success(`Installed skill${installed.length > 1 ? 's' : ''} into .claude/skills/: ${installed.join(', ')}.`);
-                    log.detail('Claude Code loads these on demand — e.g. ask it to "create a page event to load the white page unless ?test=1".');
+                    log.detail('Claude Code loads these on demand — e.g. "create a page event to load the white page unless ?test=1", or "how did revenue do last week".');
                 }
             }
 
@@ -679,5 +740,25 @@ export function registerCodexCommand(program: Command): void {
             const verb = action === 'created' ? 'Created' : action === 'updated' ? 'Updated ElasticFunnels section in' : 'Appended ElasticFunnels section to';
             log.success(`${verb} ${target}`);
             log.detail('Codex has no skills or hooks, so the pull-before-you-work rule lives in the guidance text itself.');
+        });
+}
+
+export function registerCursorCommand(program: Command): void {
+    program
+        .command('cursor')
+        .description(`Write the same ElasticFunnels guidance as a Cursor project rule (${GUIDANCE_FILES.cursor}) (idempotent — safe to re-run).`)
+        .option('--output <path>', `Target file (default: ${GUIDANCE_FILES.cursor} in the project root).`)
+        .option('--print', 'Print the guidance to stdout instead of writing a file.')
+        .action(async (opts: { output?: string; print?: boolean }) => {
+            if (opts.print) {
+                process.stdout.write(CURSOR_FRONTMATTER + renderClaudeSection() + '\n');
+                return;
+            }
+            const root = findProjectRoot() ?? process.cwd();
+            const target = opts.output ? path.resolve(opts.output) : path.join(root, GUIDANCE_FILES.cursor);
+            const action = await applyAgentGuidance(target, { frontmatter: CURSOR_FRONTMATTER });
+            const verb = action === 'created' ? 'Created' : action === 'updated' ? 'Updated ElasticFunnels section in' : 'Appended ElasticFunnels section to';
+            log.success(`${verb} ${target}`);
+            log.detail('Cursor has no skills or hooks, so the pull-before-you-work rule lives in the rule text itself.');
         });
 }

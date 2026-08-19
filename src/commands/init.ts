@@ -4,10 +4,10 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
-import { log } from '../utils/log';
+import { c, log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
-import { GUIDANCE_FILES, applyAgentGuidance, installBundledSkills, installSessionHook } from './claude';
+import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 import { redeemPairingCode } from '../api/deviceAuth';
@@ -93,7 +93,7 @@ async function confirmFolderIfNotEmpty(dir: string, opts: InitOptions): Promise<
 export function registerInitCommand(program: Command): void {
     program
         .command('init')
-        .description('Bind the current folder to an ElasticFunnels brand. Signs in through your browser by default. Writes .ef/config.json and .ef/auth (chmod 600 on Unix), runs "ef claude" + "ef codex" (--no-claude to skip), then pulls (--no-pull to skip).')
+        .description('Bind the current folder to an ElasticFunnels brand. Signs in through your browser by default. Writes .ef/config.json and .ef/auth (chmod 600 on Unix), runs "ef claude" + "ef codex" + "ef cursor" (--no-claude to skip), then pulls (--no-pull to skip).')
         .option('--api-url <url>', `ElasticFunnels API base URL (default: ${Defaults.apiUrl}, or from .vscode/settings.json).`)
         .option('--auth', 'Sign in through the browser (default when no key is supplied). Nothing secret is typed or pasted.')
         .option('--code <code>', 'Redeem a one-time pairing code from the app (Settings → Claude Code → advanced). For machines with no browser.')
@@ -110,7 +110,7 @@ export function registerInitCommand(program: Command): void {
         .option('--inherit', 'If a parent directory already has a .ef project, update its config in place instead of creating a new nested project.')
         .option('--force', 'Skip the "folder is not empty" confirmation prompt.')
         .option('--no-pull', 'Bind only — skip the initial full sync.')
-        .option('--no-claude', 'Skip the AI-tool setup entirely: no CLAUDE.md/AGENTS.md guidance, no skills, no SessionStart hook.')
+        .option('--no-claude', 'Skip the AI-tool setup entirely: no CLAUDE.md/AGENTS.md/Cursor-rule guidance, no skills, no SessionStart hook.')
         .option('--json', 'Print the resulting config as JSON.')
         .addHelpText('after', `
 Examples:
@@ -120,16 +120,19 @@ Examples:
   $ ef init --no-pull --no-claude            Bind only, nothing else
 
 Besides .ef/config.json and .ef/auth, a default init also sets this folder up
-for AI tools — the same work "ef claude" and "ef codex" do on their own:
+for AI tools — the same work "ef claude", "ef codex" and "ef cursor" do on
+their own:
 
-  CLAUDE.md               ElasticFunnels guidance (Claude Code reads this)
-  AGENTS.md               the same guidance (Codex and several editors read this)
-  .claude/skills/         the bundled ef-page-events skill
-  .claude/settings.json   a SessionStart hook running "ef pull --if-stale 30"
+  CLAUDE.md                          guidance (Claude Code reads this)
+  AGENTS.md                          the same guidance (Codex and several editors)
+  .cursor/rules/elasticfunnels.mdc   the same guidance, as a Cursor project rule
+  .claude/skills/                    the bundled ef-page-events + ef-stats skills
+  .claude/settings.json              a SessionStart hook running "ef pull --if-stale 30"
 
-All of it is idempotent and written between markers, so re-running "ef claude"
-or "ef codex" later updates the managed block and leaves the rest of your file
-alone. Pass --no-claude to skip the lot.`)
+All of it is idempotent and written between markers, so re-running any of those
+commands later updates the managed block and leaves the rest of your file alone
+— including a Cursor rule whose frontmatter you have tuned. Pass --no-claude to
+skip the lot.`)
         .action(async (opts: InitOptions) => {
             await runInit(opts);
         });
@@ -340,15 +343,36 @@ async function runInit(opts: InitOptions): Promise<void> {
             // read AGENTS.md. Same managed block, so they can't drift.
             claudeAction = await applyAgentGuidance(path.join(runtime.projectRoot, GUIDANCE_FILES.claude));
             await applyAgentGuidance(path.join(runtime.projectRoot, GUIDANCE_FILES.codex));
-            log.detail(`${GUIDANCE_FILES.claude} + ${GUIDANCE_FILES.codex} ${claudeAction} — ElasticFunnels guidance for AI tools (re-run with "ef claude" / "ef codex").`);
-
+            await applyAgentGuidance(path.join(runtime.projectRoot, GUIDANCE_FILES.cursor), { frontmatter: CURSOR_FRONTMATTER });
             const skills = await installBundledSkills(runtime.projectRoot);
-            if (skills.length > 0) log.detail(`Installed skill${skills.length > 1 ? 's' : ''} into .claude/skills/: ${skills.join(', ')}.`);
-
-            // The rule that matters most and is easiest to forget: start from
-            // current server data. A hook enforces it; guidance only asks.
             const hook = await installSessionHook(runtime.projectRoot);
-            if (hook !== 'present') log.detail('Added a SessionStart hook (.claude/settings.json) that runs "ef pull --if-stale 30" before each session.');
+
+            // Name every file and say whose it is, rather than running them
+            // together on one line. Whoever ran `ef init` has one tool in mind
+            // and needs to know which row is theirs — and that the others are
+            // there for their teammates, not clutter to delete.
+            if (!opts.json) {
+                const here = detectAgentTool();
+                const mine = (tool: string): string => (here === tool ? c.green('  ← you') : '');
+                log.info('');
+                log.info(`${c.bold('Guidance for AI tools')} ${c.dim(`(${claudeAction})`)}`);
+                log.detail(`  ${GUIDANCE_FILES.claude.padEnd(34)}Claude Code${mine('claude')}`);
+                log.detail(`  ${GUIDANCE_FILES.codex.padEnd(34)}Codex, and several editors${mine('codex')}`);
+                log.detail(`  ${GUIDANCE_FILES.cursor.padEnd(34)}Cursor${mine('cursor')}`);
+                if (skills.length > 0) {
+                    log.detail(`  ${'.claude/skills/'.padEnd(34)}${skills.join(', ')}`);
+                }
+                if (hook !== 'present') {
+                    log.detail(`  ${'.claude/settings.json'.padEnd(34)}SessionStart hook: ef pull --if-stale 30`);
+                }
+                log.detail('');
+                // Answers the question this output otherwise invites: "do I need
+                // to run something now?" No — it is already done, for whichever
+                // tool opens the folder, including a teammate's.
+                log.detail('  All three are written for you — no follow-up command needed, whichever tool');
+                log.detail('  you or a teammate opens this folder with. "ef claude" / "ef codex" / "ef cursor"');
+                log.detail('  refresh one on demand; "ef init --no-claude" skips the lot.');
+            }
         } catch { /* non-fatal */ }
     }
 

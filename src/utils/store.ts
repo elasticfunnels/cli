@@ -44,6 +44,15 @@ export interface EfConfig {
     historyKeep: number;
     /** Max age (days) for `.ef-history` snapshots. 0 = no age limit. */
     historyTtlDays: number;
+    /**
+     * IANA zone `ef stats` counts days in. Unset → the machine's own zone.
+     *
+     * Worth setting per project when the brand reports in a zone other than
+     * the one you sit in, because the numbers change: an omitted zone leaves
+     * the API to fall back to `America/Los_Angeles`, which moves every day
+     * boundary without saying so.
+     */
+    analyticsTz?: string | null;
     /** ISO timestamp of the last successful pull. Updated by `ef pull`. */
     lastPulledAt?: string | null;
 }
@@ -194,6 +203,11 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         saveMode: parsed.saveMode === 'draft' ? 'draft' : parsed.saveMode === 'direct' ? 'direct' : DEFAULT_SAVE_MODE,
         historyKeep: nonNegIntOr(parsed.historyKeep, DEFAULT_HISTORY_KEEP),
         historyTtlDays: nonNegIntOr(parsed.historyTtlDays, DEFAULT_HISTORY_TTL_DAYS),
+        // Validated on write by `ef config set`; re-checked here only for shape,
+        // since the file can also be hand-edited.
+        analyticsTz: typeof parsed.analyticsTz === 'string' && parsed.analyticsTz.trim() !== ''
+            ? parsed.analyticsTz.trim()
+            : null,
         lastPulledAt: typeof parsed.lastPulledAt === 'string' ? parsed.lastPulledAt : null,
     };
 }

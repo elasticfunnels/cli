@@ -21,3 +21,16 @@ export type { BrandCollection, BrandCollectionField, CollectionFieldType } from 
 export type { BrandSeoConfig, SeoPage, SeoExclusionReason } from '../models/seo';
 export { SEO_EXCLUSION_REASON } from '../models/seo';
 export { COLLECTION_FIELD_TYPES } from '../models/collection';
+export type {
+    AnalyticsCard,
+    AnalyticsCardCatalog,
+    AnalyticsMetricDef,
+    AnalyticsMetricValue,
+    AnalyticsMetricData,
+    AnalyticsGroupRow,
+    SplitTest,
+    SplitTestVariant,
+    SplitTestSignificance,
+    DashboardPreset,
+    DashboardConfig,
+} from '../models/analytics';

@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { renderClaudeSection, applyAgentGuidance, installBundledSkills, stampedGuidanceVersion, guidanceVersion } from '../src/commands/claude';
+import { renderClaudeSection, applyAgentGuidance, installBundledSkills, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
 
 test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', () => {
     const s = renderClaudeSection();
@@ -107,6 +107,59 @@ test('applyAgentGuidance appends to an existing CLAUDE.md without clobbering it'
         assert.ok(out.includes('# My project'), 'keeps existing content');
         assert.ok(out.includes('Existing notes.'));
         assert.ok(out.includes('ef:begin'), 'adds the managed block');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('the ef-stats skill ships, and carries the interpretation traps that make it worth having', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-skills-stats-'));
+    try {
+        const installed = await installBundledSkills(dir);
+        assert.ok(installed.includes('ef-stats'), `expected the ef-stats skill; got ${JSON.stringify(installed)}`);
+        const body = await fs.promises.readFile(path.join(dir, '.claude', 'skills', 'ef-stats', 'SKILL.md'), 'utf8');
+        assert.ok(body.startsWith('---\n'), 'opens with YAML frontmatter');
+        assert.match(body, /\nname: ef-stats\b/);
+        // The flags are in --help. These four are the reasons the skill exists:
+        // each one produces a confidently wrong answer with nothing in the
+        // output to warn the reader.
+        assert.match(body, /America\/Los_Angeles/, 'the timezone fallback trap');
+        assert.match(body, /unavailable/i, 'a missing metric is not zero');
+        assert.match(body, /did not ask for|not request/i, 'resolver extras');
+        assert.match(body, /[Nn]ever recompute/, 'significance is read, not derived');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('guidance routes performance questions to ef stats', () => {
+    // Without a row in the task table an agent has no way to discover the
+    // command exists, and will answer analytics questions by guessing.
+    const text = renderClaudeSection();
+    assert.match(text, /ef stats/, 'the command is named');
+    assert.match(text, /analyticsTz|--tz/, 'the timezone rule travels with it');
+    assert.match(text, /ef stats metrics/, 'metric keys are per-brand and must be discovered');
+});
+
+test('ef cursor writes a .mdc rule whose frontmatter survives a re-run', async () => {
+    // Cursor needs YAML frontmatter to know when a rule applies. It is written
+    // once, on create — a user who narrows the rule (globs, alwaysApply:false)
+    // must keep that edit when the managed block is later refreshed.
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-cursor-'));
+    try {
+        const target = path.join(dir, GUIDANCE_FILES.cursor);
+        assert.equal(await applyAgentGuidance(target, { frontmatter: CURSOR_FRONTMATTER }), 'created');
+
+        const created = await fs.promises.readFile(target, 'utf8');
+        assert.ok(created.startsWith('---\n'), 'opens with Cursor frontmatter');
+        assert.match(created, /alwaysApply: true/);
+
+        await fs.promises.writeFile(target, created.replace('alwaysApply: true', 'alwaysApply: false'));
+        assert.equal(await applyAgentGuidance(target, { frontmatter: CURSOR_FRONTMATTER }), 'updated');
+
+        const after = await fs.promises.readFile(target, 'utf8');
+        assert.match(after, /alwaysApply: false/, 'the user edit is preserved, not reset');
+        assert.equal(after.match(/ef:begin/g)?.length, 1, 'no duplicate managed block');
     } finally {
         await fs.promises.rm(dir, { recursive: true, force: true });
     }

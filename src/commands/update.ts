@@ -284,6 +284,12 @@ install, 5 the registry could not be reached.`)
             }
 
             log.success(`Updated to ${c.bold(latest)}. Run "ef --version" to confirm.`);
+            // Says what happens next, because the alternative is a user
+            // wondering whether to re-run `ef claude` / `ef cursor` by hand.
+            // It cannot be done here: this process is still the OLD binary, so
+            // stamping now would mark the old guidance current and suppress the
+            // real refresh. The next command run by the new binary does it.
+            log.detail('  CLAUDE.md / AGENTS.md / .cursor rules refresh themselves on your next "ef" command — nothing to re-run.');
             if (opts.json) log.json({ ok: true, current, latest, updateAvailable: available, updated: true, installKind: install.kind, command: printable });
         });
 }

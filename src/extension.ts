@@ -2,6 +2,8 @@ import { Command } from 'commander';
 import { CliError, ExitCode } from './utils/exit';
 import { log } from './utils/log';
 import { getUpdateNotice } from './utils/updateNotifier';
+import { refreshGuidanceIfStale } from './commands/claude';
+import { findProjectRoot } from './utils/store';
 import { registerInitCommand } from './commands/init';
 import { registerResetCommand } from './commands/reset';
 import { registerWhoamiCommand } from './commands/whoami';
@@ -19,7 +21,7 @@ import { registerAssetsCommand } from './commands/assets';
 import { registerVariablesCommand } from './commands/variables';
 import { registerDiffCommand } from './commands/diff';
 import { registerAskCommand } from './commands/ask';
-import { registerClaudeCommand, registerCodexCommand } from './commands/claude';
+import { registerClaudeCommand, registerCodexCommand, registerCursorCommand } from './commands/claude';
 import { registerMcpCommand } from './commands/mcp';
 import { registerInstallHighlighterCommand } from './commands/installHighlighter';
 import { registerUpdateCommand } from './commands/update';
@@ -28,6 +30,7 @@ import { registerCollectionsCommand } from './commands/collections';
 import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
 import { registerSeoCommand } from './commands/seo';
+import { registerStatsCommand } from './commands/stats';
 import { registerWatchCommand } from './commands/watch';
 import { registerLintCommand } from './commands/lint';
 import { registerDomainsCommand } from './commands/domains';
@@ -89,6 +92,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerAskCommand(program);
     registerClaudeCommand(program);
     registerCodexCommand(program);
+    registerCursorCommand(program);
     registerMcpCommand(program);
     registerInstallHighlighterCommand(program);
     registerUpdateCommand(program);
@@ -97,6 +101,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerLintCommand(program);
     registerDomainsCommand(program);
     registerSeoCommand(program);
+    registerStatsCommand(program);
     registerCollectionsCommand(program);
     registerCrmCommand(program);
     registerFunnelsCommand(program);
@@ -105,6 +110,23 @@ Designed for Claude Code, scripts, and humans equally:
     // registerEmailsCommand(program);
 
     return program;
+}
+
+/**
+ * Re-stamp stale guidance, never at the cost of the command that just ran.
+ *
+ * Everything here is best-effort: a read-only checkout, a project that opted
+ * out, or no project at all must not turn a successful command into a failure.
+ */
+async function refreshGuidanceQuietly(): Promise<void> {
+    try {
+        const root = findProjectRoot();
+        if (!root) return;
+        const refreshed = await refreshGuidanceIfStale(root);
+        if (refreshed.length > 0) {
+            log.detail(`Refreshed ${refreshed.join(', ')} for CLI v${getVersion()}.`);
+        }
+    } catch { /* never fail a command over guidance upkeep */ }
 }
 
 /** Programmatic entry — exported and called from `bin/ef.js`. */
@@ -119,6 +141,21 @@ export async function run(argv: string[]): Promise<void> {
 
     try {
         await program.parseAsync(argv);
+        // Bring the project's AI guidance up to this CLI's version, whatever
+        // command just ran.
+        //
+        // It cannot happen during `ef update`: that process IS the old binary,
+        // so stamping there would write the old guidance and mark it current —
+        // worse than leaving it stale, because the real refresh would then be
+        // skipped. The next command run by the new binary is the first honest
+        // moment, and this is it.
+        //
+        // Previously only `ef pull` did this, which covered Claude Code (its
+        // SessionStart hook pulls) but left Cursor and Codex users reading
+        // guidance for whatever version they last pulled on. Costs three small
+        // reads when current, and writes nothing unless a managed block is
+        // actually out of date.
+        await refreshGuidanceQuietly();
     } catch (err) {
         if (err instanceof CliError) {
             // A rejected credential gets the fix appended here, once, based on

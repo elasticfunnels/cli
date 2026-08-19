@@ -390,7 +390,7 @@ Most-used, by task:
 | Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |
 | Fix a rejected credential | \`ef login\` |
-| Update the CLI itself | \`ef update\` (\`--check\` to just look) |
+| Is my CLI current? | \`ef update --check\` — read-only. Report the result; let the user run \`ef update\` themselves. |
 | Check config / identity | \`ef status\` · \`ef whoami\` · \`ef config get\` |
 
 - \`ef status\` — connection, last sync, entity counts.
@@ -423,6 +423,20 @@ Most-used, by task:
   \`ef seo status\` shows both levels at once; \`ef seo pages\` lists the exact URLs published.
   A page marked "Prevent Search Engine Indexing" is never listed, whatever the flag says, and a
   \`{param}\` route slug can never be listed (it stands for many URLs, not one).
+- **Keeping the CLI current.** \`ef update --check\` is read-only and instant —
+  it prints whether a newer version exists and stops. Worth running before
+  substantial work, and worth running the moment a command does not behave the
+  way this file describes: that mismatch usually means the CLI predates the
+  guidance you are reading.
+
+  **Do not run \`ef update\` yourself.** It is a global install (\`npm i -g\`
+  or the equivalent) — it changes a binary shared by every other ElasticFunnels
+  project on this machine, can need sudo, and swaps the tool underneath a task
+  already in progress. Report what \`--check\` said and let the user decide.
+  You will not see the CLI's own "update available" nudge either way: it
+  suppresses itself whenever stderr is not a terminal, which is always true for
+  you.
+
 - **\`elasticfunnels/split-tests.md\`** — the project's record of *why* each split
   test exists. The server stores a test's numbers; the hypothesis, which arm is
   the control, and what winning would mean live only here. After creating or

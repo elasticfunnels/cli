@@ -336,6 +336,34 @@ Same Drawflow model, same always-pull-first / refuse-on-drift safety, same
 
 ---
 
+## `node_code` — why a correct split test can still report nothing
+
+Every node in the split-test chain needs a `node_code`: a stable 16-character
+id that analytics uses to map a variant back to its configured name.
+
+**The server never creates one.** The save endpoint reads `node_code` and
+leaves it null if absent; it is minted by the visual builder when you drag a
+node in, and by the programmatic split-test API — neither of which is involved
+when you author the graph as JSON.
+
+The failure this causes is nasty because nothing looks wrong. The graph
+validates. The test goes live and splits traffic correctly. Only days later,
+`ef stats split <id>` reports the arms as `j:null` and `` instead of the names
+you gave them, and the test has to be re-run.
+
+`ef pages events push` now mints any missing codes for you and tells you it
+did, so **push through the CLI and this is handled**. What you must not do is
+regenerate a code that already exists — a live test's recorded sessions are
+tied to it, and a new code orphans that history, which makes the reporting go
+quiet rather than obviously wrong. `ef pages events push` never rewrites an
+existing code, and neither should you.
+
+If you write a graph by hand and want the codes visible up front, give each
+`split_test`, `split_test_weight`, `page_variant` and `component_split_test`
+node a `"node_code": "<16 lowercase alphanumerics>"` in its `data`.
+
+---
+
 ## Record the test you just created
 
 A split test's numbers live on the server; **why** you ran it does not. The

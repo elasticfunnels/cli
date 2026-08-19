@@ -374,6 +374,7 @@ Most-used, by task:
 | Get current server state | \`ef pull\` (whole brand) · \`ef pull pages/x.ef\` (one file) |
 | See my uncommitted changes | \`ef diff\` |
 | Ship a change | \`ef push pages/x.ef\` |
+| Ship every save automatically | \`ef watch\` — for a HUMAN's editor session. Long-running: never start it from an agent, push explicitly instead. |
 | Create a page / component | \`ef pages create <slug>\` · \`ef components create <code>\` |
 | Rename / re-slug a page | \`ef pages settings <slug> --slug <new>\` |
 | Put a page on a domain | \`ef pages settings <slug> --domain <name> [--homepage]\` |
@@ -397,7 +398,12 @@ Most-used, by task:
 - \`ef push pages/about.ef\` — push a file (optimistic concurrency). \`--all\` for
   everything, \`--dry-run\` to preview, \`--force\` to override a conflict.
 - \`ef watch\` — auto-push files as you edit and save them (publishes by default;
-  \`--draft\` to save drafts). Ideal alongside an AI editor — save and it's live.
+  \`--draft\` to save drafts). Meant for a person's editor session: it runs until
+  Ctrl-C, so **an agent should not start it** — it never returns, and the turn
+  hangs waiting on a process that is working exactly as designed. Push what you
+  changed with \`ef push <paths…>\` instead. If a watcher is already running in
+  the user's own terminal, your writes are pushed by it, so pushing again is
+  harmless but unnecessary.
 - \`ef pages push <slugOrPath>\` · \`ef components push <codeOrPath>\` ·
   \`ef scripts push <pathOrCode>\` — push one entity by path or code.
 - \`ef components create <code>\` · \`ef pages create <slug>\` — create an entity.

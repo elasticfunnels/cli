@@ -72,7 +72,14 @@ test('ef watch auto-pushes a changed file, then stops cleanly on SIGINT', async 
 
         const pushed = await waitUntil(() => mock.editorPosts.includes(42), 5000);
         assert.equal(pushed, true, `watch should push the changed file; stdout=${out}`);
-        assert.match(out, /"event":\s*"pushed"/);
+
+        // `editorPosts` is set by the SERVER the instant the request lands, but
+        // the watcher only prints its event after the response comes back and
+        // the result is handled. Asserting on stdout the moment the server has
+        // seen the POST is therefore a race the test loses whenever the machine
+        // is busy — so wait for the line itself rather than inferring it.
+        const logged = await waitUntil(() => /"event":\s*"pushed"/.test(out), 5000);
+        assert.equal(logged, true, `watch should log the push as JSON; stdout=${JSON.stringify(out)}`);
     } finally {
         child.kill('SIGINT');
         await once(child, 'close');

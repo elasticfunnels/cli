@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { CliError, ExitCode } from './utils/exit';
 import { log } from './utils/log';
 import { getUpdateNotice } from './utils/updateNotifier';
-import { refreshGuidanceIfStale } from './commands/claude';
+import { refreshGuidanceIfStale, syncBundledSkills } from './commands/claude';
 import { findProjectRoot } from './utils/store';
 import { registerInitCommand } from './commands/init';
 import { registerResetCommand } from './commands/reset';
@@ -125,6 +125,13 @@ async function refreshGuidanceQuietly(): Promise<void> {
         const refreshed = await refreshGuidanceIfStale(root);
         if (refreshed.length > 0) {
             log.detail(`Refreshed ${refreshed.join(', ')} for CLI v${getVersion()}.`);
+        }
+        // Skills travel with the guidance that references them. Refreshing one
+        // without the other leaves CLAUDE.md pointing at a skill the project
+        // does not have.
+        const skills = await syncBundledSkills(root);
+        if (skills.length > 0) {
+            log.detail(`Updated skill${skills.length > 1 ? 's' : ''} in .claude/skills/: ${skills.join(', ')}.`);
         }
     } catch { /* never fail a command over guidance upkeep */ }
 }

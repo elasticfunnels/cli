@@ -45,6 +45,15 @@ export interface EfConfig {
     /** Max age (days) for `.ef-history` snapshots. 0 = no age limit. */
     historyTtlDays: number;
     /**
+     * Set to false when `ef init --no-claude` declined the AI-tool setup.
+     *
+     * Exists because "no CLAUDE.md" is otherwise two different situations that
+     * look identical on disk: a project that opted out, and one bound by a CLI
+     * old enough to predate the guidance. Recording the choice lets the CLI
+     * mention the missing setup to the second without nagging the first.
+     */
+    aiGuidance?: boolean;
+    /**
      * IANA zone `ef stats` counts days in. Unset → the machine's own zone.
      *
      * Worth setting per project when the brand reports in a zone other than
@@ -205,6 +214,8 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         historyTtlDays: nonNegIntOr(parsed.historyTtlDays, DEFAULT_HISTORY_TTL_DAYS),
         // Validated on write by `ef config set`; re-checked here only for shape,
         // since the file can also be hand-edited.
+        // Only ever stored as an explicit false; absent means "never asked".
+        aiGuidance: parsed.aiGuidance === false ? false : undefined,
         analyticsTz: typeof parsed.analyticsTz === 'string' && parsed.analyticsTz.trim() !== ''
             ? parsed.analyticsTz.trim()
             : null,

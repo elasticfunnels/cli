@@ -6,7 +6,7 @@ import { Brand } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
-import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings } from '../utils/store';
+import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings, saveConfig } from '../utils/store';
 import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
@@ -336,6 +336,13 @@ async function runInit(opts: InitOptions): Promise<void> {
     // Drop ElasticFunnels guidance into CLAUDE.md so Claude Code knows the
     // conventions (efmeta, template syntax, CLI). Idempotent; best-effort.
     let claudeAction: 'created' | 'updated' | 'appended' | null = null;
+    if (opts.claude === false) {
+        // Record the refusal, so later versions can tell this apart from a
+        // project that merely predates the guidance and offer it there only.
+        try {
+            await saveConfig(runtime.projectRoot, { ...runtime.config, aiGuidance: false });
+        } catch { /* non-fatal */ }
+    }
     if (opts.claude !== false) {
         try {
             // Both conventions, because we don't know which tool will open this

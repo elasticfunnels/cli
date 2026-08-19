@@ -3,6 +3,10 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as http from 'http';
+import { spawn } from 'child_process';
+
+const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
 import { renderClaudeSection, applyAgentGuidance, installBundledSkills, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
 
 test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', () => {
@@ -173,4 +177,37 @@ test('guidance warns that ef watch is long-running and not for an agent to start
     assert.match(text, /\| Ship every save automatically \|/, 'ef watch has a task-table row');
     assert.match(text, /never start it from an agent/i);
     assert.match(text, /an agent should not start it/i);
+});
+
+test('ef status names the missing guidance, and stays quiet once it is declined', async () => {
+    const dir = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-nudge-')));
+    const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('[]');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as { port: number }).port;
+    const cfg = path.join(dir, '.ef', 'config.json');
+    const run = (): Promise<string> => new Promise((resolve) => {
+        const child = spawn(process.execPath, [BIN_PATH, 'status'], { cwd: dir, env: { ...process.env, NO_COLOR: '1' } });
+        let err = '';
+        child.stderr.on('data', (d) => (err += d));
+        child.stdout.on('data', () => {});
+        child.on('close', () => resolve(err));
+    });
+    try {
+        await fs.promises.mkdir(path.join(dir, '.ef'), { recursive: true });
+        const base = { apiUrl: `http://127.0.0.1:${port}`, brandId: 7, syncRoot: 'elasticfunnels', syncLayout: 'flat', saveMode: 'direct' };
+        await fs.promises.writeFile(cfg, JSON.stringify(base));
+        await fs.promises.writeFile(path.join(dir, '.ef', 'auth'), 'k\n');
+
+        assert.match(await run(), /No AI guidance here/, 'an old project is told what it is missing');
+
+        // A recorded refusal must silence it — the point of storing the choice.
+        await fs.promises.writeFile(cfg, JSON.stringify({ ...base, aiGuidance: false }));
+        assert.doesNotMatch(await run(), /No AI guidance here/, 'a declined project is not nagged');
+    } finally {
+        await new Promise<void>((r) => server.close(() => r()));
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
 });

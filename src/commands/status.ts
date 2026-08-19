@@ -6,6 +6,16 @@ import { loadRuntime } from '../utils/store';
 import { SyncStateFile, STATE_VERSION } from '../sync/stateFile';
 import { CliError, ExitCode } from '../utils/exit';
 import { credentialKind, reauthHint } from '../utils/credential';
+import { GUIDANCE_FILES } from './claude';
+import * as fs from 'fs';
+import * as path from 'path';
+
+/** Whether any of the three guidance files exists in this project. */
+function hasAnyGuidance(root: string): boolean {
+    return Object.values(GUIDANCE_FILES).some((rel) => {
+        try { return fs.existsSync(path.join(root, rel)); } catch { return false; }
+    });
+}
 
 export function registerStatusCommand(program: Command): void {
     program
@@ -72,6 +82,10 @@ export function registerStatusCommand(program: Command): void {
                     connectError,
                     credentialRejected,
                     credential: credentialKind(rt.apiKey),
+                    aiGuidance: {
+                        present: hasAnyGuidance(rt.projectRoot),
+                        declined: rt.config.aiGuidance === false,
+                    },
                     lastPulledAt: rt.config.lastPulledAt ?? null,
                     lastPagesSyncAt: state.lastPagesSyncAt,
                     lastAssetsSyncAt: state.lastAssetsSyncAt,
@@ -101,6 +115,16 @@ export function registerStatusCommand(program: Command): void {
             log.info(`${c.bold('Assets')}      ${counts.assets}`);
             if (stateTooNew) {
                 log.warn(`State file is schema v${state.getLoadedVersion()} but this CLI is v${STATE_VERSION}. Sync will run but local state will not be updated. Run "ef update".`);
+            }
+            // Projects bound before the guidance existed never get it: the
+            // refresh only re-stamps blocks that are already there, precisely so
+            // an opt-out is never overridden. That safety leaves this case
+            // silent, so say it here rather than create files unasked.
+            if (!hasAnyGuidance(rt.projectRoot) && rt.config.aiGuidance !== false) {
+                log.info('');
+                log.detail('No AI guidance here — no CLAUDE.md, AGENTS.md or Cursor rule.');
+                log.detail('  Add all three with "ef claude". Nothing is written automatically: a missing');
+                log.detail('  file can be a deliberate choice, and this cannot tell the difference.');
             }
             // A health check that reports a dead credential and still exits 0 is
             // how the problem stays hidden from whatever is scripting it.

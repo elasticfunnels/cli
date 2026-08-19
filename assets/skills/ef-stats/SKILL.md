@@ -201,6 +201,11 @@ That is a graph problem, not a stats problem — see the `ef-page-events` skill.
 Say so plainly rather than reporting the raw keys as if they were variant
 names, and do not try to guess which arm is which from the ordering.
 
+It also means the test **measured nothing**: the runtime wrote the same cookie
+value for both arms, so the visitors were never actually split. Do not report
+such a test as a close result — there is no result. It has to be re-pushed
+(which mints the codes) and re-run.
+
 ### Read the project's own record first
 
 `elasticfunnels/split-tests.md`, when it exists, is where this project writes

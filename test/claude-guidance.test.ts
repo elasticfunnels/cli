@@ -164,3 +164,13 @@ test('ef cursor writes a .mdc rule whose frontmatter survives a re-run', async (
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });
+
+test('guidance warns that ef watch is long-running and not for an agent to start', () => {
+    // An agent that runs `ef watch` hangs its own turn on a process behaving
+    // exactly as designed, with no error to notice. The bullet alone was not
+    // enough — the task table is what gets scanned when picking a command.
+    const text = renderClaudeSection();
+    assert.match(text, /\| Ship every save automatically \|/, 'ef watch has a task-table row');
+    assert.match(text, /never start it from an agent/i);
+    assert.match(text, /an agent should not start it/i);
+});

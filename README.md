@@ -380,6 +380,14 @@ Skip the lot with `ef init --no-claude`; a project that opted out is never
 given these files behind your back — no `.claude/skills/` means no skills, and
 the refresh leaves it that way.
 
+**A project with no guidance never gets it automatically**, including after an
+upgrade. That is deliberate: an absent `CLAUDE.md` is two different situations
+that look identical on disk — someone who declined it, and a project bound
+before the guidance existed — and creating one silently would override a real
+choice in the first case. `ef status` names what is missing and how to add it,
+and `ef init --no-claude` now records the refusal (`aiGuidance: false` in
+`.ef/config.json`) so a project that opted out is never mentioned again.
+
 > Claude Code enumerates `.claude/skills/` when a session starts. A skill that
 > arrives mid-session (from an `ef pull`, say) is on disk and readable, but will
 > not appear in the session's skill list until it restarts.

@@ -273,3 +273,19 @@ test('a project that never opted into skills is not given any', async () => {
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });
+
+test('a project with no guidance is never given any by the refresh', async () => {
+    // The load-bearing half of the opt-out. "No CLAUDE.md" is two situations
+    // that look identical on disk — a deliberate refusal, and a project bound
+    // before the guidance existed — so creating one silently would override a
+    // real choice in the first case. `ef status` mentions it instead.
+    const dir = await tmp();
+    try {
+        assert.deepEqual(await refreshGuidanceIfStale(dir), []);
+        for (const rel of Object.values(GUIDANCE_FILES)) {
+            assert.equal(fs.existsSync(path.join(dir, rel)), false, `${rel} was created unasked`);
+        }
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});

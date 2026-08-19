@@ -9,6 +9,7 @@ import { EfRuntime, loadRuntime } from '../utils/store';
 import { sha256, writeFileAtomic } from '../utils/fs';
 import { readSnapshot, writeSnapshot } from '../sync/baselineSnapshots';
 import { canonical, graphHash } from '../sync/graph';
+import { ensureNodeCodes } from '../sync/nodeCodes';
 import { resolvePageBySlug } from './shared';
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
 import { unifiedDiff } from '../sync/merge';
@@ -198,11 +199,28 @@ export function registerPageEventsCommand(pages: Command): void {
                     return;
                 }
             }
+            // Mint any missing node_code BEFORE the push. The server reads this
+            // field and never generates it, so a hand-authored graph that omits
+            // it splits traffic correctly and then reports variants as `j:null`
+            // and `` — a failure that only shows up in `ef stats split` days
+            // later. Existing codes are left alone: they are what ties a running
+            // test's recorded sessions together.
+            const codes = ensureNodeCodes(graph);
+            if (codes.filled.length > 0 && !opts.json) {
+                log.detail(`Assigned node_code to ${codes.filled.length} node(s) — the server does not, and split-test reporting needs it.`);
+            }
+
             await api.setPageEvents(rt.config.brandId, page.id, graph);
             // Adopt the server's normalized graph (positions, split-test ids) as the
             // new local file + baseline so the next push isn't a phantom drift.
             const normalized = await api.getPageEvents(rt.config.brandId, page.id).catch(() => null);
+            // Write back the server's copy when we have it. When we do not, the
+            // locally-filled graph still has to land on disk: the codes were
+            // minted in memory and are now live on the server, so a local file
+            // without them would mint DIFFERENT ones on the next push and orphan
+            // every session already recorded against the old ones.
             if (normalized) await writeEventsFile(rt, page, normalized);
+            else if (codes.filled.length > 0) await writeEventsFile(rt, page, graph);
             await writeSnapshot(rt.brandRoot, 'pageEvents', page.id, Buffer.from(canonical(normalized ?? graph), 'utf8'));
 
             if (opts.json) { log.json({ ok: true, pushed: rel, pageId: page.id, validation: report }); return; }

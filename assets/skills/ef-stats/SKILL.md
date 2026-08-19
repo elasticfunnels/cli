@@ -190,6 +190,17 @@ How to report it:
 Never recommend declaring a winner the server has not declared. If someone asks
 you to call it early, say what the server says and let them decide.
 
+### Variant labels like `j:null` or blank mean a missing `node_code`
+
+If `ef stats split <id>` shows arms named `j:null`, `` or `(unlabeled)` rather
+than the names configured on the test, the numbers are real and the *labels*
+are what broke: the graph's nodes have no `node_code`, so analytics has no key
+to map a variant back to its name.
+
+That is a graph problem, not a stats problem — see the `ef-page-events` skill.
+Say so plainly rather than reporting the raw keys as if they were variant
+names, and do not try to guess which arm is which from the ordering.
+
 ### Read the project's own record first
 
 `elasticfunnels/split-tests.md`, when it exists, is where this project writes

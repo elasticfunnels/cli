@@ -369,8 +369,20 @@ guidance text instead):
   treated as requested, and a split test called before the server's sample
   floor is met.
 
+The skills are kept current the same way the guidance is: a project that has
+`.claude/skills/` gets new and updated skills on the next command after an
+upgrade. This matters because the two reference each other — a refreshed
+`CLAUDE.md` tells the agent to use the `ef-stats` skill, so shipping the
+sentence without the file would point it at something that isn't there. Only
+what is missing or actually different is written.
+
 Skip the lot with `ef init --no-claude`; a project that opted out is never
-given these files behind your back.
+given these files behind your back — no `.claude/skills/` means no skills, and
+the refresh leaves it that way.
+
+> Claude Code enumerates `.claude/skills/` when a session starts. A skill that
+> arrives mid-session (from an `ef pull`, say) is on disk and readable, but will
+> not appear in the session's skill list until it restarts.
 
 ## Analytics (`ef stats`)
 

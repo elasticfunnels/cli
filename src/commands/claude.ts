@@ -626,6 +626,51 @@ function findSkillsSourceDir(): string | null {
  * Idempotent: overwrites the managed SKILL.md in place so re-running picks up a
  * newer CLI's copy. Returns the skill names written (empty if none bundled).
  */
+/**
+ * Bring an opted-in project's skills up to this CLI's bundle.
+ *
+ * Guidance re-stamps itself on every command, but skills did not, and the two
+ * are not independent: a refreshed CLAUDE.md tells the agent to "use the
+ * ef-stats skill", so a project upgraded from a CLI that predates that skill
+ * ended up pointing at a file that was never delivered. Nothing in the output
+ * said so — the agent just found no skill and carried on guessing.
+ *
+ * Two guards keep this from being a surprise:
+ *   - it only touches projects that ALREADY have `.claude/skills/`, so
+ *     `ef init --no-claude` is never quietly given one;
+ *   - it writes only what is missing or actually different, so the common path
+ *     is a few reads and no churn on file mtimes.
+ */
+export async function syncBundledSkills(root: string): Promise<string[]> {
+    const src = findSkillsSourceDir();
+    if (!src) return [];
+    const skillsDir = path.join(root, '.claude', 'skills');
+    try {
+        if (!fs.statSync(skillsDir).isDirectory()) return [];
+    } catch {
+        return []; // project never opted into skills
+    }
+
+    const changed: string[] = [];
+    for (const name of fs.readdirSync(src)) {
+        const from = path.join(src, name, 'SKILL.md');
+        try {
+            if (!fs.statSync(from).isFile()) continue;
+        } catch { continue; }
+
+        const body = await fs.promises.readFile(from, 'utf8');
+        const to = path.join(skillsDir, name, 'SKILL.md');
+        let current: string | null = null;
+        try { current = await fs.promises.readFile(to, 'utf8'); } catch { /* missing */ }
+        if (current === body) continue;
+
+        await fs.promises.mkdir(path.dirname(to), { recursive: true });
+        await writeFileAtomic(to, body);
+        changed.push(name);
+    }
+    return changed;
+}
+
 export async function installBundledSkills(root: string): Promise<string[]> {
     const src = findSkillsSourceDir();
     if (!src) return [];

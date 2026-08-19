@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, guidanceVersion, refreshGuidanceIfStale, stampedGuidanceVersion } from '../src/commands/claude';
+import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, guidanceVersion, installBundledSkills, syncBundledSkills, refreshGuidanceIfStale, stampedGuidanceVersion } from '../src/commands/claude';
 
 const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
 
@@ -222,5 +222,54 @@ test('detectAgentTool reads the environment, and admits when it cannot tell', ()
     } finally {
         for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
         Object.assign(process.env, saved);
+    }
+});
+
+test('a skill added in a later CLI reaches a project that already opted into skills', async () => {
+    // The failure this pins down: guidance re-stamps itself, so an upgraded
+    // CLAUDE.md starts saying "use the ef-stats skill" — while the skill file
+    // itself was only ever written by `ef init` / `ef claude`. The project ends
+    // up pointing at a skill it does not have, and nothing says so.
+    const dir = await tmp();
+    try {
+        await installBundledSkills(dir);
+        const stats = path.join(dir, '.claude', 'skills', 'ef-stats', 'SKILL.md');
+        assert.ok(fs.existsSync(stats), 'precondition: the bundle ships ef-stats');
+        await fs.promises.rm(path.join(dir, '.claude', 'skills', 'ef-stats'), { recursive: true, force: true });
+
+        const changed = await syncBundledSkills(dir);
+        assert.ok(changed.includes('ef-stats'), `ef-stats not restored; got ${JSON.stringify(changed)}`);
+        assert.ok(fs.existsSync(stats), 'the missing skill is delivered');
+
+        // Second pass writes nothing: the common path must not churn mtimes.
+        assert.deepEqual(await syncBundledSkills(dir), []);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('an edited skill is restored to the shipped copy, since it is managed', async () => {
+    const dir = await tmp();
+    try {
+        await installBundledSkills(dir);
+        const target = path.join(dir, '.claude', 'skills', 'ef-stats', 'SKILL.md');
+        await fs.promises.writeFile(target, '---\nname: ef-stats\n---\nstale hand edit\n');
+
+        assert.ok((await syncBundledSkills(dir)).includes('ef-stats'));
+        assert.match(await fs.promises.readFile(target, 'utf8'), /America\/Los_Angeles/, 'shipped content is back');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('a project that never opted into skills is not given any', async () => {
+    // `.claude/skills/` absent means `ef init --no-claude`, or a deliberate
+    // removal. Either way it is a choice, and the refresh must not undo it.
+    const dir = await tmp();
+    try {
+        assert.deepEqual(await syncBundledSkills(dir), []);
+        assert.equal(fs.existsSync(path.join(dir, '.claude')), false);
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });

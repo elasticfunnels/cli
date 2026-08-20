@@ -463,7 +463,10 @@ Most-used, by task:
   it prints whether a newer version exists and stops. Worth running before
   substantial work, and worth running the moment a command does not behave the
   way this file describes: that mismatch usually means the CLI predates the
-  guidance you are reading.
+  guidance you are reading. The SessionStart hook already runs the cached form
+  (\`ef update --cached\`), which is silent when you are current — so if it said
+  nothing, you are. Never run a bare \`ef update\`: installing a new CLI is the
+  user's call, not yours.
 
   **Do not run \`ef update\` yourself.** It is a global install (\`npm i -g\`
   or the equivalent) — it changes a binary shared by every other ElasticFunnels
@@ -750,6 +753,26 @@ export async function installBundledSkills(root: string): Promise<string[]> {
 /** The command the session hook runs. Cheap by design — a no-op when fresh. */
 const SESSION_PULL_COMMAND = 'ef pull --if-stale 30';
 
+/*
+ * The second hook command, and why it is `--cached` rather than `--check`.
+ *
+ * The built-in "update available" nudge cannot reach an agent: it bails on
+ * `!process.stderr.isTTY`, and a hook's output is captured, never a terminal.
+ * So the one context where a stale CLI does the most damage — an agent working
+ * from guidance that no longer matches the tool — is the one context that was
+ * never told.
+ *
+ * `--check` would fix that and cost a blocking registry round-trip on every
+ * session start, which is exactly the property `--if-stale` was chosen to
+ * protect. `--cached` reads the same daily cache the nudge uses and refreshes
+ * it in the background, so the hook stays a pair of file reads. It also prints
+ * nothing when the CLI is current.
+ */
+const SESSION_UPDATE_COMMAND = 'ef update --cached';
+
+/** Every command the hook installs, in the order they run. */
+const SESSION_HOOK_COMMANDS = [SESSION_PULL_COMMAND, SESSION_UPDATE_COMMAND];
+
 /**
  * Install a Claude Code SessionStart hook that refreshes the project before the
  * model reads anything.
@@ -780,11 +803,15 @@ export async function installSessionHook(root: string): Promise<'created' | 'add
     if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
     if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = [];
 
-    const already = JSON.stringify(settings.hooks.SessionStart).includes(SESSION_PULL_COMMAND);
-    if (already) return 'present';
+    // Add only what is missing. A project set up by an older CLI already has the
+    // pull command, and re-running must give it the update check without
+    // installing a second copy of the pull.
+    const serialized = JSON.stringify(settings.hooks.SessionStart);
+    const missing = SESSION_HOOK_COMMANDS.filter((cmd) => !serialized.includes(cmd));
+    if (missing.length === 0) return 'present';
 
     settings.hooks.SessionStart.push({
-        hooks: [{ type: 'command', command: SESSION_PULL_COMMAND }],
+        hooks: missing.map((command) => ({ type: 'command', command })),
     });
 
     await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
@@ -800,7 +827,7 @@ export function registerClaudeCommand(program: Command): void {
         .option('--output <path>', 'Target file (default: CLAUDE.md in the project root).')
         .option('--print', 'Print the guidance to stdout instead of writing a file.')
         .option('--no-skills', 'Skip installing the bundled Claude Code skills into .claude/skills/.')
-        .option('--no-hook', 'Skip the SessionStart hook that runs "ef pull --if-stale" before each session.')
+        .option('--no-hook', 'Skip the SessionStart hook that runs "ef pull --if-stale" and "ef update --cached" before each session.')
         .action(async (opts: { output?: string; print?: boolean; skills?: boolean; hook?: boolean }) => {
             if (opts.print) {
                 process.stdout.write(renderClaudeSection() + '\n');
@@ -825,7 +852,7 @@ export function registerClaudeCommand(program: Command): void {
                 if (hook === 'present') {
                     log.detail('SessionStart hook already present in .claude/settings.json.');
                 } else {
-                    log.success(`SessionStart hook ${hook === 'created' ? 'written to' : 'added to'} .claude/settings.json — runs "${SESSION_PULL_COMMAND}" so each session starts on current data.`);
+                    log.success(`SessionStart hook ${hook === 'created' ? 'written to' : 'added to'} .claude/settings.json — runs "${SESSION_PULL_COMMAND}" so each session starts on current data, then "${SESSION_UPDATE_COMMAND}" to flag a CLI older than its guidance.`);
                 }
             }
         });

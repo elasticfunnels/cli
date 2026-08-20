@@ -140,6 +140,28 @@ function refreshInBackground(): void {
     } catch { /* ignore */ }
 }
 
+/**
+ * The cached "latest" version, without ever waiting on the network.
+ *
+ * `ef update --cached` is meant to run from a SessionStart hook, where the
+ * whole point of the hook is that it costs nothing. {@link fetchLatestVersion}
+ * is the wrong tool there: it is deliberately awaited and does not unref its
+ * socket, so it would put a registry round-trip in front of every session.
+ *
+ * So this reads the same daily cache the nudge uses and kicks off the same
+ * fire-and-forget refresh when it is stale. The answer therefore lags by one
+ * run on a cold cache — acceptable for a nudge, and the reason the caller must
+ * be able to say "unknown" rather than "up to date".
+ *
+ * @returns the cached version, or null when nothing has been cached yet.
+ */
+export function readCachedLatestVersion(): string | null {
+    const cache = readCache();
+    const stale = !cache.checkedAt || (Date.now() - cache.checkedAt) > CHECK_INTERVAL_MS;
+    if (stale) refreshInBackground();
+    return typeof cache.latest === 'string' ? cache.latest : null;
+}
+
 /** True unless the context is one where a nudge would be noise (scripts, CI, pipes, JSON, help/version). */
 function shouldNotify(argv: string[]): boolean {
     if (process.env.NO_UPDATE_NOTIFIER || process.env.EF_NO_UPDATE_NOTIFIER || process.env.CI) return false;

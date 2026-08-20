@@ -7,7 +7,7 @@ import * as http from 'http';
 import { spawn } from 'child_process';
 
 const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
-import { renderClaudeSection, applyAgentGuidance, installBundledSkills, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
+import { renderClaudeSection, applyAgentGuidance, installBundledSkills, installSessionHook, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
 
 test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', () => {
     const s = renderClaudeSection();
@@ -252,4 +252,89 @@ test('guidance teaches wildcard routes, and to prefer them over ?id= query strin
     assert.match(s, /Placeholders must all be trailing/, 'the prefix-stops-at-first-brace limit');
     assert.match(s, /can never \*start\* with a placeholder/, 'leading placeholders never match');
     assert.ok(s.includes('https://docs.elasticfunnels.io/pages/wildcard-routes'), 'links the docs page');
+});
+
+/*
+ * The SessionStart hook had no coverage at all, and it just grew a second
+ * command. The interesting case is not the fresh project — it is the project
+ * set up by an older CLI, which already carries the pull command. Re-running
+ * `ef claude` there has to add the update check WITHOUT installing a second
+ * copy of the pull, or every upgrade doubles the hook.
+ */
+test('the session hook installs both commands, and tops up an older pull-only hook', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-hook-'));
+    const settingsPath = path.join(dir, '.claude', 'settings.json');
+    const commandsIn = (s: any): string[] =>
+        (s.hooks.SessionStart as any[]).flatMap((e) => (e.hooks as any[]).map((h) => h.command));
+
+    // Fresh project: both commands, and nothing else invented.
+    assert.equal(await installSessionHook(dir), 'created');
+    let settings = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
+    assert.deepEqual(commandsIn(settings), ['ef pull --if-stale 30', 'ef update --cached']);
+
+    // Re-run is a no-op, not a second copy.
+    assert.equal(await installSessionHook(dir), 'present');
+    settings = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
+    assert.deepEqual(commandsIn(settings), ['ef pull --if-stale 30', 'ef update --cached']);
+
+    // A project written by <= 0.18.0: pull only, plus a hand-written hook of
+    // the user's that must survive untouched.
+    const legacy = path.join(dir, 'legacy');
+    await fs.promises.mkdir(path.join(legacy, '.claude'), { recursive: true });
+    await fs.promises.writeFile(path.join(legacy, '.claude', 'settings.json'), JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'ef pull --if-stale 30' }] }] },
+        permissions: { allow: ['Bash(ef:*)'] },
+    }));
+    assert.equal(await installSessionHook(legacy), 'added');
+    const upgraded = JSON.parse(await fs.promises.readFile(path.join(legacy, '.claude', 'settings.json'), 'utf8'));
+    assert.deepEqual(commandsIn(upgraded), ['ef pull --if-stale 30', 'ef update --cached'], 'gains only what it lacked');
+    assert.deepEqual(upgraded.permissions, { allow: ['Bash(ef:*)'] }, 'unrelated settings survive');
+
+    await fs.promises.rm(dir, { recursive: true, force: true });
+});
+
+/*
+ * `--cached` exists so the hook cannot put a registry round-trip in front of
+ * every session. Two properties matter: it must never block on the network,
+ * and it must stay SILENT when the CLI is current — a hook that prints every
+ * session is a hook people delete.
+ */
+test('ef update --cached answers from the cache, never the network, and is quiet when current', async () => {
+    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-home-'));
+    const cacheDir = path.join(home, '.config', 'elasticfunnels');
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, 'update-check.json');
+
+    const run = (): Promise<{ out: string; code: number | null }> => new Promise((resolve) => {
+        const child = spawn(process.execPath, [BIN_PATH, 'update', '--cached', '--json'], {
+            // A bogus registry host: if --cached ever reaches for the network,
+            // this test hangs or fails instead of quietly passing.
+            env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: '1', npm_config_registry: 'http://127.0.0.1:1' },
+        });
+        let out = '';
+        child.stdout.on('data', (d) => (out += d));
+        child.stderr.on('data', () => {});
+        child.on('close', (code) => resolve({ out, code }));
+    });
+
+    // A cache claiming a far-future release → an update is reported.
+    await fs.promises.writeFile(cacheFile, JSON.stringify({ latest: '999.0.0', checkedAt: Date.now() }));
+    let res = await run();
+    assert.equal(res.code, 0, 'a hook must never fail the session');
+    assert.equal(JSON.parse(res.out).updateAvailable, true);
+    assert.equal(JSON.parse(res.out).source, 'cache', 'answered from the cache, not the registry');
+
+    // A cache at or behind the running version → nothing to say.
+    await fs.promises.writeFile(cacheFile, JSON.stringify({ latest: '0.0.1', checkedAt: Date.now() }));
+    res = await run();
+    assert.equal(res.code, 0);
+    assert.equal(JSON.parse(res.out).updateAvailable, false);
+
+    // Cold cache: "unknown", not a fabricated "up to date".
+    await fs.promises.rm(cacheFile, { force: true });
+    res = await run();
+    assert.equal(res.code, 0, 'a cold cache is not an error');
+    assert.equal(JSON.parse(res.out).latest, null, 'says unknown rather than guessing');
+
+    await fs.promises.rm(home, { recursive: true, force: true });
 });

@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import { Command } from 'commander';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
-import { PKG, fetchLatestVersion, isNewer } from '../utils/updateNotifier';
+import { PKG, fetchLatestVersion, isNewer, readCachedLatestVersion } from '../utils/updateNotifier';
 
 /**
  * `ef update` — upgrade the CLI in place.
@@ -177,6 +177,7 @@ function refusalFor(install: Install, latest: string): string {
 
 interface UpdateOpts {
     check?: boolean;
+    cached?: boolean;
     force?: boolean;
     json?: boolean;
 }
@@ -189,6 +190,7 @@ export function registerUpdateCommand(program: Command): void {
 Examples:
   $ ef update              Update to the latest release (no-op if current)
   $ ef update --check      Report whether an update exists; change nothing
+  $ ef update --cached     Same, from the daily cache — no network, no waiting
   $ ef update --force      Reinstall the latest even if already on it
   $ ef update --check --json | jq -r .latest
 
@@ -198,12 +200,41 @@ is reported with the command that is correct for it, and nothing is run.
 Exit codes: 0 ok (including "--check" when an update exists), 2 not a global
 install, 5 the registry could not be reached.`)
         .option('--check', 'Only report whether a newer version exists. Installs nothing.')
+        .option('--cached', 'Like "--check", but answer from the daily cache instead of the registry. Never blocks, never installs, and stays silent when already current — this is the form a session hook should run.')
         .option('--force', 'Run the install even if the latest version is already the one running.')
         .option('--json', 'Print the result as JSON.')
         .action(async (opts: UpdateOpts) => {
             const current = (() => {
                 try { return (require('../../package.json') as { version: string }).version; } catch { return '0.0.0'; }
             })();
+
+            // Answer from the cache and return before anything can block.
+            //
+            // This is the form the SessionStart hook runs, so its whole value is
+            // being free: a file read, plus a fire-and-forget refresh when the
+            // cache has aged out. It stays quiet when the CLI is current,
+            // because a hook that prints on every session is a hook people mute.
+            if (opts.cached) {
+                const cachedLatest = readCachedLatestVersion();
+                const install = classifyInstall(findPackageRoot());
+                // Nothing cached yet (first ever run, or an unwritable cache
+                // dir). The refresh just started; say "unknown" rather than
+                // implying we checked and found nothing.
+                if (!cachedLatest) {
+                    if (opts.json) {
+                        log.json({ ok: true, current, latest: null, updateAvailable: null, updated: false, installKind: install.kind, source: 'cache' });
+                    }
+                    return;
+                }
+                const cachedAvailable = isNewer(cachedLatest, current);
+                if (opts.json) {
+                    log.json({ ok: true, current, latest: cachedLatest, updateAvailable: cachedAvailable, updated: false, installKind: install.kind, source: 'cache' });
+                } else if (cachedAvailable) {
+                    log.info(`${c.yellow('▲')} Update available ${c.dim(current)} → ${c.green(cachedLatest)}`);
+                    log.detail(install.kind === 'global' ? '  Run "ef update" to install it.' : `  ${refusalFor(install, cachedLatest)}`);
+                }
+                return;
+            }
 
             let latest: string;
             try {

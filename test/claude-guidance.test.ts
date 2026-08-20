@@ -242,3 +242,14 @@ test('guidance tells the agent to check the CLI version but not to install it', 
     assert.match(text, /[Dd]o not run `ef update` yourself/, 'installing is off-limits');
     assert.match(text, /global install/i, 'and the reason why is given');
 });
+
+test('guidance teaches wildcard routes, and to prefer them over ?id= query strings', () => {
+    const s = renderClaudeSection();
+    assert.match(s, /Wildcard routes/, 'the section exists');
+    assert.match(s, /instead of `\?id=`\/`\?code=`/, 'steers away from query-string detail pages');
+    assert.match(s, /route_params/, 'names the template variable');
+    assert.match(s, /there is no `segment_0`/, 'kills the segment_0 myth the old docs carried');
+    assert.match(s, /Placeholders must all be trailing/, 'the prefix-stops-at-first-brace limit');
+    assert.match(s, /can never \*start\* with a placeholder/, 'leading placeholders never match');
+    assert.ok(s.includes('https://docs.elasticfunnels.io/pages/wildcard-routes'), 'links the docs page');
+});

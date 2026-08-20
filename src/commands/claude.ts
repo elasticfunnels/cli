@@ -99,6 +99,8 @@ live URL starts 404ing), so look a name up rather than inferring it:
   <https://docs.elasticfunnels.io/backend-scripts/data-functions>
 - **CRM functions reference** (entries, fields, pipelines, stages, references):
   <https://docs.elasticfunnels.io/crm/post-workflow#crm-functions-reference>
+- **Wildcard routes** (dynamic URL segments, \`route_params\`):
+  <https://docs.elasticfunnels.io/pages/wildcard-routes>
 - Docs root: <https://docs.elasticfunnels.io>
 
 For anything about the **CLI itself**, the built-in help is authoritative and
@@ -323,6 +325,40 @@ Variants of a page live under a subfolder named after the base slug:
 \`pages/my-page/my-page-v2.ef\` (variant — uses \`variant_slug\`). Single pages sit
 directly under \`pages/\`. Change a slug with \`ef pages settings <slug> --slug <new>\`
 (the CLI renames the local file to match).
+
+## Wildcard routes (one page, many URLs)
+
+A page slug containing \`{placeholders}\` serves every URL that fits the pattern.
+**Use this instead of \`?id=\`/\`?code=\` for any page that renders one of many
+records** — product, course, article, category detail pages. Paths get indexed,
+cached and tracked per record; query strings do not.
+
+\`\`\`bash
+ef pages create "shop/product/{code}"   # → /shop/product/blue-widget
+\`\`\`
+
+- **In the template:** \`{{ route_params.code }}\` (keys are your placeholder
+  names — there is no \`segment_0\`), or \`{{ route_slug }}\` for the whole
+  remainder. Both are \`null\` on a non-wildcard URL, so guard:
+  \`@if(route_params and route_params.code)\`. In a backend script:
+  \`request.route_params\`.
+- **Matching order:** exact slug → wildcard patterns (longest URL prefix first)
+  → folder index (\`<path>/index\` answers \`/<path>\`).
+- **Placeholders must all be trailing.** The static prefix stops at the first
+  \`{\`, so \`blog/{cat}/posts/{id}\` matches \`/blog/tech/5\`, NOT
+  \`/blog/tech/posts/5\`. A slug can never *start* with a placeholder.
+- **The count must match exactly.** \`shop/product/{code}\` does not answer the
+  bare \`/shop/product\` — make a separate \`shop/product\` (or
+  \`shop/product/index\`) page for that.
+- A page with no braces is never wildcard-matched: \`app\` will not catch
+  \`/app/foo\`.
+- Link to them with the \`productUrl\` filter:
+  \`{{ product | productUrl:'shop/product' }}\` → \`/shop/product/<slug>-<id>\`.
+  \`getProduct()\` takes an id **or** code; \`getCourseBySlug()\` falls back to
+  \`?slug=\` → \`route_params.course\` → \`route_slug\` when called bare.
+- Wildcard pages can never be listed in \`sitemap.xml\`/\`llms.txt\` (one slug,
+  many URLs) — link them from a listing page you do publish.
+- Docs: https://docs.elasticfunnels.io/pages/wildcard-routes
 
 ## Backend scripts
 

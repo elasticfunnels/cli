@@ -468,10 +468,10 @@ Examples:
   $ ef stats split 321 --metrics sessions,conversion_rate,revenue,aov
   $ ef stats split 321 --range 30d --json
 
-The verdict is the server's own: alpha is corrected for the number of arms and
-no winner is named until every arm clears the power-based sample floor. The CLI
-reports that rather than running its own test, so it cannot disagree with the
-dashboard about who won.`)
+The server computes significance; you pick the winner (ef splits winner). Alpha
+is corrected for the number of arms and no arm is called significant until every
+arm clears the power-based sample floor. The CLI reports that rather than running
+its own test, so it cannot disagree with the dashboard.`)
         .action(async (id: string, opts: RangeFlags & ScopeFlags & { metrics?: string; json?: boolean }) => {
             const splitTestId = numericFlag('id', id);
             if (splitTestId == null) throw new CliError(ExitCode.Validation, 'Pass a split test id.');

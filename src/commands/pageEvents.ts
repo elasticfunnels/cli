@@ -207,7 +207,7 @@ export function registerPageEventsCommand(pages: Command): void {
             // test's recorded sessions together.
             const codes = ensureNodeCodes(graph);
             if (codes.filled.length > 0 && !opts.json) {
-                log.detail(`Assigned node_code to ${codes.filled.length} node(s) — the server does not, and split-test reporting needs it.`);
+                log.detail(`Assigned node codes to ${codes.filled.length} node(s) so split-test reports can tell the variants apart.`);
             }
 
             await api.setPageEvents(rt.config.brandId, page.id, graph);

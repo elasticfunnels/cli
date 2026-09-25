@@ -50,6 +50,7 @@ const KNOWN_PAREN_DIRECTIVES = new Set([
   'if',
   'elseif',
   'foreach',
+  'each', // alias of @foreach, closed by @endeach or @endforeach
   'set',
   'component',
   'extends',
@@ -60,7 +61,14 @@ const KNOWN_PAREN_DIRECTIVES = new Set([
 ]);
 
 /** Valid backend `@end*` closers. */
-const KNOWN_END_DIRECTIVES = new Set(['endif', 'endforeach', 'endblock']);
+const KNOWN_END_DIRECTIVES = new Set(['endif', 'endforeach', 'endeach', 'endblock', 'endcomponent']);
+
+// Where the runtime recognises a directive (website Tokenizer.isDirectiveStart):
+// every directive at line start; mid-line only @if( @elseif( @else @endif
+// @foreach( @endforeach @each( @endeach @component( @endcomponent @yield( @set(
+// @setSessionItem( @clearSessionItem(. So inline `@if(x)@set(y = 1)@endif` runs.
+// @block( runs mid-line only right after a tag or with @endblock on the same
+// line; @extends( never mid-line. See checkLineStartOnlyDirectives.
 
 /** CSS at-rules — NOT template directives. `@media (…)` / `@supports (…)` /
  *  `@container (…)` are followed by `(` and must never be flagged as unknown
@@ -220,7 +228,7 @@ function findUnclosedInterp(html: string, issues: LintIssue[]): void {
 
 /** Balance + ordering of @if/@elseif/@else/@endif, @foreach/@endforeach, @block/@endblock. */
 function checkDirectiveBalance(html: string, issues: LintIssue[]): void {
-  const re = /@(endforeach|endblock|endif|elseif|foreach|block|else|if)\b/g;
+  const re = /@(endforeach|endeach|endblock|endif|elseif|foreach|each|block|else|if)\b/g;
   const stack: { kind: 'if' | 'foreach' | 'block'; line: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
@@ -231,6 +239,7 @@ function checkDirectiveBalance(html: string, issues: LintIssue[]): void {
         stack.push({ kind: 'if', line });
         break;
       case 'foreach':
+      case 'each':
         stack.push({ kind: 'foreach', line });
         break;
       case 'block':
@@ -248,8 +257,9 @@ function checkDirectiveBalance(html: string, issues: LintIssue[]): void {
         } else stack.pop();
         break;
       case 'endforeach':
+      case 'endeach':
         if (stack.length === 0 || stack[stack.length - 1].kind !== 'foreach') {
-          issues.push({ line, severity: 'error', message: '@endforeach without a matching @foreach.' });
+          issues.push({ line, severity: 'error', message: `@${tok} without a matching @foreach.` });
         } else stack.pop();
         break;
       case 'endblock':
@@ -285,9 +295,43 @@ function checkUnknownDirectives(html: string, issues: LintIssue[]): void {
       issues.push({
         line: lineAt(html, m.index),
         severity: 'error',
-        message: `Unknown closing directive @${raw} — valid closers are @endif / @endforeach / @endblock.`,
+        message: `Unknown closing directive @${raw} — valid closers are @endif / @endforeach / @endeach / @endblock / @endcomponent.`,
       });
     }
+  }
+}
+
+/**
+ * @extends( and @block( are the directives the runtime does NOT recognise
+ * anywhere mid-line (every other known directive runs inline). Mirrors website
+ * Tokenizer.isDirectiveStart: a mid-line one is printed as literal text.
+ */
+function checkLineStartOnlyDirectives(html: string, issues: LintIssue[]): void {
+  const re = /@(extends|block)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const lineStart = html.lastIndexOf('\n', m.index - 1) + 1;
+    const before = html.slice(lineStart, m.index);
+    if (/^[ \t\r]*$/.test(before)) continue; // at line start: always a directive
+    if (/[\w@.]$/.test(before)) continue; // part of a word/email, not a directive
+    const line = lineAt(html, m.index);
+    if (m[1] === 'extends') {
+      issues.push({
+        line,
+        severity: 'warning',
+        message: '@extends(…) mid-line is printed as text — put @extends on its own line at the top of the file.',
+      });
+      continue;
+    }
+    const lineEnd = html.indexOf('\n', m.index);
+    const rest = html.slice(m.index, lineEnd === -1 ? html.length : lineEnd);
+    if (rest.includes('@endblock')) continue; // one-line @block(…)…@endblock
+    if (/>[ \t\r\n]*$/.test(html.slice(0, m.index))) continue; // right after a tag
+    issues.push({
+      line,
+      severity: 'warning',
+      message: '@block(…) mid-line is printed as text — put it on its own line, right after a tag, or close it with @endblock on the same line.',
+    });
   }
 }
 
@@ -752,6 +796,7 @@ export function lintEfContent(content: string, opts: LintOptions = {}): LintResu
   findUnclosedInterp(cleaned, issues);
   checkDirectiveBalance(cleaned, issues);
   checkUnknownDirectives(cleaned, issues);
+  checkLineStartOnlyDirectives(cleaned, issues);
   checkExpressionsAndFilters(cleaned, issues);
   checkStructuralTargets(cleaned, opts, issues);
 

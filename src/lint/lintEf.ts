@@ -15,7 +15,7 @@
 // engine JS. Never executes anything.
 import * as path from 'path';
 import * as fs from 'fs';
-import { Parser } from 'acorn';
+import { Parser, Token, tokenizer } from 'acorn';
 
 export type Severity = 'error' | 'warning';
 export interface LintIssue {
@@ -672,25 +672,123 @@ const SANDBOX_MISSING_GLOBALS: Record<string, string> = {
 const TEMPLATE_IN_JS_RE = /\{\{|@(?:if|elseif|else|endif|foreach|endforeach|set|component|extends|block|endblock|yield)\b/;
 const NODE_API_RE = /\brequire\s*\(|__dirname|__filename|\bprocess\.(?:env|argv|cwd|exit)|\bfrom\s+["'](?:node:)?(?:fs|path|http|https|os|child_process|crypto|stream|net|fs\/promises)["']|import\s+["'](?:node:)?(?:fs|path|http|https|os|child_process)["']/;
 
+/** Acorn hands every token a `value` at runtime; its .d.ts stops at the type. */
+type LexToken = Token & { value?: unknown };
+
+/**
+ * Lex a backend script once, for every check that must not see prose.
+ *
+ * These rules used to scan raw source, so a comment reading "stored client-side
+ * in localStorage" and a field label `'Image URL'` were both reported as hard
+ * runtime errors. A false error is worse than a missing one — it trains people
+ * to ignore the linter.
+ *
+ * Lexing rather than masking by hand because the hand-written version has to
+ * get regex-literals, division and `${...}` inside template literals right to
+ * avoid trading the false positives for false negatives, and acorn (already a
+ * dependency here, for the parse check below) already does.
+ *
+ * A syntax error stops the stream part-way. Whatever was lexed before it is
+ * still usable, and `lintBackendScript` reports the syntax error itself — which
+ * is the thing to fix first anyway.
+ */
+function lexBackendScript(code: string): { tokens: LexToken[]; comments: Array<{ start: number; end: number }> } {
+  const tokens: LexToken[] = [];
+  const comments: Array<{ start: number; end: number }> = [];
+  try {
+    const stream = tokenizer(code, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      onComment: (_block: boolean, _text: string, start: number, end: number) => { comments.push({ start, end }); },
+    });
+    for (const tok of stream) tokens.push(tok as LexToken);
+  } catch {
+    // Partial results are fine — see above.
+  }
+  return { tokens, comments };
+}
+
+/** Blank out comment bodies, preserving every offset and line break. */
+function maskComments(code: string, comments: Array<{ start: number; end: number }>): string {
+  if (!comments.length) return code;
+  const out = code.split('');
+  for (const { start, end } of comments) {
+    for (let i = Math.max(0, start); i < Math.min(end, out.length); i++) {
+      if (out[i] !== '\n') out[i] = ' ';
+    }
+  }
+  return out.join('');
+}
+
+/** Keywords that make the identifier after them a local binding, not the global. */
+const BINDING_KEYWORDS = new Set(['const', 'var', 'let', 'function', 'class']);
+
+/**
+ * Names the script declares for itself. A script with its own `const fetch`
+ * has no missing-global problem, wherever else in the file it says `fetch`.
+ */
+function collectBoundNames(tokens: LexToken[]): Set<string> {
+  const bound = new Set<string>();
+  for (let i = 1; i < tokens.length; i++) {
+    const prev = tokens[i - 1];
+    if (tokens[i].type.label !== 'name') continue;
+    if (prev.type.label === 'string') continue;
+    if (BINDING_KEYWORDS.has(String(prev.value ?? ''))) bound.add(String(tokens[i].value));
+  }
+  return bound;
+}
+
+/**
+ * Offset of the first BARE reference to `name`, or null.
+ *
+ * Only identifier tokens qualify, so a comment or a string literal can never
+ * match while `${localStorage.x}` inside a template literal still does — it is
+ * real code. Property access (`obj.fetch`) and object keys (`{ fetch: ... }`)
+ * are skipped, as is `typeof fetch`, which is precisely the expression that
+ * CANNOT throw "fetch is not defined" — it is how you test for a global.
+ */
+function firstBareReference(tokens: LexToken[], name: string, bound: Set<string>): number | null {
+  if (bound.has(name)) return null;
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.type.label !== 'name' || String(tok.value) !== name) continue;
+    const prev = tokens[i - 1];
+    const next = tokens[i + 1];
+    if (prev && (prev.type.label === '.' || prev.type.label === '?.' || prev.type.label === 'typeof')) continue;
+    // `fetch:` is a key; `fetch =` assigns to it. Equality lexes under its own
+    // label, so comparing against the global still reports.
+    if (next && (next.type.label === ':' || next.type.label === '=')) continue;
+    return tok.start;
+  }
+  return null;
+}
+
 /** Lint a chunk of backend JS. `baseLine` offsets reported lines into the file. */
 function lintBackendScript(code: string, baseLine: number, issues: LintIssue[]): void {
   const rel = (offset: number) => baseLine + offset - 1;
+  const { tokens, comments } = lexBackendScript(code);
+
+  // The two regex rules below keep scanning text, because one of them reads
+  // IMPORT SPECIFIERS — which are string literals, so blanking string contents
+  // would quietly retire half of it. They get a copy with only the comments
+  // blanked; offsets are preserved, so lineAt() stays correct.
+  const noComments = maskComments(code, comments);
 
   // Template directives don't belong in JS.
-  const tmpl = TEMPLATE_IN_JS_RE.exec(code);
+  const tmpl = TEMPLATE_IN_JS_RE.exec(noComments);
   if (tmpl) {
     issues.push({
-      line: rel(lineAt(code, tmpl.index)),
+      line: rel(lineAt(noComments, tmpl.index)),
       severity: 'error',
       message: 'Template syntax ({{ }} / @directive) inside a backend script — backend scripts are pure JavaScript. Pass data to the template with setVariable(key, value).',
     });
   }
 
   // Node/fs APIs are unavailable in the QuickJS sandbox.
-  const node = NODE_API_RE.exec(code);
+  const node = NODE_API_RE.exec(noComments);
   if (node) {
     issues.push({
-      line: rel(lineAt(code, node.index)),
+      line: rel(lineAt(noComments, node.index)),
       severity: 'warning',
       message: 'Node/filesystem API used in a backend script — the sandbox has no Node, fs, path, http, process, require or __dirname. Use the provided data functions instead.',
     });
@@ -699,19 +797,15 @@ function lintBackendScript(code: string, baseLine: number, issues: LintIssue[]):
   // Globals the QuickJS sandbox does NOT have. These are hard runtime failures
   // ("URLSearchParams is not defined") that only show up on a live request, so an
   // ERROR here is the whole point of linting backend scripts.
+  const bound = collectBoundNames(tokens);
   for (const [name, hint] of Object.entries(SANDBOX_MISSING_GLOBALS)) {
-    // Bare identifier use only: skip property access (obj.fetch) and declarations
-    // (const fetch = …), which are legitimate.
-    const re = new RegExp(`(^|[^\\w.$])${name}\\b(?!\\s*[:=][^=])`, 'g');
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(code)) !== null) {
-      issues.push({
-        line: rel(lineAt(code, m.index)),
-        severity: 'error',
-        message: `"${name}" does not exist in the backend-script sandbox (QuickJS — not Node, not a browser), so this throws "${name} is not defined" at request time. Instead: ${hint}.`,
-      });
-      break; // one report per global is enough
-    }
+    const at = firstBareReference(tokens, name, bound); // first hit only — one report per global is enough
+    if (at == null) continue;
+    issues.push({
+      line: rel(lineAt(code, at)),
+      severity: 'error',
+      message: `"${name}" does not exist in the backend-script sandbox (QuickJS — not Node, not a browser), so this throws "${name} is not defined" at request time. Instead: ${hint}.`,
+    });
   }
 
   // Import rules: bare code specifiers, ≤10 imports, 1 level deep, not named+default together.

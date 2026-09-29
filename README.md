@@ -219,7 +219,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef mcp` | Serve this brand to a desktop AI app (Claude Desktop, ChatGPT Desktop) over **stdio MCP**. Credentials come from the project's `.ef/auth`, so the app's config file holds no secret. `--project <dir>` to point at a folder explicitly. |
 | `ef whoami` | Print the active project root, brand, API URL, key prefix. |
 | `ef status` | Connection check, last-pull timestamp, entity counts. |
-| `ef list <kind>` | List pages \| components \| assets \| scripts \| folders \| templates. |
+| `ef list <kind>` | List pages \| components \| assets \| scripts \| folders \| templates. `--tag <name>` narrows **pages** to those carrying a tag (filtered server-side). Pages are the **code-editor** pages that sync; `--all` also lists visual-builder and legacy pages (most funnel steps on older brands). |
 | `ef preview <slugOrId>` | Print editor preview URL (uses draft `revision_id` when present). `--live` for public site URL only. |
 | `ef get <kind> <idOrSlug>` | Fetch one entity. Defaults to printing HTML body; `--json` for full payload. |
 | `ef pull` | Full sync (pages + components + scripts + assets + variables). |
@@ -236,8 +236,9 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef watch` | Watch the brand root and auto-push files as you save them (`--draft`/`--direct`; Ctrl-C to stop). |
 | `ef diff [paths…]` | Show local-vs-baseline drift across the brand root (or restricted to paths). |
 | `ef diff --server [paths…]` | Fetch server content and show the **real** server-vs-local difference (unified diff + `both-changed` status). |
-| `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). |
-| `ef pages create <slug>` | Create a new page. |
+| `ef pages list` | List pages (alias `ef pages ls`; same output as `ef list pages`). Code-editor pages only — the ones that sync; `--all` adds visual-builder and legacy pages with a TYPE column. |
+| `ef pages get <idOrSlug>` | One page's details for **any** page type (editor, builder or legacy): title, slug / variant slug, status, type, domain, public URL, homepage / checkout / upsell flags, parent page. Settings only — `ef get page` prints the HTML. `--json`. |
+| `ef pages create <slug>` | Create a new page. `--tag <name>` (repeatable, comma-splitting) tags it as it's created, making the tag if it's new. |
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |
 | `ef pages preview <slug>` | Print preview + live URLs (draft revision from editor when present). |
 | `ef pages duplicate <slug>` | Duplicate a page. |
@@ -256,7 +257,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef funnels create <title> --domain <id>` | Create a funnel (server assigns the code; a domain is required) and write its empty graph. |
 | `ef funnels debug-flow <codeOrId>` / `product-flow <codeOrId>` | Print the compiled read-only flow / product-flow. |
 | `ef funnels delete <codeOrId>` | Delete a funnel (and its local file). |
-| `ef components create <code>` | Create a new component. |
+| `ef components create <code>` | Create a new component. `--tag <name>` (repeatable) tags it as it's created. |
 | `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |
 | `ef products list` | List products (alias `ef products ls`; `--classification` to filter). |
@@ -283,6 +284,13 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef domains records <domain>` | Print the DNS records to add: a TXT ownership record + a CNAME to the platform domain. `--wait` polls until the TXT record is ready. |
 | `ef domains validate <domain>` | Queue validation for a dedicated domain (checks DNS + issues SSL). |
 | `ef domains remove <domain>` | Delete a domain from the brand (alias `ef domains rm`). |
+| `ef tags list` | List the brand's tags with their colours (alias `ef tags ls`). |
+| `ef tags attach <target> <names…>` | Put tags on a page or component, **creating any that don't exist** (alias `ef tags add`). `<target>` is a page slug/id, or `component:<code>`. `--no-create` to require an existing tag; `--color` for the ones it makes. |
+| `ef tags detach <target> <names…>` | Take tags off one record (alias `ef tags remove`). The tags themselves stay in the brand. |
+| `ef tags show <target>` | The tags on one record; `--all` also lists the brand tags that aren't on it. |
+| `ef tags create <name>` | Create a tag without attaching it. `--color <swatch\|#rrggbb\|rgb(r,g,b)>`; left unset, the colour is derived from the name so a batch of tags is distinguishable. |
+| `ef tags update <nameOrId>` | Rename (`--name`) or recolour (`--color`) a tag. Every record carrying it follows. |
+| `ef tags delete <nameOrId>` | Delete the tag **brand-wide**, stripping it from every record. Confirms on a TTY; `--force` to skip. Not the same as `detach`. |
 | `ef seo status` | Which discovery files (`sitemap.xml`, `llms.txt`, `robots.txt`) this brand serves, and how many pages they list. |
 | `ef seo set <key> <value>` | Turn a file on/off or set its content. Keys: `sitemap`, `llms`, `robots` (booleans), `site-name`, `site-summary`, `llms-notes`, `robots-extra` (text). |
 | `ef seo get [key]` | Print the SEO settings, or one key (pipeable on stdout). |
@@ -295,6 +303,12 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef stats splits` | List the brand's split tests. |
 | `ef stats split <id>` | One test's per-variant metrics plus the **server's** significance verdict (p-value, power, sample floor, winner). Read rather than recomputed, so it can't disagree with the dashboard about who won. |
 | `ef stats dashboards` | Saved dashboards and the available presets. |
+| `ef splits variants <id>` | A split test's variants with the node codes a winner is declared by. |
+| `ef splits winner <id> <variant>` | **Declare a winner** (name or node code): finalizes the test and writes the winner into the page/funnel graph, so all traffic goes to that arm. Prints the server's verdict first; a manual call is allowed but flagged. Needs `--yes` off a terminal. `ef stats` stays read-only — this is the write path. |
+| `ef orders list` | Orders (purchases, refunds, chargebacks), read-only: date, order code, type, products, total, page, affiliate, session id. `--funnel`/`--aff`/`--page <id>`, `--type purchase\|refund\|chargeback`, the `ef stats` range flags (`--range`/`--from`/`--to`/`--tz`), `--limit <n>` (default 50) or `--all`. Customer email/name/phone/address/IP are **never** printed in the table; `--json` strips them too unless `--include-pii`. |
+| `ef orders buyers --funnel <id>` | The per-buyer **upsell take table**. Purchases are grouped per customer (email hash in memory, or session when there is no email) and ordered by time: the first non-bump purchase is the front-end package, later non-bump purchases within `--window` minutes (default 1440) are takes, with the page each was bought on. Bumps are the products classified `bump`/`bonus` in the product records, plus `--bump <codes>`. Prints buyers / took any / take % / bump per front-end product (list price and median paid), then takes by offer. `--by page` groups by the page the package was bought on; `--aff <id>`; default range 30d. `--json` is aggregates only (no PII). |
+| `ef sessions list` | Recent page loads (one row per click): time, session id, event count, device, country, hosting/bot flags, user agent, path. `--funnel`/`--aff`/`--page <id>`, `--exclude-bots`, range flags (default today), `--limit`. |
+| `ef sessions show <sessionId>` | One visit: landing URL, referrer, affiliate, funnel, device, country, UA, bot/hosting/VPN flags, the page path (`/packages → checkout → /upsell-1 → …`) and the event timeline. Query strings are dropped unless `--full-urls`; hover/scroll noise hidden unless `--all-events`. A `buy-link` with no earlier `page-view` is flagged as a **tracking gap**. `--json` prints the raw payload (includes IP/geo). |
 | `ef lint [paths…]` | Statically validate `.ef` pages/components/scripts (template + script syntax). Exits non-zero on errors; `--strict` fails on warnings, `--json` for machine output. |
 | `ef crm entities` / `pipelines <entity>` / `stages <pipeline>` / `fields <entity>` / `entries <entity>` | List CRM objects. `entities`/`pipelines`/`fields`/`entries` accept an entity **id or slug**. |
 | `ef crm entities create` · `pipelines create <entity>` · `stages create <pipeline>` · `fields create <entity>` · `entries create <entity>` | Create CRM objects. Common fields via flags, or the whole payload via `--input-json`/`--input-file` (flags override). `--generate-skeleton` prints an example payload. |
@@ -357,7 +371,7 @@ install or an update — `ef init` writes all three, whichever tool you use, and
 they refresh themselves after that. Those commands exist for refreshing one on
 demand, or for adding guidance to a project that skipped it.
 
-Two **skills** install into `.claude/skills/` (Claude Code loads them on
+Five **skills** install into `.claude/skills/` (Claude Code loads them on
 demand; Codex and Cursor have no skill mechanism, so their rules live in the
 guidance text instead):
 
@@ -370,6 +384,23 @@ server stores a test's numbers but none of its intent, so without this a result
 is a variant label and a percentage with nothing to judge it against. The file
 is committed with the project (a teammate gets the context too) and never syncs
 to the server — `ef push` knows to leave it alone.
+
+- **`ef-funnel-performance`** — the entry-point playbook for "where should we
+  optimize": validates the data first (home-IP bots, tracking gaps, dashboard
+  traps), ranks funnels and affiliates by money (AOV main vs upsell, refunds,
+  estimated profit), profiles each affiliate's traffic and buyers with
+  affiliate-specific recommendations, reads the funnel graph (checkout pages
+  are not graph steps), confirms with orders and session traces, and writes a
+  developer brief.
+
+- **`ef-funnel-analysis`** — sales by funnel, then one funnel's step table:
+  the compiled product flow joined with per-page / per-product stats and
+  prices, in buyer order, plus per-buyer upsell take from orders (which
+  package or price takes the upsell, and whether a front end's buyers reach it).
+
+- **`ef-upsell-diagnosis`** — why the upsell take is low (routing confirmed with
+  orders, not sessions; upsell price vs what the buyer just paid; price
+  objections the downsell reveals; dead steps; split tests that cannot finish), and `ef splits winner` once the user makes the call.
 
 - **`ef-stats`** — reading analytics correctly. Mostly it exists to prevent
   four specific wrong answers: a timezone-shifted day boundary read as a real
@@ -399,6 +430,46 @@ and `ef init --no-claude` now records the refusal (`aiGuidance: false` in
 > Claude Code enumerates `.claude/skills/` when a session starts. A skill that
 > arrives mid-session (from an `ef pull`, say) is on disk and readable, but will
 > not appear in the session's skill list until it restarts.
+
+## Tags (`ef tags`)
+
+The coloured labels the dashboard shows against pages and components. One flat
+list per brand — the same tag can sit on a page and on a component — so the
+tag is the durable way to group work that slugs and folders can't: slugs get
+renamed, and a folder holds one page at a time.
+
+```bash
+ef pages create bf/landing --tag black-friday --tag q4   # tag as you create
+ef tags attach pricing black-friday                      # tag something that exists
+ef tags attach component:hero-banner q1-test             # bare = page slug; "component:" for a component
+ef list pages --tag black-friday                         # find them again
+ef tags show pricing                                     # what's on one record
+```
+
+- **Attach creates.** A name that isn't a tag yet becomes one, so there's no
+  separate create step for the common case. The colour is derived from the name
+  unless `--color` says otherwise, which keeps a batch of generated tags
+  visually distinct instead of eight identical greys — and keeps the same name
+  on the same colour across brands. `--no-create` turns an unknown name into an
+  error instead.
+- **Attach is idempotent, deliberately.** The server inserts an assignment row
+  without checking for an existing one and nothing behind it is unique, so the
+  CLI reads the record's current tags first and skips what's already there.
+  `detach` clears duplicates left by anything that didn't.
+- **`detach` ≠ `delete`.** `detach` takes a tag off one record; `delete`
+  destroys the tag brand-wide and strips it from everything. The two verbs are
+  spelled differently on purpose.
+- **Pages and components only.** The tags table is generic, but those are the
+  only two lists the dashboard renders a Tags column for, so anywhere else the
+  row would be written and never seen.
+- **Filtering by tag is server-side for pages** (`ef list pages --tag`) and one
+  request, same as an unfiltered list. Components have no equivalent server
+  filter — use `ef tags show component:<code>` for one at a time.
+- Tagging a page **variant** tags its parent page: the dashboard's list excludes
+  variants, so that's the row a tag is visible on. The CLI says when it does it.
+
+Tags are server-side metadata, not files: nothing about them lands in
+`elasticfunnels/` and `ef pull`/`ef push` never touch them.
 
 ## Analytics (`ef stats`)
 

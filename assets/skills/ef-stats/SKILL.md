@@ -189,6 +189,8 @@ How to report it:
 
 Never recommend declaring a winner the server has not declared. If someone asks
 you to call it early, say what the server says and let them decide.
+If they decide to call it, `ef splits winner <id> <variant>` applies it (see
+the `ef-upsell-diagnosis` skill for the full procedure and the record to write).
 
 ### Variant labels like `j:null` or blank mean a missing `node_code`
 

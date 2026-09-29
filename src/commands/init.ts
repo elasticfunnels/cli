@@ -126,7 +126,7 @@ their own:
   CLAUDE.md                          guidance (Claude Code reads this)
   AGENTS.md                          the same guidance (Codex and several editors)
   .cursor/rules/elasticfunnels.mdc   the same guidance, as a Cursor project rule
-  .claude/skills/                    the bundled ef-page-events + ef-stats skills
+  .claude/skills/                    the bundled ef-* skills (page events, stats, funnel analysis)
   .claude/settings.json              a SessionStart hook running "ef pull --if-stale 30"
 
 All of it is idempotent and written between markers, so re-running any of those

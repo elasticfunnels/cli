@@ -138,6 +138,15 @@ export interface SplitTest {
     funnel?: { id: number; title?: string | null; code?: string | null } | null;
 }
 
+/**
+ * `GET split-tests/{id}/node-codes` — one arm as the graph names it. `code` is
+ * the node_code visitors are bucketed by and the key a winner is declared with.
+ */
+export interface SplitTestNodeCode {
+    code: string;
+    name: string;
+}
+
 /** One arm of a split test, as the significance endpoint scores it. */
 export interface SplitTestVariant {
     variant: string;

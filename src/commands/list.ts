@@ -15,11 +15,22 @@ export function registerListCommand(program: Command): void {
         .alias('ls')
         .description(`List entities. <kind> = ${VALID.join(' | ')}.`)
         .option('--limit <n>', 'Limit rows shown (default: all).', (v) => parseInt(v, 10))
+        .option('--tag <name>', 'Only rows carrying this tag. Pages only — see "ef tags --help".')
+        .option('--all', 'Pages only: include visual-builder and legacy pages, not just the code-editor pages that sync.')
         .option('--json', 'Print rows as JSON.')
-        .action(async (kindRaw: string, opts: { limit?: number; json?: boolean }) => {
+        .action(async (kindRaw: string, opts: { limit?: number; tag?: string; all?: boolean; json?: boolean }) => {
             const kind = kindRaw.toLowerCase() as Kind;
             if (!VALID.includes(kind)) {
                 throw new CliError(ExitCode.Validation, `Unknown kind "${kindRaw}". Use one of: ${VALID.join(', ')}.`);
+            }
+            // Only the pages endpoint filters by tag server-side. Accepting
+            // --tag elsewhere and quietly ignoring it would report the whole
+            // list as if it were the filtered one.
+            if (opts.tag && kind !== 'pages') {
+                throw new CliError(ExitCode.Validation, `--tag only works with "pages". For one component's tags use "ef tags show component:<code>".`);
+            }
+            if (opts.all && kind !== 'pages') {
+                throw new CliError(ExitCode.Validation, '--all only works with "pages".');
             }
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
@@ -36,20 +47,30 @@ export function registerListCommand(program: Command): void {
 }
 
 /** Shared with `ef pages list` — same output as `ef list pages`. */
-export async function printPagesList(api: ApiClient, brandId: number, opts: { limit?: number; json?: boolean }): Promise<void> {
-    const pages = await api.listPages(brandId, opts.limit ?? 10000);
+/**
+ * Shared with `ef pages list` — same output as `ef list pages`.
+ *
+ * Default is the code-editor pages only (what `ef pull` syncs). `--all` adds
+ * visual-builder pages and legacy pages with no `page_type`, which on older
+ * brands are most of the funnel steps — see `ApiClient.listPages`.
+ */
+export async function printPagesList(api: ApiClient, brandId: number, opts: { limit?: number; tag?: string; all?: boolean; json?: boolean }): Promise<void> {
+    const pages = await api.listPages(brandId, opts.limit ?? 10000, { tag: opts.tag, allTypes: opts.all });
     if (opts.json) { log.json(pages); return; }
+    const typeOf = (p: { page_type?: unknown }) => String(p.page_type ?? 'legacy');
     log.raw(renderTable({
-        head: ['#', 'slug', 'title', 'status', 'updated'],
+        head: opts.all ? ['#', 'slug', 'title', 'type', 'status', 'updated'] : ['#', 'slug', 'title', 'status', 'updated'],
         rows: pages.map(p => [
             String(p.id),
             p.slug ?? '',
             p.title ?? '',
+            ...(opts.all ? [typeOf(p as { page_type?: unknown })] : []),
             p.status ?? '',
             formatRelative(p.updated_at),
         ]),
     }) + '\n');
-    log.detail(`${pages.length} pages`);
+    log.detail(`${pages.length} ${opts.all ? '' : 'editor '}pages${opts.tag ? ` tagged "${opts.tag}"` : ''}`
+        + (opts.all ? '' : ' — builder and legacy pages are not listed (they do not sync); --all includes them'));
 }
 
 async function listComponents(api: ApiClient, brandId: number, opts: { limit?: number; json?: boolean }): Promise<void> {

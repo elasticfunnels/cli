@@ -8,11 +8,14 @@ import {
     BrandDomain,
     BrandCollection,
     BrandCollectionField,
+    BrandTag,
     BrandSeoConfig,
     BrandEmail,
     BrandTemplate,
     BrandTemplatePage,
+    ClickRow,
     Component,
+    ConversionRow,
     CrmEntity,
     CrmEntry,
     CrmField,
@@ -24,7 +27,9 @@ import {
     PageFolder,
     PageUpdateResponse,
     PageVariant,
+    Paginated,
     Product,
+    SessionDetails,
     SeoPage,
     AnalyticsCard,
     AnalyticsCardCatalog,
@@ -32,6 +37,7 @@ import {
     AnalyticsMetricData,
     AnalyticsGroupRow,
     SplitTest,
+    SplitTestNodeCode,
     SplitTestSignificance,
     DashboardConfig,
     DashboardPreset,
@@ -178,9 +184,25 @@ export class ApiClient {
 
     // ── Pages ────────────────────────────────────────────────────────
 
-    async listPages(brandId: number, limit = 10000): Promise<Page[]> {
+    /**
+     * `filters.tag` is applied by the SERVER (`PageFilter::tag`), so filtering
+     * by tag costs the same one request as not filtering. Components have no
+     * equivalent filter — see `commands/tags.ts` for why that surface differs.
+     *
+     * `type: 'editor'` is sent by default and is a real server filter
+     * (`PageFilter::type` → `page_type = 'editor'`): only code-editor pages can
+     * be synced as `.ef` files, so sync, slug resolution and `ef list pages`
+     * deliberately see just those. Visual-builder pages and legacy pages
+     * (`page_type` NULL) — which is most funnel steps on older brands — are
+     * only returned with `allTypes: true`.
+     */
+    async listPages(brandId: number, limit = 10000, filters?: { tag?: string; allTypes?: boolean }): Promise<Page[]> {
         const res = await this.raw('GET', `/api/brands/${brandId}/pages/all`, {
-            params: { sort: 'title', type: 'editor' },
+            params: {
+                sort: 'title',
+                ...(filters?.allTypes ? {} : { type: 'editor' }),
+                ...(filters?.tag ? { tag: filters.tag } : {}),
+            },
         });
         if (res.status >= 400) throw httpError('List pages', res);
         const arr = (Array.isArray(res.data) ? res.data : []) as Page[];
@@ -799,6 +821,38 @@ export class ApiClient {
     }
 
     /**
+     * The arms of a test as the graph names them: `{code, name}` per variant,
+     * where `code` is the node_code the runtime buckets visitors by. This is the
+     * only place a variant's display name is tied to the code a winner is
+     * declared with.
+     */
+    async getSplitTestNodeCodes(brandId: number, splitTestId: number): Promise<SplitTestNodeCode[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/split-tests/${splitTestId}/node-codes`);
+        if (res.status >= 400) throw httpError('Read split test variants', res);
+        const body = res.data as SplitTestNodeCode[] | { data?: SplitTestNodeCode[]; node_codes?: SplitTestNodeCode[] };
+        if (Array.isArray(body)) return body;
+        return body?.node_codes ?? body?.data ?? [];
+    }
+
+    /**
+     * Finalize a test on one arm.
+     *
+     * Goes through the programmatic endpoint on purpose. The dashboard's
+     * `split-tests/{id}/declare-winner` only stamps the test row; the runtime
+     * buckets traffic off `winner_node_code` in the page/funnel graph, which
+     * that route never writes, so traffic would keep splitting under a test
+     * marked finalized. This one writes the winner into the graph as well.
+     */
+    async declareSplitTestWinner(brandId: number, splitTestId: number, winnerNodeCode: string): Promise<SplitTest> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/programmatic-split-tests/${splitTestId}/declare-winner`, {
+            data: { winner_node_code: winnerNodeCode },
+        });
+        if (res.status >= 400) throw httpError('Declare split test winner', res);
+        const body = res.data as { data?: SplitTest } | SplitTest;
+        return ((body as { data?: SplitTest })?.data ?? body) as SplitTest;
+    }
+
+    /**
      * The server's own significance verdict for a test.
      *
      * Read, never recomputed. The backend corrects alpha for the number of
@@ -1315,6 +1369,75 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Delete domain', res);
     }
 
+    // ── Tags ─────────────────────────────────────────────────────────
+    // The coloured labels the dashboard's Pages and Components lists show.
+    // One flat table per brand plus a join row per tagged record, so the
+    // endpoints are brand-scoped and the RECORD is named by the caller
+    // (`module_key` + `item_id`) rather than by the URL. They live under the
+    // Pages module's route group whatever kind of record they end up on.
+
+    /**
+     * Every tag in the brand. Pass `scope` to additionally learn which of them
+     * are on ONE record: the server answers with an `assigned` flag per tag,
+     * which is the only way to read a record's tags — there is no
+     * "tags of item X" endpoint.
+     */
+    async listTags(brandId: number, scope?: { moduleKey: string; itemId: number }): Promise<BrandTag[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/tags`, {
+            params: scope ? { module_key: scope.moduleKey, item_id: scope.itemId } : {},
+        });
+        if (res.status >= 400) throw httpError('List tags', res);
+        return (Array.isArray(res.data) ? res.data : []) as BrandTag[];
+    }
+
+    /** `color` is required by the server; the command layer always resolves one. */
+    async createTag(brandId: number, payload: { name: string; color: string }): Promise<BrandTag> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/tags`, { data: payload });
+        if (res.status >= 400) throw httpError('Create tag', res);
+        return unwrapTag(res.data);
+    }
+
+    async updateTag(brandId: number, tagId: number, payload: { name: string; color: string }): Promise<BrandTag> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/tags/${tagId}`, { data: payload });
+        if (res.status >= 400) throw httpError('Update tag', res);
+        return unwrapTag(res.data);
+    }
+
+    /** Deletes the tag brand-wide, and every record's assignment of it. */
+    async deleteTag(brandId: number, tagId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/tags/${tagId}`);
+        if (res.status >= 400) throw httpError('Delete tag', res);
+    }
+
+    /**
+     * Put a tag on one record.
+     *
+     * NOT idempotent: the server inserts a join row without checking for an
+     * existing one, and there is no unique index behind it, so calling this
+     * twice leaves a duplicate that takes two deletes to undo. Callers must
+     * check `assigned` first — see `attachTags` in commands/tags.ts.
+     */
+    async assignTag(brandId: number, tagId: number, target: { moduleKey: string; itemId: number }): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/tags/${tagId}/assign`, {
+            data: { module_key: target.moduleKey, item_id: target.itemId },
+        });
+        if (res.status >= 400) throw httpError('Assign tag', res);
+    }
+
+    /**
+     * Take a tag off one record. Deletes ONE join row (404 when there is none),
+     * so a duplicated assignment needs a second call.
+     *
+     * `item_id` goes in the query string: this is a DELETE, and the server
+     * reads it from the merged request input.
+     */
+    async unassignTag(brandId: number, tagId: number, itemId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/tags/${tagId}/unassign`, {
+            params: { item_id: itemId },
+        });
+        if (res.status >= 400) throw httpError('Unassign tag', res);
+    }
+
     // ── Collections (form stores) ───────────────────────────────────
 
     async listCollections(brandId: number): Promise<BrandCollection[]> {
@@ -1361,6 +1484,66 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Create collection', res);
         const body = res.data as { collection?: BrandCollection } | BrandCollection;
         return ('collection' in body && body.collection ? body.collection : body) as BrandCollection;
+    }
+
+    // ── Orders (conversions) and tracked sessions — read-only ────────
+
+    /**
+     * One page of the orders list (`ConversionsController@index`, ES-backed).
+     *
+     * Filter names are the ones that controller actually honours, checked
+     * against it rather than guessed: `filter[funnel_id]`, `filter[page_id]`
+     * and `filter[aff_id]` go through the unified-filter mapping (aff_id →
+     * `merchant_affiliate_id`, and only for callers with `affiliates.view`);
+     * `type` is TOP-LEVEL — a `filter[type]` is ignored. With no `type` the
+     * server returns purchase + refund + chargeback. `start`/`end`/`tz` window
+     * `purchased_at`. `per_page` is capped at 100 server-side.
+     */
+    async listConversions(brandId: number, params: Record<string, unknown>): Promise<Paginated<ConversionRow>> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/conversions`, { params });
+        if (res.status === 403) throw new CliError(ExitCode.Auth, 'The conversions module is not enabled for this brand (or your credential cannot read orders).');
+        if (res.status >= 400) throw httpError('List orders', res);
+        return normalizePage<ConversionRow>(res.data, 'orders');
+    }
+
+    /**
+     * One page of the clicks list (`ClicksController@index`). A click is one
+     * page load. Filters: `filter[funnel_id]`, `filter[aff_id]`, and
+     * `filter[pgid]` for the page — that controller does NOT read `page_id`.
+     */
+    async listClicks(brandId: number, params: Record<string, unknown>): Promise<Paginated<ClickRow>> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/clicks`, { params });
+        if (res.status === 403) throw new CliError(ExitCode.Auth, 'The tracking module is not enabled for this brand (or your credential cannot read sessions).');
+        if (res.status >= 400) throw httpError('List sessions', res);
+        return normalizePage<ClickRow>(res.data, 'sessions');
+    }
+
+    /** Every click + event of one session (`ClicksController@sessionDetails`). Accepts a session id or a click code. */
+    async getSessionDetails(brandId: number, sessionId: string): Promise<SessionDetails> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/clicks/session/${encodeURIComponent(sessionId)}`);
+        if (res.status === 403) throw new CliError(ExitCode.Auth, 'Your credential cannot read this session (tracking module or permission).');
+        if (res.status >= 400) throw httpError('Get session', res);
+        const body = (res.data ?? {}) as Partial<SessionDetails>;
+        return {
+            geoData: body.geoData ?? [],
+            events: Array.isArray(body.events) ? body.events : [],
+            domains: body.domains,
+            visit: body.visit ?? null,
+            traffic_source: body.traffic_source ?? null,
+        };
+    }
+
+    /**
+     * One page's settings (`PagesController@show`) — any page type, unlike
+     * `listPages`, which the CLI scopes to editor pages. The GrapesJS `config`
+     * is dropped server-side; the page password hash is NOT, so callers must
+     * never print the raw payload.
+     */
+    async getPageDetails(brandId: number, pageId: number): Promise<Page & Record<string, unknown>> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/pages/${pageId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Page #${pageId} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Get page', res);
+        return res.data as Page & Record<string, unknown>;
     }
 
     // ── Internal HTTP helper ────────────────────────────────────────
@@ -1505,6 +1688,34 @@ function normalizeGroupRows(data: unknown): AnalyticsGroupRow[] {
     return rows;
 }
 
+
+/** Tag store/update responses wrap the model under `tag`; be tolerant either way. */
+function unwrapTag(data: unknown): BrandTag {
+    const body = data as { tag?: BrandTag } | BrandTag | null;
+    if (body && typeof body === 'object' && 'tag' in body && body.tag) return body.tag;
+    return body as BrandTag;
+}
+
+/**
+ * Coerce an ES list response into a {@link Paginated}. The conversions index
+ * answers a failed query with HTTP 200, an empty page and an `error` string —
+ * surfacing that as a server error keeps "the query broke" from reading as
+ * "there were no orders".
+ */
+function normalizePage<T>(data: unknown, what: string): Paginated<T> {
+    const body = (data ?? {}) as Partial<Paginated<T>>;
+    if (body.error && (!Array.isArray(body.data) || body.data.length === 0)) {
+        throw new CliError(ExitCode.Server, `The server could not load ${what}: ${body.error}`);
+    }
+    const rows = Array.isArray(body.data) ? body.data : (Array.isArray(data) ? data as T[] : []);
+    return {
+        total: Number(body.total ?? rows.length),
+        last_page: Number(body.last_page ?? 1),
+        current_page: Number(body.current_page ?? 1),
+        per_page: Number(body.per_page ?? rows.length),
+        data: rows,
+    };
+}
 
 function httpError(label: string, res: AxiosResponse): CliError {
     const status = res.status;

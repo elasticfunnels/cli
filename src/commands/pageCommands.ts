@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { Page } from '../api/types';
+import { Page, TAGGABLE } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
@@ -14,7 +14,9 @@ import { registerPageEventsCommand } from './pageEvents';
 import { SyncStateFile } from '../sync/stateFile';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
+import { registerPageGetCommand } from './pageGet';
 import { resolveDomain, statusLabel as domainStatusLabel } from './domains';
+import { attachTags, collectTag, summarizeAttach, TagTarget } from './tags';
 
 /**
  * When a page's slug changes on the server, move its local `.ef` file to match
@@ -63,7 +65,7 @@ async function renameLocalPageFile(rt: EfRuntime, pageId: number, oldRel: string
 export function registerPagesCommand(program: Command): void {
     const cmd = program
         .command('pages')
-        .description('Page-specific actions: list, create, publish, preview, duplicate, delete, events.');
+        .description('Page-specific actions: list, get, create, publish, preview, duplicate, delete, events.');
 
     registerPageEventsCommand(cmd);
 
@@ -71,20 +73,32 @@ export function registerPagesCommand(program: Command): void {
         .alias('ls')
         .description('List all pages (same as `ef list pages`).')
         .option('--limit <n>', 'Limit rows shown (default: all).', (v) => parseInt(v, 10))
+        .option('--tag <name>', 'Only pages carrying this tag. See "ef tags list".')
+        .option('--all', 'Include visual-builder and legacy pages, not just the code-editor pages that sync.')
         .option('--json', 'Print rows as JSON.')
-        .action(async (opts: { limit?: number; json?: boolean }) => {
+        .action(async (opts: { limit?: number; tag?: string; all?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             await printPagesList(api, rt.config.brandId, opts);
         });
 
+    registerPageGetCommand(cmd);
+
     cmd.command('create <slug>')
         .description('Create a new page on the server (and pull it to disk).')
         .option('--title <title>', 'Title shown in the dashboard. Defaults to the slug humanized.')
         .option('--folder-id <id>', 'Numeric folder id to drop the page into.', (v) => parseInt(v, 10))
+        .option('--tag <name>', 'Tag the new page (repeatable). Creates the tag if it does not exist.', collectTag)
         .option('--no-pull', 'Skip pulling the new page to disk after creating.')
         .option('--json', 'Print result as JSON.')
-        .action(async (slug: string, opts: { title?: string; folderId?: number; pull?: boolean; json?: boolean }) => {
+        .addHelpText('after', `
+Tagging at creation is one call and keeps a batch of generated pages findable
+later ("ef list pages --tag <name>"):
+
+  $ ef pages create black-friday/landing --tag black-friday --tag q4
+
+See "ef tags --help" for colours and for tagging pages that already exist.`)
+        .action(async (slug: string, opts: { title?: string; folderId?: number; tag?: string[]; pull?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const title = opts.title ?? humanize(slug);
@@ -94,8 +108,14 @@ export function registerPagesCommand(program: Command): void {
                 await pullPage(ctx, created.id);
                 await ctx.state.save();
             }
-            if (opts.json) { log.json({ ok: true, page: created }); return; }
+            // Tagging AFTER the pull: the page exists either way, and a tag
+            // failure must not leave a created page unsynced on disk.
+            const target: TagTarget = { kind: 'page', moduleKey: TAGGABLE.page, id: created.id, label: created.slug ?? slug };
+            const tagged = opts.tag?.length ? await attachTags(api, rt.config.brandId, target, opts.tag) : null;
+
+            if (opts.json) { log.json({ ok: true, page: created, ...(tagged ? { tags: tagged } : {}) }); return; }
             log.success(`Created page #${created.id} "${created.slug ?? slug}" (${created.title ?? title}).`);
+            if (tagged) log.success(summarizeAttach(tagged, target));
         });
 
     cmd.command('settings <slug>')

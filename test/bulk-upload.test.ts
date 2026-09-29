@@ -37,16 +37,16 @@ test('buildBulkUploadBody preserves raw binary bytes verbatim', () => {
 
 test('buildProductMultipartBody sends scalar fields, JSON-encodes objects, and attaches the image', () => {
     const body = buildProductMultipartBody(BOUNDARY, {
-        title: 'Herpafend 6 Bottles',
-        code: 'HERPAFEND-UPS-6B',
+        title: 'Sample 6 Bottles',
+        code: 'SAMPLE-UPS-6B',
         price: 294,
         variants: [{ code: 'v1', price: 49 }],
         skip_me: null,
         also_skip: undefined,
     }, { name: 'bottle.png', bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }).toString('latin1');
 
-    assert.match(body, /name="title"\r\n\r\nHerpafend 6 Bottles\r\n/);
-    assert.match(body, /name="code"\r\n\r\nHERPAFEND-UPS-6B\r\n/);
+    assert.match(body, /name="title"\r\n\r\nSample 6 Bottles\r\n/);
+    assert.match(body, /name="code"\r\n\r\nSAMPLE-UPS-6B\r\n/);
     assert.match(body, /name="price"\r\n\r\n294\r\n/);
     // Arrays/objects are JSON-encoded (the controller json_decodes these).
     assert.match(body, /name="variants"\r\n\r\n\[\{"code":"v1","price":49\}\]\r\n/);

@@ -16,8 +16,11 @@ export type { Automation } from '../models/automation';
 export type { BrandEmail } from '../models/email';
 export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../models/crm';
 export type { Funnel } from '../models/funnel';
+export type { ConversionRow, ClickRow, Paginated, SessionDetails, SessionEvent } from '../models/order';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';
 export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';
+export type { BrandTag, TaggableKind } from '../models/tag';
+export { TAGGABLE, TAG_COLORS, TAG_AUTO_COLORS } from '../models/tag';
 export type { BrandSeoConfig, SeoPage, SeoExclusionReason } from '../models/seo';
 export { SEO_EXCLUSION_REASON } from '../models/seo';
 export { COLLECTION_FIELD_TYPES } from '../models/collection';
@@ -29,6 +32,7 @@ export type {
     AnalyticsMetricData,
     AnalyticsGroupRow,
     SplitTest,
+    SplitTestNodeCode,
     SplitTestVariant,
     SplitTestSignificance,
     DashboardPreset,

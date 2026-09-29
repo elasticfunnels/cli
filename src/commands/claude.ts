@@ -318,6 +318,38 @@ domain should have it. A domain only serves traffic once validated — check wit
 \`ef domains list\`, and use \`ef domains records <domain>\` / \`ef domains validate
 <domain>\` if it isn't.
 
+## Tags — label what you create, as you create it
+
+A brand accumulates hundreds of pages, and slugs get renamed. A tag is the
+durable way to say "these six belong to the March quiz funnel", and it shows as
+a coloured chip in the dashboard's Pages and Components lists — so it is also
+how a HUMAN finds what you built.
+
+**Tag anything you create in bulk, at creation time.** One extra flag now; a
+manual re-identification pass later if you skip it.
+
+\`\`\`bash
+ef pages create bf/landing --tag black-friday --tag q4    # tag on create
+ef components create hero-bf --tag black-friday
+ef tags attach pricing black-friday                       # tag something that exists
+ef tags attach component:hero-banner q1-test              # "component:" prefix; bare = page slug
+ef list pages --tag black-friday                          # find them again
+ef tags show pricing                                      # what's on one record
+\`\`\`
+
+- **A tag that doesn't exist yet is created for you** by \`attach\` and by
+  \`--tag\` — no separate \`ef tags create\` step, and no invented colour to pick.
+  Colour is derived from the name unless you pass \`--color\`.
+- **Reuse the brand's existing names.** Run \`ef tags list\` first: "black-friday"
+  and "Black Friday" are two different tags and the list ends up useless.
+  Matching is case-insensitive, so an existing tag is reused if you get the
+  spelling right.
+- \`ef tags detach <target> <name>\` takes a tag off ONE record. \`ef tags delete
+  <name>\` destroys the tag brand-wide, on every record. They are not the same
+  thing — do not reach for \`delete\` to clean up one page.
+- Pages and components are the only two kinds the dashboard shows tags for, so
+  they are the only two \`ef tags\` targets.
+
 ## Page variants (A/B tests)
 
 Variants of a page live under a subfolder named after the base slug:
@@ -399,7 +431,7 @@ Run from anywhere inside the project (the CLI walks up to find \`.ef/\`).
 init login auth reset whoami status list preview get pull push pages components
 products scripts assets variables diff ask claude codex mcp install-highlighter
 collections
-update config watch lint domains crm funnels
+update config watch lint domains crm funnels tags splits orders sessions
 \`\`\`
 
 Most-used, by task:
@@ -412,6 +444,7 @@ Most-used, by task:
 | Ship a change | \`ef push pages/x.ef\` |
 | Ship every save automatically | \`ef watch\` — for a HUMAN's editor session. Long-running: never start it from an agent, push explicitly instead. |
 | Create a page / component | \`ef pages create <slug>\` · \`ef components create <code>\` |
+| Label a page / component so it's findable later | \`ef pages create <slug> --tag <name>\` · \`ef tags attach <slug> <name>\` · \`ef list pages --tag <name>\` |
 | Rename / re-slug a page | \`ef pages settings <slug> --slug <new>\` |
 | Put a page on a domain | \`ef pages settings <slug> --domain <name> [--homepage]\` |
 | Manage domains + DNS | \`ef domains list\\|add\\|records\\|validate\\|remove\` |
@@ -425,6 +458,12 @@ Most-used, by task:
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
 | Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |
+| Where should we optimize / analyze funnel performance | Use the \`ef-funnel-performance\` skill (data checks, affiliates, AOV, profit, per-buyer upsell take, session traces, dev brief) |
+| Which funnel sells, and where buyers drop off | \`ef stats by funnel_id\` · \`ef funnels product-flow <id>\` (use the \`ef-funnel-analysis\` skill; for weak upsells, \`ef-upsell-diagnosis\`) |
+| Orders, and who bought what after the front end | \`ef orders list --funnel <id> --range 30d\` · \`ef orders buyers --funnel <id>\` (per-buyer upsell take; \`--by page\`) — read-only; customer PII never printed, \`--json\` strips it unless \`--include-pii\` |
+| Trace one visit / check traffic quality | \`ef sessions show <session_id>\` (visit, path, timeline, tracking gaps) · \`ef sessions list --funnel <id>\` (device, country, bot/hosting flags) |
+| What is page #312? (any page, incl. builder/legacy) | \`ef pages get <idOrSlug>\` · \`ef list pages --all\` — plain \`ef list pages\` shows only the editor pages that sync |
+| End a split test on a winner | \`ef splits variants <id>\` · \`ef splits winner <id> <variant>\` — a business call the user makes; record it in \`split-tests.md\` |
 | Fix a rejected credential | \`ef login\` |
 | Is my CLI current? | \`ef update --check\` — read-only. Report the result; let the user run \`ef update\` themselves. |
 | Check config / identity | \`ef status\` · \`ef whoami\` · \`ef config get\` |

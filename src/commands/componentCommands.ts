@@ -1,12 +1,14 @@
 import * as path from 'path';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
+import { TAGGABLE } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { fileExists } from '../utils/fs';
 import { buildSyncContext, pullComponent, pushComponentFile } from '../sync/sync';
 import { removeLocalEntity, resolveComponentByCodeOrName } from './shared';
+import { attachTags, collectTag, summarizeAttach, TagTarget } from './tags';
 import { relPathForComponent } from '../sync/paths';
 
 export function registerComponentsCommand(program: Command): void {
@@ -36,9 +38,15 @@ export function registerComponentsCommand(program: Command): void {
     cmd.command('create <code>')
         .description('Create a new component on the server (and pull to disk).')
         .option('--name <name>', 'Display name (defaults to humanized code).')
+        .option('--tag <name>', 'Tag the new component (repeatable). Creates the tag if it does not exist.', collectTag)
         .option('--no-pull', 'Skip pulling the new component to disk after creating.')
         .option('--json', 'Print result as JSON.')
-        .action(async (code: string, opts: { name?: string; pull?: boolean; json?: boolean }) => {
+        .addHelpText('after', `
+  $ ef components create hero-banner --tag q1-test --tag shop
+
+Tags show in the dashboard's Components list. See "ef tags --help" for colours
+and for tagging components that already exist.`)
+        .action(async (code: string, opts: { name?: string; tag?: string[]; pull?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const name = opts.name ?? code.replace(/[-_/]+/g, ' ').replace(/\s+/g, ' ').replace(/(^|\s)\S/g, t => t.toUpperCase());
@@ -52,8 +60,15 @@ export function registerComponentsCommand(program: Command): void {
                 await pullComponent(ctx, created.id);
                 await ctx.state.save();
             }
-            if (opts.json) { log.json({ ok: true, component: created }); return; }
+            // After the pull, for the same reason as `ef pages create --tag`:
+            // the component exists regardless, so a tag failure must not leave
+            // it unsynced on disk.
+            const target: TagTarget = { kind: 'component', moduleKey: TAGGABLE.component, id: created.id, label: created.code ?? created.name ?? code };
+            const tagged = opts.tag?.length ? await attachTags(api, rt.config.brandId, target, opts.tag) : null;
+
+            if (opts.json) { log.json({ ok: true, component: created, ...(tagged ? { tags: tagged } : {}) }); return; }
             log.success(`Created component #${created.id} (${created.code ?? created.name}).`);
+            if (tagged) log.success(summarizeAttach(tagged, target));
         });
 
     cmd.command('push <codeOrPath>')

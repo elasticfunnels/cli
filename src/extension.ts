@@ -31,11 +31,15 @@ import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
 import { registerSeoCommand } from './commands/seo';
 import { registerStatsCommand } from './commands/stats';
+import { registerSplitsCommand } from './commands/splits';
 import { registerWatchCommand } from './commands/watch';
 import { registerLintCommand } from './commands/lint';
 import { registerDomainsCommand } from './commands/domains';
 import { registerCrmCommand } from './commands/crm';
 import { registerFunnelsCommand } from './commands/funnels';
+import { registerTagsCommand } from './commands/tags';
+import { registerOrdersCommand } from './commands/orders';
+import { registerSessionsCommand } from './commands/sessions';
 // Temporarily DISABLED — kept in the tree but not wired up. Emails need a raw
 // code-editor path (not just the GrapesJS builder) and automations need real
 // graph UX before they're safe to ship; re-enable by restoring these two lines
@@ -102,9 +106,13 @@ Designed for Claude Code, scripts, and humans equally:
     registerDomainsCommand(program);
     registerSeoCommand(program);
     registerStatsCommand(program);
+    registerSplitsCommand(program);
+    registerOrdersCommand(program);
+    registerSessionsCommand(program);
     registerCollectionsCommand(program);
     registerCrmCommand(program);
     registerFunnelsCommand(program);
+    registerTagsCommand(program);
     // Disabled for now (see the commented imports above):
     // registerAutomationsCommand(program);
     // registerEmailsCommand(program);

@@ -374,9 +374,9 @@ So after creating or changing a split test, append an entry to
 `elasticfunnels/split-tests.md` (create the file if it is not there):
 
 ```markdown
-## #503 — Herpafend Prelander A/B (page: herpafend-pre, id 16109)
+## #503 — Prelander A/B (page: sleep-pre, id 2101)
 - Created 2026-08-19. Status: running.
-- Variants: A "Self-assessment" 50% (original) · B "Listicle" 50% (herpafend-pre-v2, id 16110)
+- Variants: A "Self-assessment" 50% (original) · B "Listicle" 50% (sleep-pre-v2, id 2102)
 - Hypothesis: a self-assessment opener qualifies harder and lifts CVR downstream.
 - Winning means: B beats A on `conversion_rate` at the server's own verdict.
 - Check with: `ef stats split 503`

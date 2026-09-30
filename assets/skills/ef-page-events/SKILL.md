@@ -295,6 +295,8 @@ Fields below are the ones the vocabulary endpoint doesn't carry. Run
 - `add_tag` — `{ value: "<tag>", expiration_minutes }`. `set_variable` — `{ variables: {…} }`.
 - `set_merchant` — `{ value: "<merchantId>", … }`. `clear_merchant` — none.
 - `set_checkout_page` — `{ value: "<pageId>", slug }`. `execute_automation` — `{ automation_id, delay }`.
+- `set_checkout_bumps` — `{ bumps: [{ code, name, price, description, image }] }` (paid, opt-in add-ons).
+- `set_checkout_bonuses` — `{ bonuses: { "<MAIN_CODE>": { options: ["CODE" | { code, giftable, quantity }], min, max, default: "first_n"|"all", gift_shipping: { enabled, mode, price } } } }`. Offer-scoped FREE bonuses + pick rule for the checkout this path leads to; same shape as `checkout_settings.bonuses`, and it wins over the page and the product rule. `options: []` turns bonuses off. Bonuses are not bumps — see the `ef-bonuses-gifts` skill.
 - `mark_whitelisted` — `{ value: <minutes> }` (`0` = permanent). `block_request` — `{ value: "<message>" }`.
 
 **Split testing** (fixed four-level shape — see below)

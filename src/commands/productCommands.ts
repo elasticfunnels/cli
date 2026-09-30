@@ -7,6 +7,17 @@ import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { readJsonPayloadFile } from './shared';
 import { formatRelative, renderTable } from '../utils/format';
+import { Product } from '../models/product';
+import {
+    applyBonusEdits,
+    bonusSummary,
+    buildRule,
+    describeRule,
+    normalizeBonuses,
+    parseBonusSpec,
+    splitList,
+    toBonusPayload,
+} from '../utils/bonuses';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
 
@@ -76,7 +87,7 @@ function addCommonFlags(cmd: Command): Command {
         .option('--seo-description <text>', 'SEO description.')
         .option('--seo-slug <slug>', 'SEO slug.')
         .option('--image <path>', 'Local image file to upload as the product image (png, jpg, gif, webp, svg). Uploaded to the CDN by the server.')
-        .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.');
+        .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields. May carry `bonuses` and `bonus_rule` (see `ef products bonuses --help`).');
 }
 
 function payloadFromOpts(opts: Record<string, unknown>): Record<string, unknown> {
@@ -98,7 +109,7 @@ async function buildPayload(opts: Record<string, unknown>): Promise<Record<strin
 export function registerProductsCommand(program: Command): void {
     const cmd = program
         .command('products')
-        .description('Product actions: list, get, create, update, delete, clone.');
+        .description('Product actions: list, get, create, update, delete, clone, bonuses, bonus-rule.');
 
     cmd.command('list')
         .alias('ls')
@@ -113,26 +124,30 @@ export function registerProductsCommand(program: Command): void {
             const rows = opts.limit ? products.slice(0, opts.limit) : products;
             if (opts.json) { log.json(rows); return; }
             log.raw(renderTable({
-                head: ['#', 'code', 'title', 'class', 'price', 'updated'],
+                head: ['#', 'code', 'title', 'class', 'price', 'bonuses', 'updated'],
                 rows: rows.map(p => [
                     String(p.id),
                     p.code ?? '',
                     p.title ?? '',
                     p.classification ?? '',
                     p.price != null ? String(p.price) : '',
+                    bonusSummary(p),
                     formatRelative(p.updated_at),
                 ]),
             }) + '\n');
             log.detail(`${rows.length} products`);
         });
 
-    cmd.command('get <id>')
-        .description('Print one product as JSON.')
-        .action(async (id: string) => {
+    cmd.command('get <idOrCode>')
+        .description('Print one product as JSON (includes `bonuses` and `bonus_rule`).')
+        .action(async (ref: string) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
-            const product = await api.getProduct(rt.config.brandId, numericId(id));
+            const product = await resolveProduct(api, rt.config.brandId, ref);
             log.json(product);
+            if (Array.isArray(product.bonuses) && product.bonuses.length) {
+                log.detail(`bonuses: ${describeRule(product.bonus_rule, product.bonuses.length)}`);
+            }
         });
 
     addCommonFlags(
@@ -206,7 +221,171 @@ export function registerProductsCommand(program: Command): void {
             if (opts.json) { log.json({ ok: true, product: clone }); return; }
             log.success(`Cloned product #${id} → #${clone.id} (${clone.code ?? '?'}).`);
         });
+
+const BONUS_HELP = `
+A bonus is a FREE product attached to a main product (or package). The rule
+(\`ef products bonus-rule\`) says how many the buyer picks: exactly N, up to N,
+or all. Nothing picked ⇒ the first N by position (or all). Bonuses marked
+giftable can be sent "to a friend": a separate linked gift order.
+
+Bonuses are not bumps. Bonus products need classification "bonus".
+
+Examples:
+  ef products bonuses HERPAFEND_MAIN_2B_P158
+  ef products bonuses 812 --add SNOOZE_MAX:giftable --add BIOME_SHIELD:giftable --add MORINGA:giftable
+  ef products bonuses 812 --order MORINGA,SNOOZE_MAX,BIOME_SHIELD
+  ef products bonuses 812 --remove MORINGA
+  ef products bonuses 812 --not-giftable SNOOZE_MAX
+  ef products bonuses 812 --clear
+`;
+
+const RULE_HELP = `
+Pick modes (one of):
+  --pick <n>     buyer picks exactly n        (min = max = n)
+  --up-to <n>    buyer picks 1..n             (min 1, max n; --min to change)
+  --all          every bonus included, no picking
+
+Nothing picked ⇒ --default first_n (first n by position) or all. A pick the
+rule does not allow is rejected by the checkout with a 422, never "fixed".
+
+Gift ("send to a friend"): --gift on lets the buyer ship the GIFTABLE bonuses to
+another address. That creates a separate gift order (own order id) linked to the
+main one. The friend's email is optional and is never used to notify them.
+Gift shipping is charged on the main order:
+  same_as_main (default) · free · fixed (needs --gift-price)
+
+Without a rule, the internal checkout does not activate a product's bonuses
+(unless a page/funnel override sets them). For a seasonal offer that must not
+change the normal checkout, use checkout_settings.bonuses in the page's backend
+script, or the set_checkout_bonuses funnel node, instead of a product rule.
+
+Examples:
+  ef products bonus-rule HERPAFEND_MAIN_2B_P158 --pick 1
+  ef products bonus-rule HERPAFEND_HWN_3B_P170 --up-to 2 --gift on
+  ef products bonus-rule HERPAFEND_MAIN_6B_P294 --all --gift on --gift-shipping free
+  ef products bonus-rule 812 --gift-shipping fixed --gift-price 4.99
+  ef products bonus-rule 812 --clear
+`;
+
+    cmd.command('bonuses <idOrCode>')
+        .description('Show or edit a product\'s bonuses (free products the buyer gets or picks). No edit flags = show.')
+        .option('--add <CODE[:qty][:giftable]>', 'Attach a bonus by product code (repeatable, or comma-separated). An existing code is updated in place.', collect, [])
+        .option('--remove <codes>', 'Detach bonuses by code (repeatable or comma-separated).', collect, [])
+        .option('--order <codes>', 'Comma-separated codes in the order they are offered (position). Unlisted bonuses keep their order after these.')
+        .option('--giftable <codes>', 'Mark bonuses giftable (may be sent to a friend).', collect, [])
+        .option('--not-giftable <codes>', 'Mark bonuses not giftable (always ship to the buyer).', collect, [])
+        .option('--clear', 'Remove every bonus (runs before --add, so --clear --add X replaces the list).')
+        .option('--json', 'Print { product, bonuses, bonus_rule } as JSON.')
+        .addHelpText('after', BONUS_HELP)
+        .action(async (ref: string, opts: { add: string[]; remove: string[]; order?: string; giftable: string[]; notGiftable: string[]; clear?: boolean; json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            let product = await resolveProduct(api, rt.config.brandId, ref);
+            const current = normalizeBonuses(product.bonuses);
+            const edits = {
+                clear: !!opts.clear,
+                add: splitList(opts.add).map(parseBonusSpec),
+                remove: splitList(opts.remove),
+                order: splitList(opts.order),
+                giftable: splitList(opts.giftable),
+                notGiftable: splitList(opts.notGiftable),
+            };
+            const editing = edits.clear || edits.add.length || edits.remove.length || edits.order.length || edits.giftable.length || edits.notGiftable.length;
+            if (editing) {
+                const next = applyBonusEdits(current, edits);
+                const rule = product.bonus_rule;
+                if (rule && rule.max_picks != null && rule.max_picks > next.length) {
+                    throw new CliError(ExitCode.Validation,
+                        `The bonus rule lets the buyer pick ${rule.max_picks}, but only ${next.length} bonus${next.length === 1 ? '' : 'es'} would remain. Change the rule first (ef products bonus-rule ${ref} --pick <n> | --all | --clear).`);
+                }
+                const payload: Record<string, unknown> = { bonuses: toBonusPayload(next) };
+                if (product.title) payload.title = product.title; // the update endpoint requires a title
+                product = await api.updateProduct(rt.config.brandId, product.id, payload);
+                if (!Array.isArray(product.bonuses)) product.bonuses = next.map(b => ({ ...b }));
+                if (rule && next.length && !next.some(b => b.giftable) && rule.gift_shipping_enabled) {
+                    log.warn('Gift shipping is on, but no bonus is giftable now, so "send to a friend" will not show.');
+                }
+            }
+            const list = normalizeBonuses(product.bonuses);
+            if (opts.json) { log.json({ ok: true, product: { id: product.id, code: product.code, title: product.title }, bonuses: product.bonuses ?? [], bonus_rule: product.bonus_rule ?? null }); return; }
+            if (editing) log.success(`Saved ${list.length} bonus${list.length === 1 ? '' : 'es'} on #${product.id} ${product.code ?? ''}.`);
+            printBonuses(product, list);
+        });
+
+    cmd.command('bonus-rule <idOrCode>')
+        .description('Show or set how many bonuses the buyer picks, the default when nothing is picked, and gift ("send to a friend") shipping. No flags = show.')
+        .option('--pick <n>', 'Buyer picks exactly n bonuses.', parseNum)
+        .option('--up-to <n>', 'Buyer picks up to n bonuses.', parseNum)
+        .option('--all', 'Every bonus included; no picking.')
+        .option('--min <n>', 'Override the minimum number of picks.', parseNum)
+        .option('--default <mode>', 'When nothing is picked: first_n | all.')
+        .option('--gift <on|off>', 'Allow sending the giftable bonuses to a friend\'s address (separate gift order).')
+        .option('--gift-shipping <mode>', 'Gift shipping price, charged on the main order: same_as_main | free | fixed.')
+        .option('--gift-price <amount>', 'Price for --gift-shipping fixed (implies fixed).', parseNum)
+        .option('--clear', 'Delete the rule (legacy: all bonuses, no picking, not active on the internal checkout).')
+        .option('--json', 'Print { product, bonuses, bonus_rule } as JSON.')
+        .addHelpText('after', RULE_HELP)
+        .action(async (ref: string, opts: { pick?: number; upTo?: number; all?: boolean; min?: number; default?: string; gift?: string; giftShipping?: string; giftPrice?: number; clear?: boolean; json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            let product = await resolveProduct(api, rt.config.brandId, ref);
+            const list = normalizeBonuses(product.bonuses);
+            const setting = opts.pick != null || opts.upTo != null || !!opts.all || opts.min != null || opts.default != null
+                || opts.gift != null || opts.giftShipping != null || opts.giftPrice != null;
+            if (opts.clear && setting) throw new CliError(ExitCode.Validation, '--clear cannot be combined with other rule flags.');
+            if (opts.clear || setting) {
+                let payload: Record<string, unknown>;
+                if (opts.clear) {
+                    payload = { bonus_rule: null };
+                } else {
+                    const { rule, warnings } = buildRule(product.bonus_rule, opts, list.length, list.filter(b => b.giftable).length);
+                    for (const w of warnings) log.warn(w);
+                    payload = { bonus_rule: rule };
+                }
+                if (product.title) payload.title = product.title;
+                const updated = await api.updateProduct(rt.config.brandId, product.id, payload);
+                if (updated.bonus_rule === undefined) updated.bonus_rule = (payload.bonus_rule as Product['bonus_rule']);
+                if (!Array.isArray(updated.bonuses)) updated.bonuses = product.bonuses;
+                product = updated;
+            }
+            if (opts.json) { log.json({ ok: true, product: { id: product.id, code: product.code, title: product.title }, bonuses: product.bonuses ?? [], bonus_rule: product.bonus_rule ?? null }); return; }
+            if (opts.clear) log.success(`Deleted the bonus rule on #${product.id} ${product.code ?? ''}.`);
+            else if (setting) log.success(`Saved the bonus rule on #${product.id} ${product.code ?? ''}.`);
+            printBonuses(product, normalizeBonuses(product.bonuses));
+        });
 }
+
+function printBonuses(product: Product, list: ReturnType<typeof normalizeBonuses>): void {
+    log.info(`#${product.id} ${product.code ?? ''} ${product.title ? `(${product.title})` : ''}`.trim());
+    if (!list.length) {
+        log.detail('No bonuses. Attach one: ef products bonuses <product> --add CODE[:qty][:giftable]');
+    } else {
+        log.raw(renderTable({
+            head: ['pos', 'code', 'title', 'qty', 'giftable'],
+            rows: list.map((b, i) => [String(i + 1), b.code ?? (b.product_id != null ? `#${b.product_id}` : ''), b.title ?? '', String(b.quantity), b.giftable ? 'yes' : '']),
+        }) + '\n');
+    }
+    log.info(`rule: ${describeRule(product.bonus_rule, list.length)}`);
+}
+
+function collect(value: string, previous: string[]): string[] {
+    return [...(previous ?? []), value];
+}
+
+/**
+ * Resolve a product by numeric id or by code. Codes are looked up in the
+ * brand's product list (case-insensitive), then fetched by id so the result
+ * carries the full record, bonuses included.
+ */
+export async function resolveProduct(api: ApiClient, brandId: number, ref: string): Promise<Product> {
+    const trimmed = String(ref).trim();
+    if (/^\d+$/.test(trimmed)) return api.getProduct(brandId, parseInt(trimmed, 10));
+    const products = await api.listProducts(brandId);
+    const hit = products.find(p => (p.code ?? '').toLowerCase() === trimmed.toLowerCase());
+    if (!hit) throw new CliError(ExitCode.NotFound, `No product with code "${trimmed}" in this brand. List them with: ef products list`);
+    return api.getProduct(brandId, hit.id);
+}
+
 
 function parseNum(v: string): number {
     const n = Number(v);

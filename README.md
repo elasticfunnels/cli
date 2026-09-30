@@ -261,11 +261,13 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |
 | `ef products list` | List products (alias `ef products ls`; `--classification` to filter). |
-| `ef products get <id>` | Print one product as JSON. |
+| `ef products get <idOrCode>` | Print one product as JSON (includes `bonuses` and `bonus_rule`). |
 | `ef products create` | Create a product (`--title` + `--code` required; flags and/or `--file`). |
 | `ef products update <id>` | Update a product — only the fields you pass (flags and/or `--file`). |
 | `ef products clone <id>` | Clone a product. |
 | `ef products delete <id>` | Delete a product. |
+| `ef products bonuses <idOrCode>` | Show or edit a main product's **bonuses** (free products the buyer gets or picks): `--add CODE[:qty][:giftable]`, `--remove CODE`, `--order A,B,C`, `--giftable`/`--not-giftable CODE`, `--clear`. Bonus products need classification `bonus`. Bonuses are not bumps. |
+| `ef products bonus-rule <idOrCode>` | Show or set the **pick rule**: `--pick <n>` (exactly n), `--up-to <n>`, `--all`; `--default first_n\|all` for when nothing is picked; `--gift on\|off` lets giftable bonuses be sent to a friend (a separate linked gift order); `--gift-shipping same_as_main\|free\|fixed` + `--gift-price`; `--clear`. Without a rule the internal checkout ignores the product's bonuses. |
 | `ef scripts create <code>` | Create a new backend script. |
 | `ef scripts pull <codeOrId>` | Pull one backend script. |
 | `ef scripts push <pathOrCode>` | Push one backend script. |

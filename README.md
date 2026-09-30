@@ -242,7 +242,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |
 | `ef pages preview <slug>` | Print preview + live URLs (draft revision from editor when present). |
 | `ef pages duplicate <slug>` | Duplicate a page. |
-| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. |
+| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. `--checkout-page`/`--no-checkout-page` marks it as a checkout page (the brand must allow checkouts; a refusal exits 2 with the server's message), `--upsell-page`/`--no-upsell-page` as an upsell page. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). Mints a `node_code` for any node missing one — the graph's durable identity, used by the split-test cookie, analytics grouping and funnel step URLs. Current servers mint these too; the CLI covers brands on an older release. Neither side ever rewrites an existing code, since a live test's recorded sessions are tied to it. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
@@ -250,6 +250,8 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages events vocabulary <slug>` | Print the valid event-node vocabulary (node types + connection rules). |
 | `ef pages events diff <slug>` / `ef diff pages/<slug>.events.json` | Show the local-vs-server events graph diff (no merge — pick a side). |
 | `ef funnels list` | List funnels. |
+| `ef funnels get <codeOrId>` | One funnel's settings: status, domains, trigger pages, entry rules and its checkout page. `--json` for scripts. |
+| `ef funnels settings <codeOrId> --checkout-page <slug\|id\|none>` | Set the funnel's checkout page (`none` falls back to the merchant's). The page must already be marked `ef pages settings <slug> --checkout-page`, else exit 2. The server's update is not partial, so the CLI reads the funnel and resends its title, status, domains and entry rules unchanged, then reads it back to confirm. Precedence at checkout: a `set_checkout_page` node on the buyer's path > the funnel's checkout page > the merchant's. |
 | `ef funnels pull [codeOrId]` | Pull a funnel's builder graph → `funnels/<code>.flow.json`. `--all` for every funnel. |
 | `ef funnels push <codeOrId>` | Push the builder graph. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a funnel that already has a graph (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
 | `ef funnels diff <codeOrId>` / `ef diff funnels/<code>.flow.json` | Show the local-vs-server funnel-graph diff. |

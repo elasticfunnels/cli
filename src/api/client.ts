@@ -23,6 +23,7 @@ import {
     CrmStage,
     DomainValidationInstructions,
     Funnel,
+    FunnelDetails,
     Page,
     PageFolder,
     PageUpdateResponse,
@@ -285,6 +286,7 @@ export class ApiClient {
      */
     async updatePageSettings(brandId: number, pageId: number, settings: Record<string, unknown>): Promise<Page> {
         const res = await this.raw('PUT', `/api/brands/${brandId}/pages/${pageId}`, { data: settings });
+        if (res.status === 422) throw validationError('Page settings', res);
         if (res.status >= 400) throw httpError('Update page settings', res);
         const body = res.data as { page?: Page } | Page;
         return ('page' in body && body.page ? body.page : body) as Page;
@@ -425,6 +427,29 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Create funnel', res);
         const body = res.data as { funnel?: Funnel };
         return body.funnel ?? (res.data as Funnel);
+    }
+
+    /** One funnel's settings (`GET funnels/{id}?flow=0` — the compiled flow is left out). */
+    async getFunnel(brandId: number, id: number): Promise<FunnelDetails> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}`, { params: { flow: 0 } });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Funnel #${id} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Get funnel', res);
+        return res.data as FunnelDetails;
+    }
+
+    /**
+     * `PUT funnels/{id}` (FunnelsController::update, SaveFunnel). NOT a partial
+     * update: `title` is always required, `domains` is required unless the
+     * status sent is `draft` and is replaced wholesale when present, and `rules`
+     * is overwritten with null when absent. Callers send the full current
+     * settings — see `buildFunnelUpdatePayload` in commands/funnels.ts.
+     */
+    async updateFunnel(brandId: number, id: number, payload: Record<string, unknown>): Promise<FunnelDetails> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/funnels/${id}`, { data: payload });
+        if (res.status === 422) throw validationError('Funnel settings', res);
+        if (res.status >= 400) throw httpError('Update funnel', res);
+        const body = res.data as { funnel?: FunnelDetails } | FunnelDetails;
+        return ('funnel' in body && body.funnel ? body.funnel : body) as FunnelDetails;
     }
 
     async deleteFunnel(brandId: number, id: number): Promise<void> {
@@ -1739,6 +1764,21 @@ function httpError(label: string, res: AxiosResponse): CliError {
         : status >= 500 ? ExitCode.Server
         : ExitCode.Error;
     return new CliError(code, `${label} failed (HTTP ${status}): ${detail || res.statusText || 'unknown error'}`);
+}
+
+/**
+ * A Laravel 422, reported as the server's own field messages ("is_checkout_page:
+ * Checkout pages are not allowed for this brand…") with exit code 2. The
+ * top-level `message` only repeats the first field error ("… (and 1 more
+ * error)"), so it is used only when there are no field errors.
+ */
+function validationError(label: string, res: AxiosResponse): CliError {
+    const data = res.data as { message?: string; error?: string; errors?: Record<string, string[] | string> } | undefined;
+    const fields = data?.errors && typeof data.errors === 'object'
+        ? Object.entries(data.errors).map(([field, msgs]) => `${field}: ${(Array.isArray(msgs) ? msgs : [msgs]).join('; ')}`)
+        : [];
+    const detail = fields.length ? fields.join(' | ') : (data?.message ?? data?.error ?? 'validation failed');
+    return new CliError(ExitCode.Validation, `${label} rejected by the server (HTTP 422): ${detail}`);
 }
 
 /**

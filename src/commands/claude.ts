@@ -318,6 +318,26 @@ domain should have it. A domain only serves traffic once validated — check wit
 \`ef domains list\`, and use \`ef domains records <domain>\` / \`ef domains validate
 <domain>\` if it isn't.
 
+## Checkout pages — which one a buyer lands on
+
+A page is only eligible as a checkout once it is **marked** as one, and a funnel
+only sends buyers to a page marked that way:
+
+\`\`\`bash
+ef pages settings order-form --checkout-page                  # mark (brand must allow checkouts)
+ef funnels settings main-funnel --checkout-page order-form    # this funnel's checkout
+ef funnels settings main-funnel --checkout-page none          # back to the merchant's
+ef funnels get main-funnel                                     # what it uses now
+\`\`\`
+
+Resolution, first match wins: (1) a \`set_checkout_page\` node on the buyer's
+path (page events / funnel graph; it only applies inside the funnel that set
+it) > (2) the funnel's checkout page (\`checkout_page_id\`) > (3) the merchant's
+checkout page. Upsells never render a fresh checkout page — they keep the
+merchant's. So a funnel setting that "does nothing" usually means a
+\`set_checkout_page\` node overrides it. Checkout pages are not funnel-graph
+steps: never report one as unwired.
+
 ## Tags — label what you create, as you create it
 
 A brand accumulates hundreds of pages, and slugs get renamed. A tag is the
@@ -501,6 +521,7 @@ Most-used, by task:
 | Label a page / component so it's findable later | \`ef pages create <slug> --tag <name>\` · \`ef tags attach <slug> <name>\` · \`ef list pages --tag <name>\` |
 | Rename / re-slug a page | \`ef pages settings <slug> --slug <new>\` |
 | Put a page on a domain | \`ef pages settings <slug> --domain <name> [--homepage]\` |
+| Mark a checkout page / set a funnel's checkout | \`ef pages settings <slug> --checkout-page\` · \`ef funnels settings <code> --checkout-page <slug\\|none>\` · \`ef funnels get <code>\` |
 | Manage domains + DNS | \`ef domains list\\|add\\|records\\|validate\\|remove\` |
 | Publish a draft | \`ef pages publish <slug>\` |
 | Preview / live URL | \`ef preview <slug>\` |

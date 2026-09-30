@@ -14,7 +14,7 @@ import { registerPageEventsCommand } from './pageEvents';
 import { SyncStateFile } from '../sync/stateFile';
 import { buildSyncContext, pullPage } from '../sync/sync';
 import { printPagesList } from './list';
-import { registerPageGetCommand } from './pageGet';
+import { registerPageGetCommand, resolveAnyPageId } from './pageGet';
 import { resolveDomain, statusLabel as domainStatusLabel } from './domains';
 import { attachTags, collectTag, summarizeAttach, TagTarget } from './tags';
 
@@ -60,6 +60,23 @@ async function renameLocalPageFile(rt: EfRuntime, pageId: number, oldRel: string
     });
     await state.save();
     return { from: oldRel, to: newRel };
+}
+
+/**
+ * `ef pages settings` target: the synced (editor) page first, as before; a slug
+ * only a builder/legacy page carries — checkout pages often are — falls back to
+ * the all-types listing, so marking one does not need its id looked up first.
+ */
+async function resolvePageForSettings(api: ApiClient, brandId: number, slugOrId: string): Promise<Page> {
+    try {
+        return await resolvePageBySlug(api, brandId, slugOrId);
+    } catch (err) {
+        if (!(err instanceof CliError) || err.code !== ExitCode.NotFound) throw err;
+        const { id, all } = await resolveAnyPageId(api, brandId, slugOrId);
+        const hit = all.find(p => p.id === id);
+        if (!hit) throw err;
+        return hit;
+    }
 }
 
 export function registerPagesCommand(program: Command): void {
@@ -119,7 +136,7 @@ See "ef tags --help" for colours and for tagging pages that already exist.`)
         });
 
     cmd.command('settings <slug>')
-        .description('Update page settings — assign a domain, make it that domain\'s homepage, change slug/folder/status/SEO. Separate from the editor HTML.')
+        .description('Update page settings — assign a domain, make it that domain\'s homepage, mark it a checkout/upsell page, change slug/folder/status/SEO. Separate from the editor HTML.')
         .addHelpText('after', `
 Examples:
   # Put this page on a domain (name or numeric id both work)
@@ -141,6 +158,17 @@ Examples:
 Listing a page only has an effect once the brand serves the files — see
 "ef seo status" and "ef seo set sitemap true".
 
+  # Mark a page as a checkout page (the brand must allow checkouts), or unmark it
+  $ ef pages settings order-form --checkout-page
+  $ ef pages settings order-form --no-checkout-page
+
+  # Flag a post-purchase upsell page
+  $ ef pages settings upsell-1 --upsell-page
+
+Only a checkout page can be a funnel's checkout: after marking it, run
+"ef funnels settings <funnel> --checkout-page order-form". A brand without
+checkouts enabled is refused with exit code 2 and the server's message.
+
 Run "ef domains list" to see the brand's domains and their status. A domain has
 to be validated before it actually serves traffic — "ef domains records <domain>"
 prints the DNS records, "ef domains validate <domain>" triggers the check.`)
@@ -159,16 +187,21 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--seo-blur-title <text>', 'SEO blur title.')
         .option('--sitemap', 'List this page in the brand\'s sitemap.xml and llms.txt.')
         .option('--no-sitemap', 'Stop listing this page in sitemap.xml and llms.txt.')
+        .option('--checkout-page', 'Mark this page as a checkout page (is_checkout_page). The brand must allow checkouts.')
+        .option('--no-checkout-page', 'Unmark it as a checkout page.')
+        .option('--upsell-page', 'Mark this page as an upsell page (is_upsell_page).')
+        .option('--no-upsell-page', 'Unmark it as an upsell page.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
             title?: string; slug?: string; domain?: string; domainId?: number; folderId?: number;
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
-            seoBlurTitle?: string; sitemap?: boolean; file?: string; json?: boolean;
+            seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
+            file?: string; json?: boolean;
         }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
-            const page = await resolvePageBySlug(api, rt.config.brandId, slug);
+            const page = await resolvePageForSettings(api, rt.config.brandId, slug);
 
             const base = opts.file ? await readJsonPayloadFile(opts.file) : {};
             const flags: Record<string, unknown> = {};
@@ -209,6 +242,8 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             // every page until asked, because most pages in a brand are funnel
             // steps and checkouts that must never be advertised.
             if (opts.sitemap !== undefined) flags.include_in_sitemap = opts.sitemap;
+            if (opts.checkoutPage !== undefined) flags.is_checkout_page = opts.checkoutPage;
+            if (opts.upsellPage !== undefined) flags.is_upsell_page = opts.upsellPage;
 
             const payload: Record<string, unknown> = { ...base, ...flags };
             if (Object.keys(payload).length === 0) {
@@ -223,7 +258,13 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             // so disk, efmeta and state match the new slug.
             const renamed = await renameLocalPageFile(rt, page.id, relPathForPage(page), relPathForPage(updated), updated);
 
-            if (opts.json) { log.json({ ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null, sitemap: opts.sitemap ?? null }); return; }
+            if (opts.json) {
+                log.json({
+                    ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null, sitemap: opts.sitemap ?? null,
+                    checkoutPage: opts.checkoutPage ?? null, upsellPage: opts.upsellPage ?? null,
+                });
+                return;
+            }
             log.success(`Updated settings for page #${page.id} (${updated.slug ?? page.slug}).`);
             if (domainLabel) {
                 log.detail(domainLabel === 'none' ? '  Detached from its domain.' : `  Domain → ${domainLabel}`);
@@ -235,6 +276,14 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
                 log.detail(opts.sitemap
                     ? '  Listed in sitemap.xml and llms.txt — if the brand serves them ("ef seo status").'
                     : '  No longer listed in sitemap.xml or llms.txt.');
+            }
+            if (opts.checkoutPage !== undefined) {
+                log.detail(opts.checkoutPage
+                    ? `  Marked as a checkout page. Use it for a funnel: ef funnels settings <funnel> --checkout-page ${updated.slug ?? page.slug ?? page.id}`
+                    : '  No longer a checkout page. A funnel that pointed at it falls back to the merchant\'s checkout page.');
+            }
+            if (opts.upsellPage !== undefined) {
+                log.detail(opts.upsellPage ? '  Marked as an upsell page.' : '  No longer an upsell page.');
             }
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });

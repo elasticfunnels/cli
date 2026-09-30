@@ -2,6 +2,9 @@ import * as readline from 'readline';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { EfRuntime, loadRuntime } from '../utils/store';
+import { resolveProduct } from './productCommands';
+import { BonusRule } from '../models/product';
+import { EditableBonus, buildRule, normalizeBonuses, parseBonusSpec, toBonusPayload } from '../utils/bonuses';
 
 /**
  * `ef mcp` — expose the bound brand to a desktop AI app over stdio MCP.
@@ -183,11 +186,112 @@ const TOOLS: ToolDefinition[] = [
     },
     {
         name: 'ef_list_products',
-        description: 'List the brand\'s products (id, code, title, price). Product codes are what buy()/upsell() links reference.',
+        description: 'List the brand\'s products (id, code, title, price, classification, bonuses, bonus_rule). Product codes are what buy()/upsell() links reference. `bonuses` are free products attached to a main product; `bonus_rule` says how many the buyer picks (min_picks/max_picks, max null = all) and whether giftable bonuses can be sent to a friend.',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         run: async (_args, { api, rt }) => {
             const products = await api.listProducts(rt.config.brandId);
-            return products.map((p: any) => ({ id: p.id, code: p.code, title: p.title, price: p.price ?? null }));
+            return products.map((p: any) => ({
+                id: p.id,
+                code: p.code,
+                title: p.title,
+                price: p.price ?? null,
+                classification: p.classification ?? null,
+                bonuses: Array.isArray(p.bonuses) && p.bonuses.length
+                    ? normalizeBonuses(p.bonuses).map((b) => ({ code: b.code ?? null, product_id: b.product_id ?? null, quantity: b.quantity, giftable: b.giftable }))
+                    : undefined,
+                bonus_rule: p.bonus_rule ?? undefined,
+            }));
+        },
+    },
+    {
+        name: 'ef_set_product_bonuses',
+        description:
+            'Set a main product\'s bonuses and/or its pick rule. A bonus is a FREE product (classification "bonus") attached to a main product or package; it is NOT an order bump — never fake bonuses as $0 bumps. '
+            + '`bonuses` REPLACES the whole ordered list (order = position; when the buyer picks nothing they get the first N by position, or all). '
+            + '`rule`: mode "pick" = exactly count, "up_to" = 1..count, "all" = every bonus, no picking; gift_shipping_enabled lets the buyer send the GIFTABLE bonuses to a friend (a separate linked gift order; friend email optional, never notified); gift_shipping_mode same_as_main (default) | free | fixed (+ gift_shipping_price), charged on the main order. rule: null deletes the rule. '
+            + 'Without a rule the internal checkout ignores the product\'s bonuses. For a seasonal offer that must not change the normal checkout, use checkout_settings.bonuses in the page backend script instead.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                product: { type: 'string', description: 'Main product id or code.' },
+                bonuses: {
+                    type: 'array',
+                    description: 'Full ordered list of bonuses (replaces the current list). [] removes all. Omit to leave the list unchanged.',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            code: { type: 'string', description: 'Bonus product code (classification bonus).' },
+                            quantity: { type: 'number', description: 'Units of this bonus (default 1).' },
+                            giftable: { type: 'boolean', description: 'May be sent to a friend (default false).' },
+                        },
+                        required: ['code'],
+                        additionalProperties: false,
+                    },
+                },
+                rule: {
+                    type: ['object', 'null'],
+                    description: 'Pick rule. null deletes it. Omit to leave it unchanged. Partial objects merge into the current rule.',
+                    properties: {
+                        mode: { type: 'string', enum: ['pick', 'up_to', 'all'] },
+                        count: { type: 'number', description: 'n for pick / up_to. Must not exceed the number of bonuses.' },
+                        default_mode: { type: 'string', enum: ['first_n', 'all'], description: 'What the order gets when nothing is picked.' },
+                        gift_shipping_enabled: { type: 'boolean' },
+                        gift_shipping_mode: { type: 'string', enum: ['same_as_main', 'free', 'fixed'] },
+                        gift_shipping_price: { type: 'number', description: 'Required when gift_shipping_mode is fixed.' },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['product'],
+            additionalProperties: false,
+        },
+        run: async (args, { api, rt }) => {
+            const product = await resolveProduct(api, rt.config.brandId, String(args.product));
+            let list: EditableBonus[] = normalizeBonuses(product.bonuses);
+            const payload: Record<string, unknown> = {};
+            if (Array.isArray(args.bonuses)) {
+                const seen = new Set<string>();
+                list = args.bonuses.map((b: any) => {
+                    const spec = parseBonusSpec(String(b?.code ?? ''));
+                    const key = spec.code.toLowerCase();
+                    if (seen.has(key)) throw new Error(`"${spec.code}" is listed twice.`);
+                    seen.add(key);
+                    return { code: spec.code, quantity: b.quantity != null ? Number(b.quantity) : 1, giftable: !!b.giftable };
+                });
+                payload.bonuses = toBonusPayload(list);
+            }
+            const warnings: string[] = [];
+            if (args.rule === null) {
+                payload.bonus_rule = null;
+            } else if (args.rule && typeof args.rule === 'object') {
+                const r = args.rule;
+                const built = buildRule(product.bonus_rule as BonusRule | null, {
+                    pick: r.mode === 'pick' ? Number(r.count) : undefined,
+                    upTo: r.mode === 'up_to' ? Number(r.count) : undefined,
+                    all: r.mode === 'all',
+                    default: r.default_mode,
+                    gift: r.gift_shipping_enabled == null ? undefined : (r.gift_shipping_enabled ? 'on' : 'off'),
+                    giftShipping: r.gift_shipping_mode,
+                    giftPrice: r.gift_shipping_price == null ? undefined : Number(r.gift_shipping_price),
+                }, list.length, list.filter((b) => b.giftable).length);
+                payload.bonus_rule = built.rule;
+                warnings.push(...built.warnings);
+            } else if (payload.bonuses) {
+                const rule = product.bonus_rule;
+                if (rule && rule.max_picks != null && rule.max_picks > list.length) {
+                    throw new Error(`The current rule lets the buyer pick ${rule.max_picks} but only ${list.length} bonuses would remain. Send a new rule too.`);
+                }
+            }
+            if (!Object.keys(payload).length) throw new Error('Pass bonuses, rule, or both.');
+            if (product.title) payload.title = product.title;
+            const updated: any = await api.updateProduct(rt.config.brandId, product.id, payload);
+            return {
+                ok: true,
+                product: { id: updated.id ?? product.id, code: updated.code ?? product.code },
+                bonuses: updated.bonuses ?? payload.bonuses ?? product.bonuses ?? [],
+                bonus_rule: updated.bonus_rule !== undefined ? updated.bonus_rule : (payload.bonus_rule !== undefined ? payload.bonus_rule : product.bonus_rule ?? null),
+                warnings: warnings.length ? warnings : undefined,
+            };
         },
     },
     {

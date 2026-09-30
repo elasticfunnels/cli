@@ -16,6 +16,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { Parser, Token, tokenizer } from 'acorn';
+import { UNKNOWN, validateBonusOverride } from '../utils/bonuses';
 
 export type Severity = 'error' | 'warning';
 export interface LintIssue {
@@ -812,13 +813,132 @@ function lintBackendScript(code: string, baseLine: number, issues: LintIssue[]):
   checkScriptImports(code, baseLine, issues);
 
   // Must parse as JS (module).
+  let ast: AstNode | null = null;
   try {
-    Parser.parse(code, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true });
+    ast = Parser.parse(code, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true, locations: true }) as unknown as AstNode;
   } catch (err) {
     const e = err as { message?: string; loc?: { line?: number } };
     const at = (e.loc && e.loc.line != null) ? rel(e.loc.line) : baseLine;
     issues.push({ line: at, severity: 'error', message: `Backend script does not parse: ${(e.message || 'syntax error').split('\n')[0]}` });
   }
+  if (ast) checkCheckoutBonuses(ast, baseLine, issues);
+}
+
+// ── checkout_settings.bonuses ─────────────────────────────────────────
+//
+// The page-level bonus override (per-product bonuses, pick limits, gift orders).
+// A wrong shape here fails quietly at checkout: an unknown code is dropped, a
+// max larger than the options can never be satisfied, and a bonus also listed
+// as a bump gets sold as a $0 bump (the old Herpafend hack). Checked on the AST,
+// but only for values written as literals — anything computed is skipped.
+
+interface AstNode {
+  type: string;
+  loc?: { start: { line: number } };
+  [k: string]: unknown;
+}
+
+const CHECKOUT_SETTINGS_NAME = /^(checkout_settings|checkoutSettings)$/;
+
+function walkAst(node: unknown, visit: (n: AstNode) => void): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const n of node) walkAst(n, visit); return; }
+  const n = node as AstNode;
+  if (typeof n.type !== 'string') return;
+  visit(n);
+  for (const [k, v] of Object.entries(n)) {
+    if (k === 'loc' || k === 'start' || k === 'end') continue;
+    if (v && typeof v === 'object') walkAst(v, visit);
+  }
+}
+
+function propKey(p: AstNode): string | null {
+  if (p.computed) return null;
+  const key = p.key as AstNode;
+  if (key.type === 'Identifier') return String(key.name);
+  if (key.type === 'Literal') return String(key.value);
+  return null;
+}
+
+/** Evaluate a literal-only expression; anything else is UNKNOWN. */
+function literalOf(node: AstNode | null | undefined): unknown {
+  if (!node) return UNKNOWN;
+  switch (node.type) {
+    case 'Literal': return node.value;
+    case 'TemplateLiteral': {
+      const exprs = node.expressions as AstNode[];
+      const quasis = node.quasis as Array<{ value: { cooked: string } }>;
+      return exprs.length === 0 ? quasis.map(q => q.value.cooked).join('') : UNKNOWN;
+    }
+    case 'UnaryExpression':
+      if (node.operator === '-' ) { const v = literalOf(node.argument as AstNode); return typeof v === 'number' ? -v : UNKNOWN; }
+      return UNKNOWN;
+    case 'ArrayExpression':
+      return (node.elements as Array<AstNode | null>).map(e => (e && e.type !== 'SpreadElement' ? literalOf(e) : UNKNOWN));
+    case 'ObjectExpression': {
+      const out: Record<string, unknown> = {};
+      for (const p of node.properties as AstNode[]) {
+        if (p.type !== 'Property') return UNKNOWN; // spread: shape unknown
+        const k = propKey(p);
+        if (k == null) return UNKNOWN;
+        out[k] = literalOf(p.value as AstNode);
+      }
+      return out;
+    }
+    default: return UNKNOWN;
+  }
+}
+
+function findProp(obj: AstNode, name: string): AstNode | null {
+  for (const p of obj.properties as AstNode[]) {
+    if (p.type === 'Property' && propKey(p) === name) return p.value as AstNode;
+  }
+  return null;
+}
+
+function checkCheckoutBonuses(ast: AstNode, baseLine: number, issues: LintIssue[]): void {
+  const report = (node: AstNode, value: AstNode, bumpsNode: AstNode | null) => {
+    const bumps = literalOf(bumpsNode);
+    const bumpCodes = Array.isArray(bumps) ? bumps.filter((b): b is string => typeof b === 'string') : [];
+    const line = baseLine + (value.loc?.start.line ?? node.loc?.start.line ?? 1) - 1;
+    for (const it of validateBonusOverride(literalOf(value), { bumps: bumpCodes })) {
+      issues.push({ line, severity: it.severity, message: it.message });
+    }
+  };
+  const fromSettingsObject = (obj: AstNode) => {
+    if (obj.type !== 'ObjectExpression') return;
+    const bonuses = findProp(obj, 'bonuses');
+    if (bonuses) report(obj, bonuses, findProp(obj, 'bumps'));
+  };
+
+  walkAst(ast, (n) => {
+    // setVariable("checkout_settings", { … bonuses: { … } })
+    if (n.type === 'CallExpression') {
+      const callee = n.callee as AstNode;
+      const args = n.arguments as AstNode[];
+      if (callee.type === 'Identifier' && callee.name === 'setVariable' && args.length >= 2
+        && args[0].type === 'Literal' && args[0].value === 'checkout_settings') {
+        fromSettingsObject(args[1]);
+      }
+    }
+    // var checkout_settings = { … }
+    if (n.type === 'VariableDeclarator') {
+      const id = n.id as AstNode;
+      if (id.type === 'Identifier' && CHECKOUT_SETTINGS_NAME.test(String(id.name)) && n.init) fromSettingsObject(n.init as AstNode);
+    }
+    // checkout_settings.bonuses = { … }
+    if (n.type === 'AssignmentExpression' && n.operator === '=') {
+      const left = n.left as AstNode;
+      if (left.type === 'MemberExpression' && !left.computed) {
+        const obj = left.object as AstNode;
+        const prop = left.property as AstNode;
+        if (obj.type === 'Identifier' && CHECKOUT_SETTINGS_NAME.test(String(obj.name)) && prop.type === 'Identifier' && prop.name === 'bonuses') {
+          report(n, n.right as AstNode, null);
+        }
+      }
+      if (left.type === 'Identifier' && CHECKOUT_SETTINGS_NAME.test(String(left.name))) fromSettingsObject(n.right as AstNode);
+    }
+  });
 }
 
 function checkScriptImports(code: string, baseLine: number, issues: LintIssue[]): void {

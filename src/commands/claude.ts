@@ -409,6 +409,60 @@ never write or copy it).
 - Manage with the CLI: \`ef scripts list | pull <codeOrId> | push <pathOrCode> | create <code> | delete <codeOrId>\`.
 - Docs: https://docs.elasticfunnels.io/backend-scripts/overview
 
+## Bonuses, pick limits and gift orders ("send to a friend")
+
+A **bonus** is a FREE product attached to a main product or package. A **rule**
+per main product says how many the buyer gets: exactly N (\`--pick\`), up to N
+(\`--up-to\`), or all (\`--all\`). Different packages carry different rules
+(2 bottles → pick 1, 3 bottles → pick any 2, 6 bottles → all 3).
+
+- **Nothing picked ⇒ first N by position, or all** (\`default_mode\`). The checkout
+  validates the pick server-side; an invalid pick (not offered, over the max,
+  duplicate, fewer than the minimum) is **rejected with a 422**, never "fixed".
+- **Gift orders.** Bonuses flagged **giftable** can go to a friend's address. That
+  creates a **separate linked order** (\`type: 'gift'\`, own order id,
+  \`parent_conversion_code\` = the main order). The friend's email is
+  **optional** — collect it when the buyer has it, label the field optional, and
+  never require it; the recipient is never notified. Gift shipping is
+  \`same_as_main\` (default), \`free\` or \`fixed\`, charged on the MAIN order.
+- **Activation.** The internal checkout only uses a product's bonuses when it has
+  a rule, or when a page/funnel override exists.
+- **Offer-scoped override** — when the same main product must NOT carry bonuses
+  on the normal checkout (a seasonal offer), set them on the offer instead of the
+  product: \`checkout_settings.bonuses\` in the checkout page's backend script,
+  \`page.config.bonuses\`, or the funnel node \`set_checkout_bonuses\`. Shape:
+  \`{ "<MAIN_CODE>": { options: ["CODE" | { code, giftable, quantity }], min, max, default: "first_n"|"all", gift_shipping: { enabled, mode, price } } }\`;
+  \`options: []\` turns bonuses off on that page. \`ef lint\` checks this shape.
+- **Edge rules:** bonuses are per order LINE, not per unit (qty 2 of a package =
+  one set). Upsells/downsells get the default fill, ship to the buyer, no gift.
+  External networks (Digistore24, BuyGoods, Shopify) and manual orders get the
+  default fill and never a gift. Subscription rebills never add bonuses. An
+  out-of-stock bonus is removed and min/max clamp to what is left (none left ⇒
+  no bonuses, no gift). A template WITHOUT the bonus picker still ships the
+  default fill, but offers no gift. \`same_as_main\` gift shipping is the main
+  shipping after coupons, so a free-shipping coupon frees the gift too. Shipping
+  insurance (\`shi\`) covers the main package only. Gift countries are the ones
+  the bonus products ship to; \`gift_message\` ≤ 300 chars, names ≤ 100.
+- **Never** fake bonuses as \$0 order bumps hidden with CSS, and never store a
+  gift address in the CRM. Bonuses are not bumps: a code must not be in both
+  \`checkout_settings.bumps\` and the bonus options.
+- **Template contract** (checkout templates are custom): scope
+  \`checkout.bonus_rule\` \`{min,max,mode,main_code}\`, \`checkout.bonus_options[]\`
+  \`{code,name,image,retail_price,selected,locked}\`, \`checkout.bonus_selected\`,
+  \`checkout.bonus_value\`, \`checkout.gift_shipping\` \`{allowed,enabled,price,recipient}\`.
+  JS: \`ef.checkout.bonuses.get/select/deselect/toggle/set\`,
+  \`ef.checkout.gift.enable/disable/set\`. Declarative: \`[data-bonus-code="X"]\`
+  (click toggles; gets \`data-selected\`/\`data-locked\`), \`[data-gift-toggle]\`,
+  inputs \`gift_first_name gift_last_name gift_email gift_phone gift_address
+  gift_address2 gift_city gift_state gift_zip gift_country gift_message\`.
+  Events: \`checkout:bonusesChanged\`, \`checkout:bonusRejected\`
+  (\`max_reached\`/\`not_offered\`), \`checkout:giftShippingChanged\`.
+- **Commands:** \`ef products bonuses <product> --add CODE[:qty][:giftable]\`,
+  \`--remove\`, \`--order A,B,C\`, \`--giftable\`; \`ef products bonus-rule <product>
+  --pick <n>|--up-to <n>|--all [--default first_n|all] [--gift on|off]
+  [--gift-shipping same_as_main|free|fixed] [--gift-price X]\` (\`--clear\` deletes).
+  Use the \`ef-bonuses-gifts\` skill for a full setup.
+
 ## Working with the \`ef\` CLI
 
 Run from anywhere inside the project (the CLI walks up to find \`.ef/\`).
@@ -455,6 +509,7 @@ Most-used, by task:
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
+| Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
 | Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |

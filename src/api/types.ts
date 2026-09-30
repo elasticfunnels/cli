@@ -15,7 +15,7 @@ export type { Product, ProductVariant } from '../models/product';
 export type { Automation } from '../models/automation';
 export type { BrandEmail } from '../models/email';
 export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../models/crm';
-export type { Funnel } from '../models/funnel';
+export type { Funnel, FunnelDetails, FunnelDomainAssignment } from '../models/funnel';
 export type { ConversionRow, ClickRow, Paginated, SessionDetails, SessionEvent } from '../models/order';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';
 export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';

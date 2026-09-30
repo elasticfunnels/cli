@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { Funnel } from '../api/types';
+import { Funnel, FunnelDetails } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
@@ -12,6 +12,7 @@ import { canonical, graphHash } from '../sync/graph';
 import { unifiedDiff } from '../sync/merge';
 import { safeJoinBrandRoot } from '../sync/paths';
 import { formatRelative, renderTable } from '../utils/format';
+import { resolveAnyPageId } from './pageGet';
 
 /** Starter graph written when a funnel has no builder graph yet. */
 const EMPTY_GRAPH = { drawflow: { Home: { data: {} } } };
@@ -95,6 +96,49 @@ export async function funnelDiffEntry(rt: EfRuntime, api: ApiClient, abs: string
     };
 }
 
+/**
+ * The body for `PUT funnels/{id}` that changes ONLY `changes`.
+ *
+ * FunnelsController::update is not a partial update: SaveFunnel always requires
+ * `title`; `domains` is required unless the status SENT is `draft`, and when
+ * present it replaces every assignment (delete + re-create, so the ClickBank /
+ * Digistore24 / JVZoo ids must travel with each one); and `rules` is written
+ * as null whenever it is absent. So everything is resent from the current
+ * funnel. `trigger_pages` is left out on purpose — absent, the controller never
+ * touches the builder graph; present, it rewrites the graph's page_group node.
+ * `merchant_id` is validated but not fillable on BrandFunnel, so it is not sent.
+ */
+export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { checkout_page_id?: number | null }): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+        title: current.title ?? '',
+        status: current.status ?? 'active',
+        rules: current.rules ?? null,
+        domains: (current.domains ?? []).map((d) => ({
+            domain_id: d.domain_id,
+            is_default: Boolean(d.is_default),
+            cb_funnel_id: d.cb_funnel_id ?? null,
+            cb_template_code: d.cb_template_code ?? null,
+            ds24_template_id: d.ds24_template_id ?? null,
+            jvz_funnel_id: d.jvz_funnel_id ?? null,
+        })),
+        checkout_page_id: current.checkout_page_id ?? null,
+    };
+    if (changes.checkout_page_id !== undefined) payload.checkout_page_id = changes.checkout_page_id;
+    return payload;
+}
+
+/** "slug (#id)" for a checkout page id, or null when unset; never throws. */
+async function describeCheckoutPage(api: ApiClient, brandId: number, pageId: number | null | undefined): Promise<{ id: number; slug: string | null; title: string | null; isCheckoutPage: boolean | null } | null> {
+    if (!pageId) return null;
+    const page = await api.getPageDetails(brandId, pageId).catch(() => null);
+    return {
+        id: pageId,
+        slug: (page?.slug ?? page?.variant_slug ?? null) as string | null,
+        title: (page?.title ?? null) as string | null,
+        isCheckoutPage: page ? Boolean((page as Record<string, unknown>).is_checkout_page) : null,
+    };
+}
+
 async function ctx(): Promise<{ rt: EfRuntime; api: ApiClient; brandId: number }> {
     const rt = await loadRuntime();
     return { rt, api: new ApiClient(rt.config.apiUrl, rt.apiKey), brandId: rt.config.brandId };
@@ -103,7 +147,7 @@ async function ctx(): Promise<{ rt: EfRuntime; api: ApiClient; brandId: number }
 export function registerFunnelsCommand(program: Command): void {
     const cmd = program
         .command('funnels')
-        .description('Funnels: list, pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
+        .description('Funnels: list, get, settings (checkout page), pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
 
     cmd.command('list')
         .alias('ls')
@@ -117,7 +161,119 @@ export function registerFunnelsCommand(program: Command): void {
                 head: ['#', 'code', 'title', 'status', 'updated'],
                 rows: rows.map((f) => [String(f.id), f.code ?? '', f.title ?? '', f.status ?? '', formatRelative(f.updated_at)]),
             }) + '\n');
-            log.detail(`${rows.length} funnels`);
+            log.detail(`${rows.length} funnels. "ef funnels get <code>" shows one funnel's status, domains and checkout page.`);
+        });
+
+    cmd.command('get <codeOrId>')
+        .alias('show')
+        .description('Show one funnel\'s settings: status, domains, trigger pages and its checkout page.')
+        .option('--json', 'Print as JSON.')
+        .addHelpText('after', `
+Examples:
+  $ ef funnels get main-funnel
+  $ ef funnels get 12 --json`)
+        .action(async (codeOrId: string, opts: { json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+            const details = await api.getFunnel(brandId, funnel.id);
+            const checkout = await describeCheckoutPage(api, brandId, details.checkout_page_id);
+            const domains = (details.domains ?? []).map((d) => ({ domain_id: d.domain_id, is_default: Boolean(d.is_default) }));
+            if (opts.json) {
+                log.json({
+                    ok: true,
+                    funnel: {
+                        id: details.id, code: details.code ?? null, title: details.title ?? null, status: details.status ?? null,
+                        checkout_page_id: details.checkout_page_id ?? null, checkout_page: checkout,
+                        domains, rules: details.rules ?? null, trigger_pages: details.trigger_pages ?? [],
+                    },
+                });
+                return;
+            }
+            const rows: Array<[string, string]> = [
+                ['Funnel', `${c.bold(String(details.title ?? '(untitled)'))} ${c.dim(`#${details.id}`)}`],
+                ['Code', String(details.code ?? '-')],
+                ['Status', String(details.status ?? '-')],
+                ['Domains', domains.length
+                    ? domains.map((d) => `#${d.domain_id}${d.is_default ? ' (default)' : ''}`).join(', ') + (details.domain?.domain ? c.dim(`  ${details.domain.domain}`) : '')
+                    : c.dim('none')],
+                ['Checkout page', checkout
+                    ? `${checkout.slug ? `/${checkout.slug}` : '(unknown page)'} ${c.dim(`#${checkout.id}`)}${checkout.isCheckoutPage === false ? c.yellow('  (no longer marked as a checkout page)') : ''}`
+                    : c.dim('none — the merchant\'s checkout page is used')],
+                ['Trigger pages', details.trigger_pages?.length ? details.trigger_pages.map((id) => `#${id}`).join(', ') : c.dim('none')],
+                ['Entry rules', details.rules?.conditions?.length ? `${details.rules.conditions.length} condition(s), match ${details.rules.match ?? 'all'}` : c.dim('none')],
+            ];
+            const w = Math.max(...rows.map(([k]) => k.length));
+            for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${v}\n`);
+        });
+
+    cmd.command('settings <codeOrId>')
+        .description('Change funnel settings. --checkout-page sets the checkout page this funnel sends buyers to.')
+        .option('--checkout-page <slug|id|none>', 'A page marked as a checkout page (slug or id), or "none" to fall back to the merchant\'s checkout page.')
+        .option('--json', 'Print result as JSON.')
+        .addHelpText('after', `
+Examples:
+  # Send this funnel's buyers to /order-form
+  $ ef funnels settings main-funnel --checkout-page order-form
+
+  # Clear it (the merchant's checkout page is used again)
+  $ ef funnels settings main-funnel --checkout-page none
+
+The page must be marked as a checkout page first:
+  $ ef pages settings order-form --checkout-page
+
+Which checkout page a buyer gets, first match wins:
+  1. a set_checkout_page node on the buyer's path (funnel/page events graph)
+  2. the funnel's checkout page (this setting)
+  3. the merchant's checkout page
+
+Only the checkout page changes: the title, status, domains and entry rules are
+read from the server and sent back as they are.`)
+        .action(async (codeOrId: string, opts: { checkoutPage?: string; json?: boolean }) => {
+            if (opts.checkoutPage === undefined) {
+                throw new CliError(ExitCode.Validation, 'Nothing to change — pass --checkout-page <slug|id|none>.');
+            }
+            const { api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+
+            const ref = opts.checkoutPage.trim();
+            let checkoutPageId: number | null = null;
+            let pageLabel = 'none';
+            if (!/^(none|null|-)$/i.test(ref)) {
+                const { id } = await resolveAnyPageId(api, brandId, ref);
+                const page = await api.getPageDetails(brandId, id);
+                const slug = (page.slug ?? page.variant_slug ?? String(id)) as string;
+                if (!(page as Record<string, unknown>).is_checkout_page) {
+                    throw new CliError(ExitCode.Validation,
+                        `Page "${slug}" (#${id}) is not marked as a checkout page — mark it first: ef pages settings ${slug} --checkout-page`);
+                }
+                checkoutPageId = id;
+                pageLabel = `/${slug} (#${id})`;
+            }
+
+            const current = await api.getFunnel(brandId, funnel.id);
+            const previous = current.checkout_page_id == null ? null : Number(current.checkout_page_id);
+            const payload = buildFunnelUpdatePayload(current, { checkout_page_id: checkoutPageId });
+            await api.updateFunnel(brandId, funnel.id, payload);
+
+            // Read it back: the checkout page must have moved, and nothing else may have.
+            const after = await api.getFunnel(brandId, funnel.id);
+            const domainKey = (f: FunnelDetails) => JSON.stringify((f.domains ?? []).map((d) => [d.domain_id, Boolean(d.is_default)]).sort());
+            if ((after.checkout_page_id == null ? null : Number(after.checkout_page_id)) !== checkoutPageId) {
+                throw new CliError(ExitCode.Server, `The server accepted the update but funnel #${funnel.id} still reports checkout_page_id ${after.checkout_page_id ?? 'null'}.`);
+            }
+            if (domainKey(after) !== domainKey(current) || (after.status ?? null) !== (current.status ?? null)) {
+                log.warn(`Funnel #${funnel.id}'s domains or status differ after the update — check with "ef funnels get ${funnel.code ?? funnel.id}".`);
+            }
+
+            if (opts.json) {
+                log.json({ ok: true, funnel: { id: funnel.id, code: funnel.code ?? null }, checkout_page_id: checkoutPageId, previous_checkout_page_id: previous });
+                return;
+            }
+            log.success(checkoutPageId == null
+                ? `Funnel "${funnel.code ?? funnel.id}" (#${funnel.id}) has no checkout page of its own — the merchant's checkout page is used.`
+                : `Funnel "${funnel.code ?? funnel.id}" (#${funnel.id}) now sends buyers to ${pageLabel}.`);
+            if (previous != null && previous !== checkoutPageId) log.detail(`  Was page #${previous}.`);
+            log.detail('  A set_checkout_page node on the buyer\'s path still wins over this.');
         });
 
     cmd.command('pull [codeOrId]')

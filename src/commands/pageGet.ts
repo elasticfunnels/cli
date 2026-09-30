@@ -36,6 +36,20 @@ function stripPreview(url: string | null | undefined): string | null {
     }
 }
 
+/**
+ * Resolve a page id from an id or slug across EVERY page type (editor, builder,
+ * legacy) — checkout pages are often builder pages that the editor-only
+ * listing leaves out. Several versions on one slug resolve to the active one.
+ */
+export async function resolveAnyPageId(api: ApiClient, brandId: number, idOrSlug: string): Promise<{ id: number; all: Listed[] }> {
+    const all = (await api.listPages(brandId, 100000, { allTypes: true })) as Listed[];
+    if (/^\d+$/.test(idOrSlug)) return { id: Number(idOrSlug), all };
+    const slug = idOrSlug.replace(/^\/+/, '');
+    const matches = all.filter(p => p.slug === slug || p.variant_slug === slug);
+    if (matches.length === 0) throw new CliError(ExitCode.NotFound, `No page with slug "${slug}" (any type). "ef list pages --all" lists them.`);
+    return { id: (matches.find(m => m.is_active_version) ?? matches[0]).id, all };
+}
+
 export function registerPageGetCommand(pages: Command): void {
     pages.command('get <idOrSlug>')
         .description('Show one page\'s details (any type — editor, builder or legacy): slug, status, domain, public URL, checkout/upsell flags.')
@@ -52,17 +66,7 @@ lists them).`)
         .action(async (idOrSlug: string, opts: { json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
-            const all = (await api.listPages(rt.config.brandId, 100000, { allTypes: true })) as Listed[];
-
-            let id: number;
-            if (/^\d+$/.test(idOrSlug)) {
-                id = Number(idOrSlug);
-            } else {
-                const slug = idOrSlug.replace(/^\/+/, '');
-                const matches = all.filter(p => p.slug === slug || p.variant_slug === slug);
-                if (matches.length === 0) throw new CliError(ExitCode.NotFound, `No page with slug "${slug}" (any type). "ef list pages --all" lists them.`);
-                id = (matches.find(m => m.is_active_version) ?? matches[0]).id;
-            }
+            const { id, all } = await resolveAnyPageId(api, rt.config.brandId, idOrSlug);
 
             const page = await api.getPageDetails(rt.config.brandId, id);
             const listed = all.find(p => p.id === id);

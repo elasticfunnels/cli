@@ -72,3 +72,43 @@ test('a plan 403 surfaces the server plan message', () => {
     assert.notEqual(err.code, ExitCode.Auth);
     assert.match(err.message, /Upgrade required to create collections: Your current plan/);
 });
+
+/**
+ * `ef collections entries <code>` printed "No entries" while `ef crm entries
+ * list` showed the submission. The server's `/collections/{x}/entries` and
+ * `/fields` look up by numeric id only; MySQL casts "3s9shy" to 3, so a code
+ * read some other collection (0 rows) or 404'd. The client must resolve the
+ * code through `GET /collections/{code}` (which accepts both) first.
+ */
+test('collection entries and fields are fetched by numeric id when given a code', async () => {
+    const http = await import('http');
+    const { ApiClient } = await import('../src/api/client');
+    const seen: string[] = [];
+    const server = http.createServer((req, res) => {
+        seen.push(req.url ?? '');
+        const send = (status: number, data: unknown) => {
+            res.writeHead(status, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(data));
+        };
+        const url = (req.url ?? '').split('?')[0];
+        if (url === '/api/brands/7/collections/3s9shy') return send(200, { id: 614, name: 'Leads', code: '3s9shy' });
+        if (url === '/api/brands/7/collections/614/entries') return send(200, { data: [{ id: 'A8yd', email: 'x@y.z' }], total: 1 });
+        if (url === '/api/brands/7/collections/614/fields') return send(200, { fields: [{ name: 'Email', type: 'email' }] });
+        return send(404, { message: 'Not found' });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+        const { port } = server.address() as import('net').AddressInfo;
+        const api = new ApiClient(`http://127.0.0.1:${port}`, 'test-key');
+        const entries = await api.listCollectionEntries(7, '3s9shy');
+        assert.equal(entries.length, 1);
+        const fields = await api.getCollectionFields(7, '3s9shy');
+        assert.equal(fields.length, 1);
+        // A numeric ref skips the lookup.
+        seen.length = 0;
+        await api.listCollectionEntries(7, '614');
+        assert.deepEqual(seen.map((u) => u.split('?')[0]), ['/api/brands/7/collections/614/entries']);
+    } finally {
+        await new Promise<void>((r) => server.close(() => r()));
+    }
+});

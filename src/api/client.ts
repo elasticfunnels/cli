@@ -1519,8 +1519,23 @@ export class ApiClient {
         return ('collection' in body && body.collection ? body.collection : body) as BrandCollection;
     }
 
+    /**
+     * The numeric id for a collection id or code. Only `GET collections/{x}`
+     * accepts a code; `/entries` (route-model binding) and `/fields`
+     * (findOrFail) look up by id alone, and MySQL casts a code such as
+     * "3s9shy" to 3, so passing the code reads ANOTHER collection (0 rows)
+     * or 404s. Every sub-resource call goes through this.
+     */
+    async resolveCollectionId(brandId: number, ref: string | number): Promise<number> {
+        if (typeof ref === 'number' || /^\d+$/.test(ref)) return Number(ref);
+        const col = await this.getCollection(brandId, ref);
+        if (col.id == null) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand. Run "ef collections list".`);
+        return Number(col.id);
+    }
+
     async getCollectionFields(brandId: number, ref: string | number): Promise<BrandCollectionField[]> {
-        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${encodeURIComponent(String(ref))}/fields`);
+        const id = await this.resolveCollectionId(brandId, ref);
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${id}/fields`);
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand.`);
         if (res.status >= 400) throw httpError('Get collection fields', res);
         const body = res.data as { fields?: BrandCollectionField[] } | BrandCollectionField[];
@@ -1528,7 +1543,8 @@ export class ApiClient {
     }
 
     async listCollectionEntries(brandId: number, ref: string | number, params?: Record<string, unknown>): Promise<unknown[]> {
-        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${encodeURIComponent(String(ref))}/entries`, { params });
+        const id = await this.resolveCollectionId(brandId, ref);
+        const res = await this.raw('GET', `/api/brands/${brandId}/collections/${id}/entries`, { params });
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand.`);
         if (res.status >= 400) throw httpError('List collection entries', res);
         return crmList<unknown>(res.data);

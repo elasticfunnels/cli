@@ -476,16 +476,39 @@ rules are read from the server and sent back as they are.`)
         .description('Create a funnel (the server assigns its code), then write its empty builder graph to disk. Requires at least one --domain.')
         .option('--status <status>', 'active | inactive | draft.')
         .option('--domain <id>', 'Domain id to attach (required by the server; see "ef domains list").', (v) => parseInt(v, 10))
+        .option('--default', 'Make it the domain\'s default funnel (the server then clears the current default).')
+        .option('--not-default', 'Never make it the domain default (pair with "ef funnels settings --entry-pages").')
         .option('--json', 'Print result as JSON.')
-        .action(async (title: string, opts: { status?: string; domain?: number; json?: boolean }) => {
+        .addHelpText('after', `
+Without --default / --not-default, the funnel becomes the domain default only
+when the domain has no default funnel yet. A default funnel serves every page on
+the domain that no other funnel's entry rules claim; making a new one default
+takes that over from the current default.`)
+        .action(async (title: string, opts: { status?: string; domain?: number; default?: boolean; notDefault?: boolean; json?: boolean }) => {
+            if (opts.default && opts.notDefault) throw new CliError(ExitCode.Validation, 'Pass --default or --not-default, not both.');
+            if ((opts.default || opts.notDefault) && opts.domain == null) throw new CliError(ExitCode.Validation, '--default / --not-default need --domain.');
             const { rt, api, brandId } = await ctx();
             const payload: Record<string, unknown> = { title };
             if (opts.status) payload.status = opts.status;
-            if (opts.domain != null) payload.domains = [{ domain_id: opts.domain, is_default: true }];
+            let isDefault = false;
+            let currentDefaults: number[] = [];
+            if (opts.domain != null) {
+                if (opts.default) isDefault = true;
+                else if (!opts.notDefault) {
+                    currentDefaults = await api.defaultFunnelsOnDomain(brandId, opts.domain);
+                    isDefault = currentDefaults.length === 0;
+                }
+                payload.domains = [{ domain_id: opts.domain, is_default: isDefault }];
+            }
             const created = await api.createFunnel(brandId, payload);
             await pullFunnelBuilder(rt, api, created, { skeleton: true }).catch(() => null);
-            if (opts.json) { log.json({ ok: true, funnel: created }); return; }
+            if (opts.json) { log.json({ ok: true, funnel: created, domain_default: opts.domain != null ? isDefault : null }); return; }
             log.success(`Created funnel #${created.id} (${created.code ?? title}).`);
+            if (opts.domain != null) {
+                log.detail(isDefault
+                    ? `  Default funnel on domain #${opts.domain}.`
+                    : `  Not the default on domain #${opts.domain}${currentDefaults.length ? ` (funnel #${currentDefaults.join(', #')} is)` : ''}: add entry rules with "ef funnels settings ${created.code ?? created.id} --entry-pages ...".`);
+            }
         });
 
     cmd.command('delete <codeOrId>')

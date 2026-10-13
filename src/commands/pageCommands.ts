@@ -1,3 +1,4 @@
+import { resolveFolderId } from './folders';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Command } from 'commander';
@@ -104,6 +105,7 @@ export function registerPagesCommand(program: Command): void {
     cmd.command('create <slug>')
         .description('Create a new page on the server (and pull it to disk).')
         .option('--title <title>', 'Title shown in the dashboard. Defaults to the slug humanized.')
+        .option('--folder <folder>', 'Folder to drop the page into: id, name or path ("Kits/My kit"). See "ef folders".')
         .option('--folder-id <id>', 'Numeric folder id to drop the page into.', (v) => parseInt(v, 10))
         .option('--tag <name>', 'Tag the new page (repeatable). Creates the tag if it does not exist.', collectTag)
         .option('--no-pull', 'Skip pulling the new page to disk after creating.')
@@ -115,11 +117,15 @@ later ("ef list pages --tag <name>"):
   $ ef pages create black-friday/landing --tag black-friday --tag q4
 
 See "ef tags --help" for colours and for tagging pages that already exist.`)
-        .action(async (slug: string, opts: { title?: string; folderId?: number; tag?: string[]; pull?: boolean; json?: boolean }) => {
+        .action(async (slug: string, opts: { title?: string; folder?: string; folderId?: number; tag?: string[]; pull?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const title = opts.title ?? humanize(slug);
-            const created = await api.createPage(rt.config.brandId, title, slug, opts.folderId);
+            let folderId = opts.folderId;
+            if (opts.folder !== undefined) {
+                folderId = (await resolveFolderId(api, rt.config.brandId, opts.folder)).id ?? undefined;
+            }
+            const created = await api.createPage(rt.config.brandId, title, slug, folderId);
             if (opts.pull !== false) {
                 const ctx = await buildSyncContext(rt);
                 await pullPage(ctx, created.id);
@@ -178,6 +184,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--domain-id <id>', 'Same as --domain, but numeric id only (kept for scripts).', (v) => parseInt(v, 10))
         .option('--homepage', 'Serve this page at the domain root — i.e. make it the domain\'s homepage.')
         .option('--no-homepage', 'Stop serving this page at the domain root.')
+        .option('--folder <folder>', 'File the page into a folder: id, name or path ("Kits/My kit"); "none" unfiles it. Changes only the folder.')
         .option('--folder-id <id>', 'Numeric folder id.', (v) => parseInt(v, 10))
         .option('--status <status>', 'published | draft | offline | imported.')
         .option('--is-index', 'Deprecated spelling of --homepage.')
@@ -194,7 +201,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
-            title?: string; slug?: string; domain?: string; domainId?: number; folderId?: number;
+            title?: string; slug?: string; domain?: string; domainId?: number; folder?: string; folderId?: number;
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
             seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
             file?: string; json?: boolean;
@@ -208,6 +215,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.title !== undefined) flags.title = opts.title;
             if (opts.slug !== undefined) flags.slug = opts.slug;
             if (opts.folderId !== undefined) flags.folder_id = opts.folderId;
+            if (opts.folder !== undefined) flags.folder_id = (await resolveFolderId(api, rt.config.brandId, opts.folder)).id;
             if (opts.status !== undefined) flags.status = opts.status;
 
             // Domain: accept a name so nobody has to look an id up first — that

@@ -86,12 +86,40 @@ function addCommonFlags(cmd: Command): Command {
         .option('--seo-title <text>', 'SEO title.')
         .option('--seo-description <text>', 'SEO description.')
         .option('--seo-slug <slug>', 'SEO slug.')
+        .option('--subscription <unit[:N]|off>', 'Recurring product: bill every N units (day | week | month | year), e.g. "month" or "week:2"; "off" makes it one-time.')
+        .option('--trial-days <n>', 'Free trial days before the first recurring charge (subscriptions only).', parseNum)
         .option('--image <path>', 'Local image file to upload as the product image (png, jpg, gif, webp, svg). Uploaded to the CDN by the server.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields. May carry `bonuses` and `bonus_rule` (see `ef products bonuses --help`).');
 }
 
-function payloadFromOpts(opts: Record<string, unknown>): Record<string, unknown> {
+const SUBSCRIPTION_UNITS = ['day', 'week', 'month', 'year'] as const;
+
+/**
+ * `--subscription month`, `month:3`, `3:month` or `off` → the SaveProduct
+ * subscription fields (Modules/Products SaveProduct: is_subscription,
+ * subscription_frequency >= 1, subscription_frequency_unit day|week|month|year).
+ */
+export function parseSubscriptionSpec(spec: string): Record<string, unknown> {
+    const v = spec.trim().toLowerCase();
+    if (/^(off|none|no|false)$/.test(v)) return { is_subscription: false };
+    const parts = v.split(':').map((x) => x.trim()).filter(Boolean);
+    const unit = parts.find((x) => (SUBSCRIPTION_UNITS as readonly string[]).includes(x.replace(/s$/, '')))?.replace(/s$/, '');
+    const nums = parts.filter((x) => /^\d+$/.test(x));
+    if (!unit || parts.length > 2 || parts.length - nums.length !== 1 || (nums.length && Number(nums[0]) < 1)) {
+        throw new CliError(ExitCode.Validation, `--subscription "${spec}": use <unit>[:N] with unit ${SUBSCRIPTION_UNITS.join(' | ')} and N >= 1 (e.g. "month", "week:2"), or "off".`);
+    }
+    return { is_subscription: true, subscription_frequency: nums.length ? Number(nums[0]) : 1, subscription_frequency_unit: unit };
+}
+
+export function payloadFromOpts(opts: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
+    if (opts.subscription !== undefined) Object.assign(out, parseSubscriptionSpec(String(opts.subscription)));
+    if (opts.trialDays !== undefined) {
+        const n = Number(opts.trialDays);
+        if (!Number.isInteger(n) || n < 0) throw new CliError(ExitCode.Validation, '--trial-days takes a whole number >= 0.');
+        if (out.is_subscription === false) throw new CliError(ExitCode.Validation, '--trial-days needs a subscription; it cannot go with --subscription off.');
+        out.subscription_trial_days = n;
+    }
     for (const [flag, key] of Object.entries(STRING_FIELDS)) {
         if (opts[flag] !== undefined) out[key] = opts[flag];
     }
@@ -139,7 +167,8 @@ export function registerProductsCommand(program: Command): void {
         });
 
     cmd.command('get <idOrCode>')
-        .description('Print one product as JSON (includes `bonuses` and `bonus_rule`).')
+        .description('Print one product as JSON (includes `bonuses`, `bonus_rule` and the subscription fields).')
+        .option('--json', 'Accepted for symmetry; the output is always JSON.')
         .action(async (ref: string) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);

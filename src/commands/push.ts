@@ -4,6 +4,8 @@ import { Command } from 'commander';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
+import { reportAgentPush, runAgentPush } from './claude';
+import { AgentPushResult, planAgentPush } from '../sync/agentFiles';
 import {
     buildSyncContext,
     classifyAbsPath,
@@ -128,8 +130,18 @@ Examples:
                         log.info(`  ${tag} ${cls.kind} ${cls.rel}`);
                     }
                 }
+                const agentPlan = opts.all && rt.config.agentFiles !== false ? await planAgentPush(rt.projectRoot) : null;
+                const agentPlanned = (agentPlan?.writes ?? []).map((w) => ({
+                    rel: w.path,
+                    action: w.content === null ? 'delete' : w.base_hash ? 'update' : 'create',
+                }));
+                if (!opts.json) {
+                    for (const a of agentPlanned) log.info(`  ${c.green(`would ${a.action}`.padEnd(12))} agent ${a.rel}`);
+                    if (agentPlan?.blocked.length) log.warn(`  would skip agent ${agentPlan.blocked.join(', ')}: conflict markers`);
+                }
                 if (opts.json) {
                     const payload: Record<string, unknown> = { ok: true, dryRun: true, planned };
+                    if (agentPlan) payload.agentFiles = agentPlanned;
                     if (opts.verbose) {
                         payload.debug = {
                             apiUrl: rt.config.apiUrl,
@@ -214,12 +226,23 @@ Examples:
             }
             await ctx.state.save();
 
+            // CLAUDE.md and .claude/rules ride along with a full push.
+            let agent: AgentPushResult | null = null;
+            if (opts.all) {
+                try {
+                    agent = await runAgentPush(rt);
+                } catch (err) {
+                    if (!opts.json) log.warn(`Agent files (CLAUDE.md, .claude/rules) not saved: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
+
             if (opts.json) {
                 const pushed = opts.verbose
                     ? results
                     : results.map(({ apiResponse: _omit, ...r }) => r);
                 if (conflicts > 0) process.exitCode = ExitCode.Conflict;
                 const base: Record<string, unknown> = { ok: conflicts === 0, draft, conflicts, pushed };
+                if (agent && !agent.unsupported) base.agentFiles = agent;
                 if (opts.verbose) {
                     base.debug = {
                         apiUrl: rt.config.apiUrl,
@@ -233,6 +256,7 @@ Examples:
                 return;
             }
             log.success(`Pushed ${results.length} file${results.length === 1 ? '' : 's'}.`);
+            if (agent && !agent.unsupported) reportAgentPush(agent);
             if (conflicts > 0) {
                 process.exitCode = ExitCode.Conflict;
                 log.warn(`${conflicts} file${conflicts === 1 ? '' : 's'} had a conflict and ${conflicts === 1 ? 'was' : 'were'} NOT pushed (see above). Exit ${ExitCode.Conflict}.`);

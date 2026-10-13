@@ -491,7 +491,7 @@ per main product says how many the buyer gets: exactly N (\`--pick\`), up to N
   shipping after coupons, so a free-shipping coupon frees the gift too. Shipping
   insurance (\`shi\`) covers the main package only. Gift countries are the ones
   the bonus products ship to; \`gift_message\` ≤ 300 chars, names ≤ 100.
-- **Never** fake bonuses as \$0 order bumps hidden with CSS, and never store a
+- **Never** fake bonuses as $0 order bumps hidden with CSS, and never store a
   gift address in the CRM. Bonuses are not bumps: a code must not be in both
   \`checkout_settings.bumps\` and the bonus options.
 - **Template contract** (checkout templates are custom): scope

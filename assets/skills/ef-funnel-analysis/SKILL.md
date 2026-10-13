@@ -154,6 +154,30 @@ rather than dropping them.
 Present the table as a funnel, in buyer order: front end → upsell 1 →
 downsell → upsell 2 → … Group each step's variant pages together. Then run:
 
+0. **The "not in the page group" leak — check it for every page that sells.**
+   After checkout, the funnel picks the next step by matching the page the buyer
+   bought on against the funnel graph's front-end `page_group`. **A page that
+   takes orders but isn't in the group of the funnel its visitors run under
+   sends buyers straight to the members area, with no upsells.** Nothing errors.
+   Seen on a paid VSL page and on email sale pages.
+
+   1. List the pages with orders: `ef stats by page --funnel <id> --metrics sales`,
+      or `ef orders buyers --funnel <id> --by page`.
+   2. For each one, check it's in that funnel's `page_group`
+      (`ef funnels pull <code>`, then read the `page_group` node values). Mind
+      which funnel the visit actually runs under: the link's `fid`, else the
+      domain's default funnel. A page can sit in funnel B's group while its
+      traffic arrives on a domain whose default is funnel A.
+   3. Confirm on a real buyer: `ef orders list --page <id>` → `ef sessions show
+      <session_id>`. Path `… → checkout → /members-area` with no upsell page =
+      leak. Pages reached through a page-event LOAD (e.g. an advertorial URL serving
+      the VSL page) inherit the served page's membership, so trace those too.
+   4. `ef orders buyers --by page` shows it in aggregate: a front end whose
+      buyers took **0** upsells while other pages' buyers took some.
+
+   Fix (the user's call): add the page to the right funnel's page group, or give
+   it its own funnel with price-matched upsells. Sale or email pages may skip
+   upsells on purpose, so ask before calling it a bug.
 1. **The routing-leak check — confirm with orders, never with sessions alone.**
    Upsell-page sessions are badly undercounted: post-checkout pages often
    record a handful of sessions while taking many orders (seen: 3 sessions →

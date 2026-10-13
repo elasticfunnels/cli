@@ -108,7 +108,7 @@ export async function funnelDiffEntry(rt: EfRuntime, api: ApiClient, abs: string
  * touches the builder graph; present, it rewrites the graph's page_group node.
  * `merchant_id` is validated but not fillable on BrandFunnel, so it is not sent.
  */
-export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { checkout_page_id?: number | null }): Record<string, unknown> {
+export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules'] }): Record<string, unknown> {
     const payload: Record<string, unknown> = {
         title: current.title ?? '',
         status: current.status ?? 'active',
@@ -124,7 +124,33 @@ export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { chec
         checkout_page_id: current.checkout_page_id ?? null,
     };
     if (changes.checkout_page_id !== undefined) payload.checkout_page_id = changes.checkout_page_id;
+    if (changes.rules !== undefined) payload.rules = changes.rules;
     return payload;
+}
+
+/** The page entry rule as the editor and website FunnelResolver read it. */
+const isPageEntryCondition = (cond: unknown): boolean =>
+    !!cond && typeof cond === 'object' && (cond as Record<string, unknown>).field === 'page' && (cond as Record<string, unknown>).operator === 'in';
+
+/**
+ * Funnel rules with the page entry condition (`{field:'page', operator:'in',
+ * value:'1,2,3'}`) replaced by `pageIds`, or removed when `pageIds` is empty.
+ * Every other condition and the match mode are kept; rules with no conditions
+ * left become null, as FunnelsController::normalizeRules stores them.
+ */
+export function withEntryPages(rules: FunnelDetails['rules'], pageIds: number[]): FunnelDetails['rules'] {
+    const kept = (rules?.conditions ?? []).filter((cond) => !isPageEntryCondition(cond));
+    const ids = [...new Set(pageIds)];
+    const conditions = ids.length ? [...kept, { field: 'page', operator: 'in', value: ids.join(',') }] : kept;
+    return conditions.length ? { match: rules?.match ?? 'all', conditions } : null;
+}
+
+/** The page ids of a funnel's page entry rule, or [] when it has none. */
+export function entryPageIds(rules: FunnelDetails['rules']): number[] {
+    const cond = (rules?.conditions ?? []).find(isPageEntryCondition) as { value?: unknown } | undefined;
+    if (!cond) return [];
+    const raw = Array.isArray(cond.value) ? cond.value : String(cond.value ?? '').split(',');
+    return raw.map((v) => Number(String(v).trim())).filter((n) => Number.isInteger(n) && n > 0);
 }
 
 /** "slug (#id)" for a checkout page id, or null when unset; never throws. */
@@ -207,8 +233,9 @@ Examples:
         });
 
     cmd.command('settings <codeOrId>')
-        .description('Change funnel settings. --checkout-page sets the checkout page this funnel sends buyers to.')
+        .description('Change funnel settings. --checkout-page sets the checkout page this funnel sends buyers to; --entry-pages sets the pages whose visitors enter this funnel.')
         .option('--checkout-page <slug|id|none>', 'A page marked as a checkout page (slug or id), or "none" to fall back to the merchant\'s checkout page.')
+        .option('--entry-pages <list|none>', 'Comma-separated page slugs or ids for the page entry rule, or "none" to remove it. Other entry rules are kept.')
         .option('--json', 'Print result as JSON.')
         .addHelpText('after', `
 Examples:
@@ -218,6 +245,10 @@ Examples:
   # Clear it (the merchant's checkout page is used again)
   $ ef funnels settings main-funnel --checkout-page none
 
+  # Visitors of these pages enter this funnel (page entry rule)
+  $ ef funnels settings main-funnel --entry-pages kits/vsl/index,kits/vsl/order
+  $ ef funnels settings main-funnel --entry-pages none
+
 The page must be marked as a checkout page first:
   $ ef pages settings order-form --checkout-page
 
@@ -226,14 +257,49 @@ Which checkout page a buyer gets, first match wins:
   2. the funnel's checkout page (this setting)
   3. the merchant's checkout page
 
-Only the checkout page changes: the title, status, domains and entry rules are
-read from the server and sent back as they are.`)
-        .action(async (codeOrId: string, opts: { checkoutPage?: string; json?: boolean }) => {
-            if (opts.checkoutPage === undefined) {
-                throw new CliError(ExitCode.Validation, 'Nothing to change — pass --checkout-page <slug|id|none>.');
+A funnel that is not its domain's default is picked only by its entry rules
+(trigger pages alone do not select it), so a non-default funnel needs a page
+entry rule listing the pages it serves.
+
+Only what you pass changes: the title, status, domains and the other entry
+rules are read from the server and sent back as they are.`)
+        .action(async (codeOrId: string, opts: { checkoutPage?: string; entryPages?: string; json?: boolean }) => {
+            if (opts.checkoutPage === undefined && opts.entryPages === undefined) {
+                throw new CliError(ExitCode.Validation, 'Nothing to change — pass --checkout-page <slug|id|none> and/or --entry-pages <list|none>.');
             }
             const { api, brandId } = await ctx();
             const funnel = await resolveFunnel(api, brandId, codeOrId);
+
+            let entryIds: number[] | undefined;
+            if (opts.entryPages !== undefined) {
+                const refs = /^(none|null|-)$/i.test(opts.entryPages.trim())
+                    ? []
+                    : opts.entryPages.split(',').map((r) => r.trim()).filter(Boolean);
+                if (!refs.length && !/^(none|null|-)$/i.test(opts.entryPages.trim())) {
+                    throw new CliError(ExitCode.Validation, '--entry-pages needs page slugs/ids separated by commas, or "none".');
+                }
+                entryIds = [];
+                for (const r of refs) entryIds.push((await resolveAnyPageId(api, brandId, r)).id);
+            }
+
+            const current = await api.getFunnel(brandId, funnel.id);
+            const previous = current.checkout_page_id == null ? null : Number(current.checkout_page_id);
+            const changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules'] } = {};
+            if (entryIds !== undefined) changes.rules = withEntryPages(current.rules ?? null, entryIds);
+
+            if (opts.checkoutPage === undefined) {
+                await api.updateFunnel(brandId, funnel.id, buildFunnelUpdatePayload(current, changes));
+                const after = await api.getFunnel(brandId, funnel.id);
+                const got = entryPageIds(after.rules ?? null);
+                if (JSON.stringify([...got].sort((a, b) => a - b)) !== JSON.stringify([...new Set(entryIds)].sort((a, b) => a - b))) {
+                    throw new CliError(ExitCode.Server, `The server accepted the update but funnel #${funnel.id} reports entry pages [${got.join(', ')}].`);
+                }
+                if (opts.json) { log.json({ ok: true, funnel: { id: funnel.id, code: funnel.code ?? null }, entry_pages: got, previous_entry_pages: entryPageIds(current.rules ?? null), rules: after.rules ?? null }); return; }
+                log.success(got.length
+                    ? `Funnel "${funnel.code ?? funnel.id}" (#${funnel.id}) now has a page entry rule for ${got.length} page(s): ${got.map((id) => `#${id}`).join(', ')}.`
+                    : `Funnel "${funnel.code ?? funnel.id}" (#${funnel.id}) has no page entry rule.`);
+                return;
+            }
 
             const ref = opts.checkoutPage.trim();
             let checkoutPageId: number | null = null;
@@ -250,9 +316,7 @@ read from the server and sent back as they are.`)
                 pageLabel = `/${slug} (#${id})`;
             }
 
-            const current = await api.getFunnel(brandId, funnel.id);
-            const previous = current.checkout_page_id == null ? null : Number(current.checkout_page_id);
-            const payload = buildFunnelUpdatePayload(current, { checkout_page_id: checkoutPageId });
+            const payload = buildFunnelUpdatePayload(current, { ...changes, checkout_page_id: checkoutPageId });
             await api.updateFunnel(brandId, funnel.id, payload);
 
             // Read it back: the checkout page must have moved, and nothing else may have.

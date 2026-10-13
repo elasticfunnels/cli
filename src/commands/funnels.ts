@@ -108,7 +108,7 @@ export async function funnelDiffEntry(rt: EfRuntime, api: ApiClient, abs: string
  * touches the builder graph; present, it rewrites the graph's page_group node.
  * `merchant_id` is validated but not fillable on BrandFunnel, so it is not sent.
  */
-export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules'] }): Record<string, unknown> {
+export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules']; addDomains?: number[]; removeDomains?: number[] }): Record<string, unknown> {
     const payload: Record<string, unknown> = {
         title: current.title ?? '',
         status: current.status ?? 'active',
@@ -125,6 +125,19 @@ export function buildFunnelUpdatePayload(current: FunnelDetails, changes: { chec
     };
     if (changes.checkout_page_id !== undefined) payload.checkout_page_id = changes.checkout_page_id;
     if (changes.rules !== undefined) payload.rules = changes.rules;
+    if (changes.removeDomains?.length || changes.addDomains?.length) {
+        // PUT replaces the assignments wholesale: keep every current one (with its
+        // network ids), drop the removed, append new ones as non-default.
+        const drop = new Set(changes.removeDomains ?? []);
+        const kept = (payload.domains as Array<{ domain_id: number }>).filter((d) => !drop.has(Number(d.domain_id)));
+        const have = new Set(kept.map((d) => Number(d.domain_id)));
+        for (const id of changes.addDomains ?? []) {
+            if (have.has(id)) continue;
+            have.add(id);
+            kept.push({ domain_id: id, is_default: false, cb_funnel_id: null, cb_template_code: null, ds24_template_id: null, jvz_funnel_id: null } as never);
+        }
+        payload.domains = kept;
+    }
     return payload;
 }
 
@@ -236,6 +249,8 @@ Examples:
         .description('Change funnel settings. --checkout-page sets the checkout page this funnel sends buyers to; --entry-pages sets the pages whose visitors enter this funnel.')
         .option('--checkout-page <slug|id|none>', 'A page marked as a checkout page (slug or id), or "none" to fall back to the merchant\'s checkout page.')
         .option('--entry-pages <list|none>', 'Comma-separated page slugs or ids for the page entry rule, or "none" to remove it. Other entry rules are kept.')
+        .option('--add-domain <ids>', 'Comma-separated domain ids to attach this funnel to (not as the domain default). Existing assignments are kept.')
+        .option('--remove-domain <ids>', 'Comma-separated domain ids to detach this funnel from.')
         .option('--json', 'Print result as JSON.')
         .addHelpText('after', `
 Examples:
@@ -248,6 +263,9 @@ Examples:
   # Visitors of these pages enter this funnel (page entry rule)
   $ ef funnels settings main-funnel --entry-pages kits/vsl/index,kits/vsl/order
   $ ef funnels settings main-funnel --entry-pages none
+
+  # Also serve this funnel on domain 31 (non-default; pair it with --entry-pages)
+  $ ef funnels settings main-funnel --add-domain 31
 
 The page must be marked as a checkout page first:
   $ ef pages settings order-form --checkout-page
@@ -263,10 +281,18 @@ entry rule listing the pages it serves.
 
 Only what you pass changes: the title, status, domains and the other entry
 rules are read from the server and sent back as they are.`)
-        .action(async (codeOrId: string, opts: { checkoutPage?: string; entryPages?: string; json?: boolean }) => {
-            if (opts.checkoutPage === undefined && opts.entryPages === undefined) {
-                throw new CliError(ExitCode.Validation, 'Nothing to change — pass --checkout-page <slug|id|none> and/or --entry-pages <list|none>.');
+        .action(async (codeOrId: string, opts: { checkoutPage?: string; entryPages?: string; addDomain?: string; removeDomain?: string; json?: boolean }) => {
+            if (opts.checkoutPage === undefined && opts.entryPages === undefined && opts.addDomain === undefined && opts.removeDomain === undefined) {
+                throw new CliError(ExitCode.Validation, 'Nothing to change — pass --checkout-page <slug|id|none>, --entry-pages <list|none>, --add-domain <ids> or --remove-domain <ids>.');
             }
+            const domainIds = (v: string | undefined, flag: string): number[] | undefined => {
+                if (v === undefined) return undefined;
+                const ids = v.split(',').map((x) => x.trim()).filter(Boolean);
+                if (!ids.length || ids.some((x) => !/^\d+$/.test(x))) throw new CliError(ExitCode.Validation, `${flag} takes numeric domain ids separated by commas (see "ef domains list").`);
+                return ids.map(Number);
+            };
+            const addDomains = domainIds(opts.addDomain, '--add-domain');
+            const removeDomains = domainIds(opts.removeDomain, '--remove-domain');
             const { api, brandId } = await ctx();
             const funnel = await resolveFunnel(api, brandId, codeOrId);
 
@@ -284,13 +310,25 @@ rules are read from the server and sent back as they are.`)
 
             const current = await api.getFunnel(brandId, funnel.id);
             const previous = current.checkout_page_id == null ? null : Number(current.checkout_page_id);
-            const changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules'] } = {};
+            const changes: { checkout_page_id?: number | null; rules?: FunnelDetails['rules']; addDomains?: number[]; removeDomains?: number[] } = { addDomains, removeDomains };
             if (entryIds !== undefined) changes.rules = withEntryPages(current.rules ?? null, entryIds);
 
             if (opts.checkoutPage === undefined) {
                 await api.updateFunnel(brandId, funnel.id, buildFunnelUpdatePayload(current, changes));
                 const after = await api.getFunnel(brandId, funnel.id);
                 const got = entryPageIds(after.rules ?? null);
+                const onDomains = (after.domains ?? []).map((d) => Number(d.domain_id));
+                const missing = (addDomains ?? []).filter((id) => !onDomains.includes(id));
+                const stuck = (removeDomains ?? []).filter((id) => onDomains.includes(id));
+                if (missing.length || stuck.length) {
+                    throw new CliError(ExitCode.Server, `The server accepted the update but funnel #${funnel.id} is on domains [${onDomains.join(', ')}].`);
+                }
+                if (entryIds === undefined) {
+                    if (opts.json) { log.json({ ok: true, funnel: { id: funnel.id, code: funnel.code ?? null }, domains: (after.domains ?? []).map((d) => ({ domain_id: d.domain_id, is_default: Boolean(d.is_default) })) }); return; }
+                    log.success(`Funnel "${funnel.code ?? funnel.id}" (#${funnel.id}) is on domains ${onDomains.map((id) => `#${id}`).join(', ') || 'none'}.`);
+                    if (addDomains?.length && !(after.rules?.conditions?.length)) log.detail('  A non-default funnel is picked only by its entry rules; add --entry-pages.');
+                    return;
+                }
                 if (JSON.stringify([...got].sort((a, b) => a - b)) !== JSON.stringify([...new Set(entryIds)].sort((a, b) => a - b))) {
                     throw new CliError(ExitCode.Server, `The server accepted the update but funnel #${funnel.id} reports entry pages [${got.join(', ')}].`);
                 }

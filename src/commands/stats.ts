@@ -126,6 +126,24 @@ function slimMetric(key: string, v: AnalyticsMetricValue): Record<string, unknow
 }
 
 /**
+ * Metrics the server could not break down by this dimension.
+ *
+ * The grouped endpoint answers a metric whose source table lacks the grouping
+ * column with a literal 0 in every bucket, not an error. `sessions` by
+ * `product` is the case that bites: sessions are counted from page events, and
+ * the server skips product grouping on events, so every product reads "0
+ * sessions" — and `conversion_rate`, divided by those sessions, reads 0 too.
+ * A real metric is almost never zero across every row that has sales, so
+ * all-zero over two or more rows is read as "not split", not as a measurement.
+ */
+export function unsplitMetrics(rows: AnalyticsGroupRow[], metrics: string[]): string[] {
+    if (rows.length < 2) return [];
+    return metrics.filter(m =>
+        rows.some(r => r.metrics[m] != null)
+        && rows.every(r => r.metrics[m] == null || Number(r.metrics[m].value) === 0));
+}
+
+/**
  * The range line above a table. An explicit `--from/--to` labels itself with
  * the same span it would then repeat in the parenthetical, so that case prints
  * the days once.
@@ -396,6 +414,12 @@ Examples:
                 ? rows.sort((a, b) => String(a.key).localeCompare(String(b.key), undefined, { numeric: true }))
                 : rows.sort((a, b) => (b.metrics[sortBy]?.value ?? 0) - (a.metrics[sortBy]?.value ?? 0));
             const shown = rows.slice(0, limit);
+            // Judged over every row, not just the shown ones, so --limit cannot
+            // change the verdict.
+            const unsplit = unsplitMetrics(rows, wanted);
+            const unsplitNote = unsplit.length
+                ? `${unsplit.join(', ')} came back 0 on every row — the server does not break ${unsplit.length > 1 ? 'these' : 'this'} down by ${field}, so ${unsplit.length > 1 ? 'they are' : 'it is'} hidden. Brand totals: ef stats`
+                : null;
 
             if (opts.json) {
                 log.json({
@@ -404,10 +428,13 @@ Examples:
                     field,
                     range: { start: q.start, end: q.end, tz: q.tz },
                     total_rows: rows.length,
+                    // null rather than the server's 0: a script summing these
+                    // must not read "no sessions" where it means "not split".
+                    not_split_by_field: unsplit,
                     rows: shown.map(r => ({
                         key: r.key,
                         label: r.label,
-                        metrics: Object.fromEntries(wanted.filter(m => r.metrics[m]).map(m => [m, r.metrics[m].value])),
+                        metrics: Object.fromEntries(wanted.filter(m => r.metrics[m]).map(m => [m, unsplit.includes(m) ? null : r.metrics[m].value])),
                     })),
                 });
                 return;
@@ -418,12 +445,13 @@ Examples:
                 log.info('No data in this range.');
                 return;
             }
-            const cols = wanted.filter(m => shown.some(r => r.metrics[m] != null));
+            const cols = wanted.filter(m => !unsplit.includes(m) && shown.some(r => r.metrics[m] != null));
             const table = shown.map(r => [
                 r.label,
                 ...cols.map(m => String(r.metrics[m]?.formatted ?? r.metrics[m]?.value ?? '-')),
             ]);
             process.stdout.write(renderTable({ head: [field.toUpperCase(), ...cols.map(m => m.toUpperCase())], rows: table }) + '\n');
+            if (unsplitNote) log.detail(unsplitNote);
             if (rows.length > shown.length) {
                 log.detail(`${shown.length} of ${rows.length} rows — raise --limit to see more.`);
             }

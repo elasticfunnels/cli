@@ -848,9 +848,15 @@ export class ApiClient {
         field: string,
         opts: AnalyticsQuery & { metrics: string[] },
     ): Promise<AnalyticsGroupRow[]> {
+        const params: Record<string, unknown> = { ...analyticsParams(opts), 'selected_metrics[]': opts.metrics };
+        // The grouped endpoint scopes by page only through its filter pipeline
+        // (`filter[page_id]`, PageFilter); a bare `page_id` — which the summary
+        // endpoint honours — is silently ignored here and returns brand-wide rows.
+        // Send both until the server accepts `page_id` on this route too.
+        if (opts.pageId != null) params['filter[page_id]'] = opts.pageId;
         const res = await this.raw('GET', `/api/brands/${brandId}/analytics/metrics/${encodeGroupField(field)}/data`, {
             // Array form is mandatory here — a comma string is rejected 422.
-            params: { ...analyticsParams(opts), 'selected_metrics[]': opts.metrics },
+            params,
         });
         if (res.status >= 400) throw httpError(`Read analytics grouped by ${field}`, res);
         return normalizeGroupRows(res.data);

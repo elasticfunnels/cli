@@ -116,6 +116,15 @@ function crmModel<T>(data: unknown, ...keys: string[]): T {
  * brand-scoped agent token authenticates — the backend identifies the caller by
  * that runner id on every claim, event and completion.
  */
+/** One agent instruction file stored for a brand (see src/sync/agentFiles.ts). */
+export interface AgentFile {
+    path: string;
+    content: string;
+    hash: string;
+    updated_at?: string | null;
+    updated_by?: number | null;
+}
+
 export interface ApiAuth {
     scheme?: 'ef-access-key' | 'bearer';
     runnerId?: string;
@@ -666,6 +675,33 @@ export class ApiClient {
             data: { variables: JSON.stringify(variables ?? {}) },
         });
         if (res.status >= 400) throw httpError('Set brand variables', res);
+    }
+
+    // ── Agent files (CLAUDE.md, .claude/rules) ───────────────────────
+
+    /** The brand's stored agent files, or null when the server predates the endpoint. */
+    async listAgentFiles(brandId: number): Promise<AgentFile[] | null> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/agent-files`);
+        if (res.status === 404 || res.status === 405) return null;
+        if (res.status >= 400) throw httpError('List agent files', res);
+        return ((res.data as { files?: AgentFile[] })?.files) ?? [];
+    }
+
+    /**
+     * Apply writes (content) and deletes (content: null) atomically. Each carries
+     * the hash the client last synced; a stale one makes the server refuse the
+     * whole batch with 409 and the server copies, returned here as `conflicts`.
+     */
+    async putAgentFiles(
+        brandId: number,
+        files: Array<{ path: string; content: string | null; base_hash: string | null }>,
+    ): Promise<{ files: AgentFile[]; conflicts?: undefined } | { conflicts: Array<{ path: string; hash: string | null; content: string | null }>; files?: undefined }> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/agent-files`, { data: { files } });
+        if (res.status === 409) {
+            return { conflicts: (res.data as { conflicts?: Array<{ path: string; hash: string | null; content: string | null }> })?.conflicts ?? [] };
+        }
+        if (res.status >= 400) throw httpError('Save agent files', res);
+        return { files: ((res.data as { files?: AgentFile[] })?.files) ?? [] };
     }
 
     // ── SEO / discovery files ────────────────────────────────────────

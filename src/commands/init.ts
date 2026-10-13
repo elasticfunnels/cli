@@ -7,7 +7,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings, saveConfig } from '../utils/store';
-import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook } from './claude';
+import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook, reportAgentPull, runAgentPull } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 import { redeemPairingCode } from '../api/deviceAuth';
@@ -128,6 +128,10 @@ their own:
   .cursor/rules/elasticfunnels.mdc   the same guidance, as a Cursor project rule
   .claude/skills/                    the bundled ef-* skills (page events, stats, funnel analysis)
   .claude/settings.json              a SessionStart hook running "ef pull --if-stale 30"
+
+It also restores this brand's own CLAUDE.md text and .claude/rules from the
+server (saved there by "ef push --all" or "ef claude sync" on another machine).
+Files already here are kept; any that differ are listed.
 
 All of it is idempotent and written between markers, so re-running any of those
 commands later updates the managed block and leaves the rest of your file alone
@@ -381,6 +385,19 @@ async function runInit(opts: InitOptions): Promise<void> {
                 log.detail('  refresh one on demand; "ef init --no-claude" skips the lot.');
             }
         } catch { /* non-fatal */ }
+
+        // Bring back this brand's CLAUDE.md text and .claude/rules, written on
+        // another machine. Runs after the guidance so CLAUDE.md gets this
+        // machine's block. Local files win; differing ones are listed.
+        try {
+            const agent = await runAgentPull(runtime);
+            if (agent && !agent.unsupported && !opts.json) {
+                if (agent.written.length) log.success(`Restored from the brand: ${agent.written.join(', ')}`);
+                reportAgentPull({ ...agent, written: [] });
+            }
+        } catch (err) {
+            if (!opts.json) log.warn(`Could not restore CLAUDE.md / .claude/rules from the brand: ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
 
     // Bind, then pull everything down so the folder is usable immediately.
@@ -396,6 +413,8 @@ async function runInit(opts: InitOptions): Promise<void> {
                 // Adopt files already on disk (e.g. an existing VS Code extension
                 // folder) instead of re-downloading everything.
                 adopt: true,
+                // Already restored above, after the guidance.
+                agentFiles: false,
                 onProgress: (kind, label, done, total) => {
                     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
                     const name = label.split('/').pop() || label;

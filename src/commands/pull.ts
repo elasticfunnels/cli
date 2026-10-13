@@ -20,7 +20,7 @@ import { resolveComponentByCodeOrName, resolvePageBySlug } from './shared';
 import { classifyAbsPath } from '../sync/sync';
 import { pullEventsForAllPages } from './pageEvents';
 import { withReauth } from './authFlow';
-import { guidanceVersion, refreshGuidanceIfStale } from './claude';
+import { guidanceVersion, refreshGuidanceIfStale, reportAgentPull, runAgentPull } from './claude';
 
 interface PullOpts {
     json?: boolean;
@@ -57,6 +57,8 @@ export async function runFullSync(rt: EfRuntime, opts: {
     force?: boolean;
     /** 3-way merge server changes into locally-edited files (git-style markers). */
     merge?: boolean;
+    /** Also sync CLAUDE.md and .claude/rules from the brand (default true). */
+    agentFiles?: boolean;
     onProgress?: SyncContext['onProgress'];
 } = {}): Promise<{
     pages: number; components: number; scripts: number; assets: number;
@@ -111,6 +113,18 @@ export async function runFullSync(rt: EfRuntime, opts: {
         if (!ctx.aborted) {
             const variables = await pullVariables(ctx);
             log_(`${c.green('✓')} variables → ${variables.rel}`);
+            if (opts.agentFiles !== false) {
+                // Never fails the pull: these are instructions, not site content.
+                try {
+                    const agent = await runAgentPull(rt, { merge: opts.merge, theirs: opts.force });
+                    if (agent && !agent.unsupported) {
+                        log_(`${c.green('✓')} agent files (CLAUDE.md, .claude/rules)`);
+                        if (!opts.json) reportAgentPull(agent, { quiet: opts.silent });
+                    }
+                } catch (err) {
+                    if (!opts.json) log.warn(`Agent files not synced: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
             completed = true;
         }
     } finally {

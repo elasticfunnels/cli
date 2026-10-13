@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as http from 'http';
 import { spawn } from 'child_process';
-import { buildFunnelUpdatePayload } from '../src/commands/funnels';
+import { buildFunnelUpdatePayload, entryPageIds, withEntryPages } from '../src/commands/funnels';
 
 const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
 
@@ -256,4 +256,54 @@ test('buildFunnelUpdatePayload keeps a draft funnel draft, with no domains and n
     const body = buildFunnelUpdatePayload({ id: 9, title: 'Draft', status: 'draft', checkout_page_id: 4, rules: null, domains: [] }, {});
     assert.deepEqual(body, { title: 'Draft', status: 'draft', rules: null, domains: [], checkout_page_id: 4 });
     assert.equal(buildFunnelUpdatePayload({ id: 9, title: 'X', checkout_page_id: 4 }, { checkout_page_id: null }).checkout_page_id, null);
+});
+
+/**
+ * A non-default funnel is selected only by its entry rules (website
+ * FunnelResolver), so kits need a page entry rule. --entry-pages writes it the
+ * way the editor does ({field:'page', operator:'in', value:'1,2'}), keeps every
+ * other condition, and touches nothing else on the funnel.
+ */
+test('funnels settings --entry-pages sets the page rule, keeps other rules, and resends everything else', async () => {
+    const mock = await startMock();
+    const root = await setup(mock.url);
+    try {
+        const r = await runEf(root, ['funnels', 'settings', 'main', '--entry-pages', 'order-form, 50', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const sent = puts(mock, /\/funnels\/5$/);
+        assert.equal(sent.length, 1);
+        assert.deepEqual(sent[0].body?.rules, {
+            match: 'any',
+            conditions: [...FUNNEL_RULES.conditions, { field: 'page', operator: 'in', value: '42,50' }],
+        });
+        assert.equal(sent[0].body?.title, 'Main Funnel');
+        assert.equal(sent[0].body?.checkout_page_id, null);
+        assert.equal((sent[0].body?.domains as unknown[]).length, 2);
+        assert.equal('trigger_pages' in (sent[0].body ?? {}), false);
+        const out = JSON.parse(r.stdout);
+        assert.deepEqual(out.entry_pages, [42, 50]);
+        assert.deepEqual(out.previous_entry_pages, []);
+
+        // Replacing it swaps the page condition in place of adding a second one.
+        assert.equal((await runEf(root, ['funnels', 'settings', 'main', '--entry-pages', '77'])).code, 0);
+        assert.deepEqual((mock.funnel.rules as { conditions: unknown[] }).conditions,
+            [...FUNNEL_RULES.conditions, { field: 'page', operator: 'in', value: '77' }]);
+
+        // none removes only the page condition.
+        assert.equal((await runEf(root, ['funnels', 'settings', 'main', '--entry-pages', 'none'])).code, 0);
+        assert.deepEqual(mock.funnel.rules, FUNNEL_RULES);
+
+        const missing = await runEf(root, ['funnels', 'settings', 'main', '--entry-pages', 'no-such-page']);
+        assert.equal(missing.code, 7);
+        assert.equal(puts(mock, /\/funnels\/5$/).length, 3, 'an unknown page sends nothing');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('withEntryPages / entryPageIds round-trip; empty rules become null', () => {
+    assert.equal(withEntryPages(null, []), null);
+    const r = withEntryPages(null, [3, 4, 3]);
+    assert.deepEqual(r, { match: 'all', conditions: [{ field: 'page', operator: 'in', value: '3,4' }] });
+    assert.deepEqual(entryPageIds(r), [3, 4]);
+    assert.equal(withEntryPages(r, []), null);
+    assert.deepEqual(entryPageIds({ match: 'all', conditions: [{ field: 'page', operator: 'in', value: ['5', 6] }] }), [5, 6]);
 });

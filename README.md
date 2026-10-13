@@ -260,6 +260,10 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef funnels create <title> --domain <id>` | Create a funnel (server assigns the code; a domain is required) and write its empty graph. |
 | `ef funnels debug-flow <codeOrId>` / `product-flow <codeOrId>` | Print the compiled read-only flow / product-flow. |
 | `ef funnels delete <codeOrId>` | Delete a funnel (and its local file). |
+| `ef popups list` | List the brand's exit popups (id, name; alias `ef popups ls`). |
+| `ef popups get <nameOrId>` | One popup. `--json` includes the editor project (`config`); the rendered html/css are not readable through the API. |
+| `ef popups create <name>` | Create a popup from a built-in `--template` (`default-with-image`, `default-with-video`, `subscribe-modal-1`), or from `--file popup.html` (validated before anything is created). |
+| `ef popups push <nameOrId> <file>` | Replace a popup's content with an HTML file (markup + `<style>` blocks). The markup needs a `data-modal="true"` element and a `data-modal-close="true"` button, else exit 2. Overwrites edits made in the visual editor. Show the popup with an `exit_popup` page-event node whose `data.value` is its id. |
 | `ef components create <code>` | Create a new component. `--tag <name>` (repeatable) tags it as it's created. |
 | `ef components preview <codeOrName>` | Print the component preview URL (draft revision when present; `--published` for the live version). |
 | `ef components delete <codeOrName>` | Delete a component. |

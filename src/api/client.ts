@@ -421,6 +421,24 @@ export class ApiClient {
     // The editable graph is `config` (Drawflow) via /builder; flow/product_flow/
     // variant_seeds are read-only artifacts regenerated on every save.
 
+    /**
+     * Funnel ids that are the DEFAULT on `domainId` (paginated `GET funnels`,
+     * which carries each funnel's domain assignments; `funnels/all` does not).
+     */
+    async defaultFunnelsOnDomain(brandId: number, domainId: number): Promise<number[]> {
+        const out: number[] = [];
+        for (let page = 1; page <= 50; page++) {
+            const res = await this.raw('GET', `/api/brands/${brandId}/funnels`, { params: { per_page: 100, page } });
+            if (res.status >= 400) throw httpError('List funnels', res);
+            const body = res.data as { data?: Array<{ id: number; domains?: Array<{ domain_id: number; is_default?: boolean | number }> }>; last_page?: number };
+            for (const f of body.data ?? []) {
+                if ((f.domains ?? []).some((d) => Number(d.domain_id) === domainId && Boolean(d.is_default))) out.push(Number(f.id));
+            }
+            if (!body.last_page || page >= body.last_page) break;
+        }
+        return out;
+    }
+
     async listFunnels(brandId: number): Promise<Funnel[]> {
         const res = await this.raw('GET', `/api/brands/${brandId}/funnels/all`);
         if (res.status === 403 || res.status === 404) return [];

@@ -307,3 +307,27 @@ test('withEntryPages / entryPageIds round-trip; empty rules become null', () => 
     assert.equal(withEntryPages(r, []), null);
     assert.deepEqual(entryPageIds({ match: 'all', conditions: [{ field: 'page', operator: 'in', value: ['5', 6] }] }), [5, 6]);
 });
+
+/** PUT replaces domain assignments wholesale, so --add-domain must resend the current ones (network ids included). */
+test('funnels settings --add-domain keeps current assignments and adds a non-default one; --remove-domain drops one', async () => {
+    const mock = await startMock();
+    const root = await setup(mock.url);
+    try {
+        const r = await runEf(root, ['funnels', 'settings', 'main', '--add-domain', '31,11', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        const body = puts(mock, /\/funnels\/5$/).at(-1)?.body;
+        assert.deepEqual(body?.domains, [
+            { domain_id: 11, is_default: true, cb_funnel_id: 'CB-1', cb_template_code: 'tpl', ds24_template_id: null, jvz_funnel_id: null },
+            { domain_id: 12, is_default: false, cb_funnel_id: null, cb_template_code: null, ds24_template_id: '88', jvz_funnel_id: null },
+            { domain_id: 31, is_default: false, cb_funnel_id: null, cb_template_code: null, ds24_template_id: null, jvz_funnel_id: null },
+        ]);
+        assert.deepEqual(body?.rules, FUNNEL_RULES);
+        assert.deepEqual(JSON.parse(r.stdout).domains.map((d: { domain_id: number }) => d.domain_id), [11, 12, 31]);
+
+        assert.equal((await runEf(root, ['funnels', 'settings', 'main', '--remove-domain', '12'])).code, 0);
+        assert.deepEqual((mock.funnel.domains as Array<{ domain_id: number }>).map((d) => d.domain_id), [11, 31]);
+
+        const bad = await runEf(root, ['funnels', 'settings', 'main', '--add-domain', 'abc']);
+        assert.equal(bad.code, 2);
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});

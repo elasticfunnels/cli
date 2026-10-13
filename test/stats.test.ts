@@ -427,3 +427,25 @@ test('a variant whose label is empty prints something visible, not a blank row',
         await fs.promises.rm(root, { recursive: true, force: true });
     }
 });
+
+// ── unsplitMetrics: a metric the server could not split comes back 0 everywhere ──
+import { unsplitMetrics } from '../src/commands/stats';
+
+function grow(key: string, m: Record<string, number>) {
+    return { key, label: key, metrics: Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { value: v }])) } as any;
+}
+
+test('unsplitMetrics flags sessions and conversion_rate when every product row is 0', () => {
+    const rows = [
+        grow('herpafend_6', { revenue: 118541.5, sessions: 0, conversion_rate: 0, sales: 373 }),
+        grow('herpafend_3', { revenue: 75341.9, sessions: 0, conversion_rate: 0, sales: 384 }),
+    ];
+    assert.deepEqual(unsplitMetrics(rows, ['revenue', 'sessions', 'conversion_rate', 'sales']), ['sessions', 'conversion_rate']);
+});
+
+test('unsplitMetrics keeps a metric that is non-zero on any row, and judges nothing on one row', () => {
+    const rows = [grow('/a', { sessions: 0, sales: 0 }), grow('/b', { sessions: 12, sales: 0 })];
+    assert.deepEqual(unsplitMetrics(rows, ['sessions']), []);
+    assert.deepEqual(unsplitMetrics([grow('/a', { sessions: 0 })], ['sessions']), []);
+    assert.deepEqual(unsplitMetrics(rows, ['aov']), [], 'a metric absent everywhere is not "unsplit"');
+});

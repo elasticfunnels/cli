@@ -628,7 +628,7 @@ export class ApiClient {
 
     async createProduct(brandId: number, payload: Record<string, unknown>, image?: ProductImageUpload): Promise<Product> {
         const res = await this.raw('POST', `/api/brands/${brandId}/products`, this.productRequestOpts(payload, image));
-        if (res.status === 403) throw planOrAuthError(res);
+        if (res.status === 403) throw planOrAuthError('Create product', res);
         if (res.status >= 400) throw httpError('Create product', res);
         const body = res.data as { product?: Product } | Product;
         return ('product' in body && body.product ? body.product : body) as Product;
@@ -1541,7 +1541,7 @@ export class ApiClient {
      */
     async createCollection(brandId: number, payload: { name: string; fields: BrandCollectionField[] } & Record<string, unknown>): Promise<BrandCollection> {
         const res = await this.raw('POST', `/api/brands/${brandId}/collections`, { data: payload });
-        if (res.status === 403) throw planOrAuthError(res);
+        if (res.status === 403) throw planOrAuthError('Create collection', res);
         if (res.status >= 400) throw httpError('Create collection', res);
         const body = res.data as { collection?: BrandCollection } | BrandCollection;
         return ('collection' in body && body.collection ? body.collection : body) as BrandCollection;
@@ -1818,18 +1818,20 @@ function validationError(label: string, res: AxiosResponse): CliError {
 }
 
 /**
- * A 403 on product create can be either a plan-limit rejection (the brand has
- * hit its product cap / lacks the feature) or a genuine auth failure. Surface
- * the server's plan message when present so the user knows to upgrade rather
- * than re-check their key.
+ * A 403 on a create endpoint is a plan rejection (the brand's plan lacks the
+ * feature or hit its cap) or a permission refusal from a policy. Neither means
+ * the credential is bad: a bad credential is a 401 and never gets this far, so
+ * this must not use ExitCode.Auth, which appends "run ef login" advice.
  */
-function planOrAuthError(res: AxiosResponse): CliError {
-    const data = res.data as { error?: string; plan_error?: { message?: string } } | undefined;
+export function planOrAuthError(label: string, res: AxiosResponse): CliError {
+    const data = res.data as { error?: string; message?: string; plan_error?: { message?: string } } | undefined;
     const planMsg = data?.plan_error?.message;
     if (planMsg) {
-        return new CliError(ExitCode.Error, `${data?.error ?? 'Cannot create product'}: ${planMsg}`);
+        return new CliError(ExitCode.Error, `${data?.error ?? `${label} not allowed on this plan`}: ${planMsg}`);
     }
-    return httpError('Create product', res);
+    const detail = data?.message ?? data?.error ?? 'forbidden';
+    return new CliError(ExitCode.Error,
+        `${label} refused (HTTP 403): ${detail}\n  Your credential is valid; this account lacks the permission for this brand, or the brand's plan does not include it.`);
 }
 
 function buildRevisionConflictMessage(body: PageUpdateResponse | undefined): string {

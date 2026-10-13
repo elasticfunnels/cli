@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseFieldSpec } from '../src/commands/collections';
 import { CliError, ExitCode } from '../src/utils/exit';
+import { planOrAuthError } from '../src/api/client';
 
 /**
  * `--field Name[:type[:required]]` is the whole reason `ef collections create`
@@ -51,4 +52,23 @@ test('a typo in the required flag is rejected rather than silently ignored', () 
 test('an empty name is rejected', () => {
     assert.throws(() => parseFieldSpec(''), CliError);
     assert.throws(() => parseFieldSpec(':email'), CliError);
+});
+
+/**
+ * A 403 from a create endpoint is a plan or permission refusal, never a dead
+ * credential (that is a 401). It must name the right endpoint and must not be
+ * ExitCode.Auth, which makes the dispatcher append "this device's access was
+ * revoked, run ef login" — wrong advice right after a fresh login.
+ */
+test('a policy 403 on collection create is not reported as a revoked credential', () => {
+    const err = planOrAuthError('Create collection', <any>{ status: 403, statusText: 'Forbidden', data: { message: 'This action is unauthorized.' } });
+    assert.notEqual(err.code, ExitCode.Auth);
+    assert.match(err.message, /^Create collection refused/);
+    assert.doesNotMatch(err.message, /product/i);
+});
+
+test('a plan 403 surfaces the server plan message', () => {
+    const err = planOrAuthError('Create collection', <any>{ status: 403, data: { error: 'Upgrade required to create collections', plan_error: { message: 'Your current plan does not allow creating collections.' } } });
+    assert.notEqual(err.code, ExitCode.Auth);
+    assert.match(err.message, /Upgrade required to create collections: Your current plan/);
 });

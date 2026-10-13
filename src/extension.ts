@@ -37,6 +37,7 @@ import { registerLintCommand } from './commands/lint';
 import { registerDomainsCommand } from './commands/domains';
 import { registerCrmCommand } from './commands/crm';
 import { registerFunnelsCommand } from './commands/funnels';
+import { registerPopupsCommand } from './commands/popups';
 import { registerTagsCommand } from './commands/tags';
 import { registerOrdersCommand } from './commands/orders';
 import { registerSessionsCommand } from './commands/sessions';
@@ -112,6 +113,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerCollectionsCommand(program);
     registerCrmCommand(program);
     registerFunnelsCommand(program);
+    registerPopupsCommand(program);
     registerTagsCommand(program);
     // Disabled for now (see the commented imports above):
     // registerAutomationsCommand(program);

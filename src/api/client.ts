@@ -350,6 +350,51 @@ export class ApiClient {
         return (Array.isArray(res.data) ? res.data : []) as PageFolder[];
     }
 
+    /**
+     * The brand's folder tree (roots with nested `children`). Unlike
+     * `listPageFolders`, a brand with folders switched off is an error here,
+     * so `ef folders` can say so instead of printing an empty list.
+     */
+    async getPageFolderTree(brandId: number): Promise<PageFolder[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/page-folders`);
+        if (res.status === 403) {
+            throw new CliError(ExitCode.Validation, 'Folders are switched off for this brand. Turn on "Page folders" in the brand settings in the app, then retry.');
+        }
+        if (res.status >= 400) throw httpError('List page folders', res);
+        return (Array.isArray(res.data) ? res.data : []) as PageFolder[];
+    }
+
+    async createPageFolder(brandId: number, payload: { name: string; parent_id?: number | null; color?: string; order?: number }): Promise<PageFolder> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/page-folders`, { data: payload });
+        if (res.status >= 400) throw httpError('Create folder', res);
+        return ((res.data as { folder?: PageFolder })?.folder ?? res.data) as PageFolder;
+    }
+
+    async updatePageFolder(brandId: number, folderId: number, payload: { name?: string; parent_id?: number | null; color?: string | null; order?: number }): Promise<PageFolder> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/page-folders/${folderId}`, { data: payload });
+        if (res.status >= 400) throw httpError('Update folder', res);
+        return ((res.data as { folder?: PageFolder })?.folder ?? res.data) as PageFolder;
+    }
+
+    /** Pages in the folder fall back to "no folder"; subfolders move up one level. */
+    async deletePageFolder(brandId: number, folderId: number): Promise<void> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/page-folders/${folderId}`);
+        if (res.status >= 400) throw httpError('Delete folder', res);
+    }
+
+    /**
+     * File pages into a folder (null = no folder). The endpoint writes only
+     * `folder_id`, so slug, status, domain and funnel wiring are untouched,
+     * which is why bulk filing goes through here and not the settings PUT.
+     */
+    async movePagesToFolder(brandId: number, pageIds: number[], folderId: number | null): Promise<number> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/bulk-move-to-folder`, {
+            data: { page_ids: pageIds, folder_id: folderId },
+        });
+        if (res.status >= 400) throw httpError('Move pages to folder', res);
+        return Number((res.data as { moved_count?: number })?.moved_count ?? pageIds.length);
+    }
+
     async getPagesSyncDelta(brandId: number, updatedAfter?: string | null): Promise<Array<{
         id: number; slug: string | null; variant_slug?: string | null; status?: string;
         domain?: string | null; updated_at?: string;

@@ -300,6 +300,11 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef tags create <name>` | Create a tag without attaching it. `--color <swatch\|#rrggbb\|rgb(r,g,b)>`; left unset, the colour is derived from the name so a batch of tags is distinguishable. |
 | `ef tags update <nameOrId>` | Rename (`--name`) or recolour (`--color`) a tag. Every record carrying it follows. |
 | `ef tags delete <nameOrId>` | Delete the tag **brand-wide**, stripping it from every record. Confirms on a TTY; `--force` to skip. Not the same as `detach`. |
+| `ef folders list` | The Pages list's folder tree with ids, page counts and paths (alias `ef folders ls`). |
+| `ef folders create <name>` | Create a folder; `--parent <id\|name\|path>` nests it, `--color #rrggbb`, `--exists-ok` reuses an existing sibling of that name (exit 0). |
+| `ef folders rename <folder> <newName>` | Rename a folder. A folder is an id, a unique name, or a path like `Kits/My kit`. |
+| `ef folders delete <folder>` | Delete a folder; its pages become unfiled (not deleted), subfolders move up. Confirms on a TTY; `--force` to skip. |
+| `ef folders file <folder> <pages…>` | File pages (slugs or ids) into a folder in one call (alias `move`); `none` unfiles. Writes only `folder_id`: slug, URL, status and funnel are untouched. `ef pages settings <slug> --folder <ref>` and `ef pages create --folder <ref>` take the same references. |
 | `ef seo status` | Which discovery files (`sitemap.xml`, `llms.txt`, `robots.txt`) this brand serves, and how many pages they list. |
 | `ef seo set <key> <value>` | Turn a file on/off or set its content. Keys: `sitemap`, `llms`, `robots` (booleans), `site-name`, `site-summary`, `llms-notes`, `robots-extra` (text). |
 | `ef seo get [key]` | Print the SEO settings, or one key (pipeable on stdout). |

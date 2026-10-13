@@ -3,6 +3,7 @@ import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
+import { flattenFolders } from './folders';
 import { formatBytes, formatRelative, renderTable } from '../utils/format';
 
 type Kind = 'pages' | 'components' | 'assets' | 'scripts' | 'folders' | 'templates';
@@ -107,11 +108,12 @@ async function listScripts(api: ApiClient, brandId: number, opts: { limit?: numb
 }
 
 async function listFolders(api: ApiClient, brandId: number, opts: { json?: boolean }): Promise<void> {
-    const folders = await api.listPageFolders(brandId);
+    // The endpoint returns a tree; flatten it so subfolders are listed too.
+    const folders = flattenFolders(await api.listPageFolders(brandId));
     if (opts.json) { log.json(folders); return; }
     log.raw(renderTable({
-        head: ['#', 'name', 'parent'],
-        rows: folders.map(f => [String(f.id), f.name, f.parent_id != null ? String(f.parent_id) : '']),
+        head: ['#', 'name', 'parent', 'path'],
+        rows: folders.map(f => [String(f.id), f.name, f.parent_id != null ? String(f.parent_id) : '', f.path]),
     }) + '\n');
     log.detail(`${folders.length} folders`);
 }

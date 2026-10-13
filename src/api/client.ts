@@ -1499,6 +1499,49 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Unassign tag', res);
     }
 
+    // ── Exit popups (Modules/Exitpopups, plan gate moduleAccess:exitpopups) ──
+
+    /** `GET exit-popups/all`: id + name of every popup that has content (server caches it ~5 min, bumped on save). */
+    async listPopups(brandId: number): Promise<Array<{ id: number; name: string }>> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/exit-popups/all`);
+        if (res.status === 403) throw planOrAuthError('List popups', res);
+        if (res.status >= 400) throw httpError('List popups', res);
+        return (Array.isArray(res.data) ? res.data : []) as Array<{ id: number; name: string }>;
+    }
+
+    /** `GET exit-popups/{id}` (id + name) and `GET exit-popups/{id}/builder` (the GrapesJS project). */
+    async getPopup(brandId: number, id: number): Promise<{ id: number; name: string; config: Record<string, unknown> }> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/exit-popups/${id}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Popup #${id} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Get popup', res);
+        const cfg = await this.raw('GET', `/api/brands/${brandId}/exit-popups/${id}/builder`);
+        if (cfg.status >= 400) throw httpError('Get popup content', cfg);
+        const head = res.data as { id: number; name: string };
+        return { id: Number(head.id), name: head.name, config: (cfg.data ?? {}) as Record<string, unknown> };
+    }
+
+    /** `POST exit-popups` {name, template}: the server seeds the content from a built-in template. */
+    async createPopup(brandId: number, name: string, template: string): Promise<{ id: number; name: string }> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/exit-popups`, { data: { name, template } });
+        if (res.status === 403) throw planOrAuthError('Create popup', res);
+        if (res.status === 422) throw validationError('Popup', res);
+        if (res.status >= 400) throw httpError('Create popup', res);
+        const body = res.data as { exitpopup?: { id: number; name: string } };
+        if (!body.exitpopup?.id) throw new CliError(ExitCode.Server, 'Create popup: the server answered without a popup id.');
+        return { id: Number(body.exitpopup.id), name: body.exitpopup.name };
+    }
+
+    /**
+     * `POST exit-popups/{id}/builder`: replaces the content. The runtime renders
+     * `html` + `css`; the editor loads `config`. The server derives neither from
+     * the other, so callers send all three (see `popupBuilderPayload`).
+     */
+    async savePopupContent(brandId: number, id: number, payload: { config: string; html: string; css: string; interactions: unknown[] }): Promise<void> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/exit-popups/${id}/builder`, { data: payload });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Popup #${id} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Save popup', res);
+    }
+
     // ── Collections (form stores) ───────────────────────────────────
 
     async listCollections(brandId: number): Promise<BrandCollection[]> {

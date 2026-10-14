@@ -351,8 +351,14 @@ platform members area.
   less) are randomuser.me portraits
   (\`https://randomuser.me/api/portraits/{women|men}/{0-99}.jpg\`) matching the
   name and audience, a different one per person; never grey silhouettes or
-  initials. Named experts, doctors and founders get no face: an invented one is
-  a fake endorsement. Logos are typeset wordmarks (a real font, as SVG/PNG),
+  initials. For a 40+ audience use portraits that read that age (Pexels via its
+  API when randomuser has none); never the same face twice on a page. An expert
+  line ("Recommended by ...") shows a small round avatar with a verified tick from
+  a brand variable the store replaces with its real expert's photo; name and
+  credential are variables too; never a large photo of an invented named expert.
+  No generated before/after pairs (they read as a health claim); invented
+  customers holding the product are fine. No urgency the original page doesn't
+  have (evergreen countdowns, "only N left" bars). Logos are typeset wordmarks (a real font, as SVG/PNG),
   never AI-generated and never another brand's logo. Content images: \`srcset\`
   on the CDN's \`?width=\`, \`width\`/\`height\`, lazy below the fold.
 - **No text walls.** Each section opens with one short line; specifics go in a

@@ -554,6 +554,8 @@ Variants of a page live under a subfolder named after the base slug:
 directly under \`pages/\`. Change a slug with \`ef pages settings <slug> --slug <new>\`
 (the CLI renames the local file to match).
 
+A page with slug 404 is the brand's not-found page (served with status 404).
+
 ## Wildcard routes (one page, many URLs)
 
 A page slug containing \`{placeholders}\` serves every URL that fits the pattern.

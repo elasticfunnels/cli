@@ -7,7 +7,7 @@ import * as http from 'http';
 import { spawn } from 'child_process';
 
 const BIN_PATH = path.resolve(__dirname, '..', '..', 'bin', 'ef.js');
-import { renderClaudeSection, applyAgentGuidance, installBundledSkills, installSessionHook, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
+import { renderClaudeSection, applyAgentGuidance, isOlderGuidance, installBundledSkills, installSessionHook, stampedGuidanceVersion, guidanceVersion, GUIDANCE_FILES, CURSOR_FRONTMATTER } from '../src/commands/claude';
 
 test('renderClaudeSection ports the .cursor template/backend-script/CRM docs', () => {
     const s = renderClaudeSection();
@@ -337,4 +337,60 @@ test('ef update --cached answers from the cache, never the network, and is quiet
     assert.equal(JSON.parse(res.out).latest, null, 'says unknown rather than guessing');
 
     await fs.promises.rm(home, { recursive: true, force: true });
+});
+
+/*
+ * The page-building rules learned fixing the template library (2026-10-14).
+ * Each one cost a live page or an owner flag; these lock the load-bearing
+ * phrases in so a later trim can't drop them silently.
+ */
+test('guidance carries the general page-building rules', () => {
+    const s = renderClaudeSection();
+    // Working site, not a mock-up.
+    assert.match(s, /Mirror the function, not just the UI/);
+    assert.ok(s.includes('href="#"') && s.includes('javascript:void'), 'dead-link forms named');
+    assert.match(s, /Modal or page: follow the original/);
+    assert.match(s, /without\s+a URL change/);
+    assert.match(s, /POST endpoint pages/);
+    // Layout + CSS.
+    assert.ok(s.includes('minmax(0,') && s.includes('min-width: 0'), 'grid tracks that can shrink');
+    assert.match(s, /320 to 1920/);
+    assert.match(s, /page-level reset never out-ranks a component class/);
+    // Platform data instead of hand-made copies.
+    assert.ok(s.includes('efCart.count'), 'platform cart count');
+    assert.match(s, /Requires Login \+ Redirect URL/);
+    assert.match(s, /never a hand-written backend redirect/);
+    assert.match(s, /every gift display reads it/);
+    assert.ok(s.includes('getSessionOrders()'), 'thank-you reads the session order');
+    assert.ok(s.includes("referenceType: 'quiz_visitor'") && s.includes('Schema'), 'quiz answers to CRM with a reference');
+    // Checkout defaults.
+    assert.match(s, /Nothing that charges is pre-selected/);
+    assert.match(s, /Consent starts unticked/);
+    assert.ok(s.includes('?p=<product>') && s.includes('data-ef-package-group'), 'preview + in-place packages');
+    // Images, titles, support e-mail.
+    assert.ok(s.includes('randomuser.me'), 'avatar source');
+    assert.match(s, /typeset wordmarks/);
+    assert.ok(s.includes('<meta name="description">'));
+    assert.ok(s.includes('brand.support_email'));
+});
+
+test('guidance lists the frontend and backend engine traps', () => {
+    const s = renderClaudeSection();
+    assert.match(s, /`\[\[ \]\]` inside an attribute/);
+    assert.match(s, /`;` anywhere in an expression/);
+    assert.match(s, /loop over a method call/);
+    assert.ok(s.includes('default:var.x'), 'filter args are literals');
+    assert.ok(s.includes('getVariable()'), 'not in the sandbox');
+});
+
+test('a guidance refresh never downgrades a block written by a newer CLI', () => {
+    assert.equal(isOlderGuidance(null, '0.21.0'), true, 'unversioned is older');
+    assert.equal(isOlderGuidance('0.20.0', '0.21.0'), true);
+    assert.equal(isOlderGuidance('0.21.0', '0.21.0'), false);
+    assert.equal(isOlderGuidance('0.22.0', '0.21.0'), false, 'newer stamp is kept');
+    assert.equal(isOlderGuidance('0.9.0', '0.10.0'), true, 'numeric, not lexical');
+
+    // Under `npm test` the running version is unknown (0.0.0): differs = stale.
+    assert.equal(isOlderGuidance('999.0.0', '0.0.0'), true);
+    assert.equal(isOlderGuidance('0.0.0', '0.0.0'), false);
 });

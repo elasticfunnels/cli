@@ -260,6 +260,13 @@ Data lives in \`window.efScope\`; mutate it and call \`notifyScopeUpdated()\` (o
   (\`:value\`/\`:checked\`/\`:disabled\`/\`:style\`), two-way \`data-template-value="path"\`
   (v-model for inputs/selects/textareas).
 
+**Prefer the template engine over raw JavaScript.** Steppers, quizzes, surveys, tabs, toggles,
+package pickers and conditional blocks belong in the frontend engine above (state in \`efScope\`,
+\`@click\`, \`<template-if>\`, \`data-template-value\`) and native HTML (\`<details name>\`, a
+\`<form>\` posting to a collection). Hand-written DOM \`<script>\` is the last resort, only for what
+the engine and the docs can't do. A form posting to a collection is submitted by the runtime: never
+add your own \`fetch()\` for it (it would post twice).
+
 ## Forms → collections
 
 Write a plain \`<form>\` with \`name\`d inputs and **no \`action\` attribute**. On

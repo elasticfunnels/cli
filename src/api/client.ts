@@ -28,6 +28,7 @@ import {
     PageFolder,
     PageUpdateResponse,
     PageVariant,
+    ShippingProfile,
     Paginated,
     Product,
     SessionDetails,
@@ -1667,6 +1668,72 @@ export class ApiClient {
      * a form's `action`/`data-collection` must reference, so callers should read
      * it off the returned object rather than guessing.
      */
+    /**
+     * `DELETE collections/{id}`: soft-deletes the collection (brand-scoped, `collections.delete`).
+     * Takes the code or the id; the route binds by id, so a code is resolved first.
+     */
+    async deleteCollection(brandId: number, ref: string | number): Promise<number> {
+        const id = await this.resolveCollectionId(brandId, ref);
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/collections/${id}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No collection "${ref}" in this brand. Run "ef collections list".`);
+        if (res.status === 403) throw planOrAuthError('Delete collection', res);
+        if (res.status >= 400) throw httpError('Delete collection', res);
+        return id;
+    }
+
+    // ── Shipping profiles (Products → Shipping Profiles) ─────────────
+
+    /** Every profile with its product count (`GET shipping-profiles`, paginated, 100 a page). */
+    async listShippingProfiles(brandId: number): Promise<ShippingProfile[]> {
+        const out: ShippingProfile[] = [];
+        for (let page = 1; page <= 50; page++) {
+            const res = await this.raw('GET', `/api/brands/${brandId}/shipping-profiles`, { params: { per_page: 100, page } });
+            if (res.status === 403) throw planOrAuthError('List shipping profiles', res);
+            if (res.status >= 400) throw httpError('List shipping profiles', res);
+            const body = (res.data ?? {}) as { data?: ShippingProfile[]; last_page?: number };
+            out.push(...(Array.isArray(body.data) ? body.data : Array.isArray(res.data) ? res.data as ShippingProfile[] : []));
+            if (!body.last_page || page >= body.last_page) break;
+        }
+        return out;
+    }
+
+    async getShippingProfile(brandId: number, id: number): Promise<ShippingProfile> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/shipping-profiles/${id}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No shipping profile #${id} in this brand. Run "ef shipping-profiles list".`);
+        if (res.status >= 400) throw httpError('Get shipping profile', res);
+        return res.data as ShippingProfile;
+    }
+
+    async createShippingProfile(brandId: number, payload: Record<string, unknown>): Promise<ShippingProfile> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/shipping-profiles`, { data: payload });
+        if (res.status === 422) throw validationError('Shipping profile', res);
+        if (res.status === 403) throw planOrAuthError('Create shipping profile', res);
+        if (res.status >= 400) throw httpError('Create shipping profile', res);
+        const body = res.data as { profile?: ShippingProfile };
+        return (body.profile ?? res.data) as ShippingProfile;
+    }
+
+    async updateShippingProfile(brandId: number, id: number, payload: Record<string, unknown>): Promise<ShippingProfile> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/shipping-profiles/${id}`, { data: payload });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No shipping profile #${id} in this brand.`);
+        if (res.status === 422) throw validationError('Shipping profile', res);
+        if (res.status === 403) throw planOrAuthError('Update shipping profile', res);
+        if (res.status >= 400) throw httpError('Update shipping profile', res);
+        return res.data as ShippingProfile;
+    }
+
+    /** Put one profile on products, or take it off (`profileId` null) — `products/bulk-set-shipping-profile`. */
+    async assignShippingProfile(brandId: number, productIds: number[], profileId: number | null): Promise<number> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/products/bulk-set-shipping-profile`, {
+            data: { product_ids: productIds, shipping_profile_id: profileId },
+        });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Assign shipping profile: ${(res.data as { error?: string })?.error ?? 'profile or product not found in this brand'}.`);
+        if (res.status === 422) throw validationError('Assign shipping profile', res);
+        if (res.status === 403) throw planOrAuthError('Assign shipping profile', res);
+        if (res.status >= 400) throw httpError('Assign shipping profile', res);
+        return Number((res.data as { updated_count?: number })?.updated_count ?? productIds.length);
+    }
+
     async createCollection(brandId: number, payload: { name: string; fields: BrandCollectionField[] } & Record<string, unknown>): Promise<BrandCollection> {
         const res = await this.raw('POST', `/api/brands/${brandId}/collections`, { data: payload });
         if (res.status === 403) throw planOrAuthError('Create collection', res);

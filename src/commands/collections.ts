@@ -69,7 +69,7 @@ export function registerCollectionsCommand(program: Command): void {
     const cmd = program
         .command('collections')
         .alias('collection')
-        .description('Form stores — list, inspect and create the collections that lead-capture forms write to.')
+        .description('Form stores — list, inspect, create and delete the collections that lead-capture forms write to.')
         .addHelpText('after', `
 A <form> stores submissions in a collection, referenced by the collection's
 CODE. Two ways to get one:
@@ -140,6 +140,36 @@ lets you author correct markup in a single pass.`);
             }
             log.info(`${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`);
             for (const e of entries) log.raw(JSON.stringify(e) + '\n');
+        });
+
+    cmd.command('delete <codeOrId>')
+        .alias('rm')
+        .description('Delete a collection (and its form store) from the brand. Asks first; --force to skip.')
+        .option('--force', 'Delete without asking. Required when not run in a terminal.')
+        .option('--json', 'Print the result as JSON.')
+        .addHelpText('after', `
+A form or a backend script that still names the code stops storing: check the
+brand's pages, components and scripts for the code before deleting. Entries go
+with the collection.
+
+  $ ef collections delete nrglvq            asks, shows the entry count
+  $ ef collections delete nrglvq --force    scripts and agents`)
+        .action(async (ref: string, opts: { force?: boolean; json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const col = await api.getCollection(rt.config.brandId, ref);
+            const label = `"${col.name}" (${col.code}, #${col.id})${col.total_entries ? `, ${col.total_entries} entr${col.total_entries === 1 ? 'y' : 'ies'}` : ''}`;
+            if (!opts.force) {
+                if (!process.stdin.isTTY) {
+                    throw new CliError(ExitCode.Validation, `Not deleting collection ${label} without --force (no terminal to confirm in).`);
+                }
+                const { confirm } = await import('../utils/prompt');
+                const ok = await confirm(`Delete collection ${label}?`, false);
+                if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');
+            }
+            const id = await api.deleteCollection(rt.config.brandId, col.id ?? ref);
+            if (opts.json) { log.json({ ok: true, deleted: { id, code: col.code, name: col.name, entries: col.total_entries ?? null } }); return; }
+            log.success(`Deleted collection ${label}.`);
         });
 
     cmd.command('create <name>')

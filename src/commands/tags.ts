@@ -142,7 +142,8 @@ function sameName(a: string, b: string): boolean {
  * would attach the wrong colour and be invisible until someone looked.
  */
 export function findTag(tags: BrandTag[], ref: string): BrandTag | null {
-    const asId = /^\d+$/.test(ref.trim()) ? parseInt(ref.trim(), 10) : null;
+    // "672" and "#672" (how the dashboard and reports write an id) are both ids.
+    const asId = /^#?\d+$/.test(ref.trim()) ? parseInt(ref.trim().replace(/^#/, ''), 10) : null;
     if (asId != null) return tags.find((t) => t.id === asId) ?? null;
 
     const matches = tags.filter((t) => sameName(t.name, ref));
@@ -354,7 +355,7 @@ VISIBLE, so those are the only two kinds this command tags.
   $ ef tags attach component:hero-banner q1-test    tag a component
   $ ef tags show pricing                            what's on one record
   $ ef tags detach pricing black-friday             take it off that record
-  $ ef tags delete black-friday                     remove the tag from the BRAND
+  $ ef tags delete black-friday --force             remove the tag from the BRAND
   $ ef list pages --tag black-friday                every page carrying it
 
 TARGETS. A bare argument is a page slug (or page id). Prefix with
@@ -439,14 +440,18 @@ and go through the same code path.`);
 
     cmd.command('delete <nameOrId>')
         .description('Delete a tag from the BRAND, stripping it from every record. To take it off one record, use "ef tags detach".')
-        .option('--force', 'Skip the confirmation prompt.')
+        .option('--force', 'Delete without asking. Required when not run in a terminal.')
         .option('--json', 'Print the result as JSON.')
         .action(async (ref: string, opts: { force?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const tag = requireTag(findTag(await api.listTags(rt.config.brandId), ref), ref);
 
-            if (!opts.force && process.stdin.isTTY) {
+            if (!opts.force) {
+                // Brand-wide and not undoable: a script or agent has to say --force.
+                if (!process.stdin.isTTY) {
+                    throw new CliError(ExitCode.Validation, `Not deleting tag "${tag.name}" (#${tag.id}) without --force (no terminal to confirm in).`);
+                }
                 const { confirm } = await import('../utils/prompt');
                 const ok = await confirm(`Delete tag "${tag.name}" (#${tag.id}) from the whole brand?`, false);
                 if (!ok) throw new CliError(ExitCode.Validation, 'Aborted.');

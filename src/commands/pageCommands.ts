@@ -171,6 +171,15 @@ Listing a page only has an effect once the brand serves the files — see
   # Flag a post-purchase upsell page
   $ ef pages settings upsell-1 --upsell-page
 
+  # Members-only page: visitors without a customer session go to the login page
+  $ ef pages settings account --requires-login on --redirect-url /account/login
+  $ ef pages settings account --requires-login off
+
+Requires Login lets in a visitor with a customer session (a purchase, or the
+members login form). Everyone else is sent to --redirect-url, or gets the 404
+page when none is set. Use it instead of a redirect() in a backend script.
+"--redirect-url none" clears the URL.
+
 Only a checkout page can be a funnel's checkout: after marking it, run
 "ef funnels settings <funnel> --checkout-page order-form". A brand without
 checkouts enabled is refused with exit code 2 and the server's message.
@@ -198,13 +207,15 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--no-checkout-page', 'Unmark it as a checkout page.')
         .option('--upsell-page', 'Mark this page as an upsell page (is_upsell_page).')
         .option('--no-upsell-page', 'Unmark it as an upsell page.')
+        .option('--requires-login <on|off>', 'Members-only page (Requires Login): on | off.')
+        .option('--redirect-url <path>', 'Where a visitor without a customer session is sent ("/account/login"); "none" clears it.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
             title?: string; slug?: string; domain?: string; domainId?: number; folder?: string; folderId?: number;
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
             seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
-            file?: string; json?: boolean;
+            requiresLogin?: string; redirectUrl?: string; file?: string; json?: boolean;
         }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
@@ -252,6 +263,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.sitemap !== undefined) flags.include_in_sitemap = opts.sitemap;
             if (opts.checkoutPage !== undefined) flags.is_checkout_page = opts.checkoutPage;
             if (opts.upsellPage !== undefined) flags.is_upsell_page = opts.upsellPage;
+            Object.assign(flags, loginSettingFlags(opts.requiresLogin, opts.redirectUrl));
 
             const payload: Record<string, unknown> = { ...base, ...flags };
             if (Object.keys(payload).length === 0) {
@@ -270,6 +282,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
                 log.json({
                     ok: true, page: updated, renamed, domain: domainLabel, homepage: asHomepage ?? null, sitemap: opts.sitemap ?? null,
                     checkoutPage: opts.checkoutPage ?? null, upsellPage: opts.upsellPage ?? null,
+                    requiresLogin: flags.requires_login ?? null, redirectUrl: flags.redirect_url,
                 });
                 return;
             }
@@ -292,6 +305,13 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             }
             if (opts.upsellPage !== undefined) {
                 log.detail(opts.upsellPage ? '  Marked as an upsell page.' : '  No longer an upsell page.');
+            }
+            if (flags.requires_login !== undefined || flags.redirect_url !== undefined) {
+                const on = flags.requires_login ?? Boolean(updated.requires_login ?? page.requires_login);
+                const target = flags.redirect_url !== undefined ? flags.redirect_url : (updated.redirect_url ?? page.redirect_url ?? null);
+                log.detail(on
+                    ? `  Requires Login: on. Visitors without a customer session go to ${target ? String(target) : 'the 404 page (no Redirect URL set)'}.`
+                    : '  Requires Login: off. Anyone can open the page.');
             }
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });
@@ -357,6 +377,27 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.json) { log.json({ ok: true, deleted: { id: page.id, slug: page.slug }, localFileRemoved: fileRemoved }); return; }
             log.success(`Deleted page #${page.id}.${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
+}
+
+/**
+ * `--requires-login on|off` + `--redirect-url <path|none>` as page fields. Throws on a value that
+ * is not clearly on or off, so a typo never leaves a members page open.
+ */
+export function loginSettingFlags(requiresLogin?: string, redirectUrl?: string): { requires_login?: boolean; redirect_url?: string | null } {
+    const out: { requires_login?: boolean; redirect_url?: string | null } = {};
+    if (requiresLogin !== undefined) {
+        const v = requiresLogin.trim().toLowerCase();
+        if (['on', 'true', 'yes', '1'].includes(v)) out.requires_login = true;
+        else if (['off', 'false', 'no', '0'].includes(v)) out.requires_login = false;
+        else throw new CliError(ExitCode.Validation, `--requires-login takes on or off (got "${requiresLogin}").`);
+    }
+    if (redirectUrl !== undefined) {
+        const v = redirectUrl.trim();
+        if (v === '' || /^(none|null|-)$/i.test(v)) out.redirect_url = null;
+        else if (/^(\/|https?:\/\/)/i.test(v)) out.redirect_url = v;
+        else throw new CliError(ExitCode.Validation, `--redirect-url must be a path ("/account/login") or an http(s) URL (got "${redirectUrl}"). Use "none" to clear it.`);
+    }
+    return out;
 }
 
 function humanize(slug: string): string {

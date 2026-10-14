@@ -242,6 +242,15 @@ invent directives.
   \`{{ var.offer_name }}\`); \`request.is_mobile\`/\`is_tablet\`/\`is_customer\`/\`referer\`/\`merchant_code\`;
   \`query.*\` (URL params); \`page\`; \`orders\` (customer orders, newest first; empty
   when no customer).
+- **Limits that print wrong values without an error:** expressions evaluate \`+\`
+  and \`-\` only (\`*\`/\`/\` don't: use \`pricePerUnit\`/\`savings\`, a frontend \`[[ ]]\`, or a
+  short script); a filter argument is always a literal (\`default:var.x\` prints
+  \`var.x\`: use \`@set(x = var.x)\` + \`@if\`); component args named \`mode\` print
+  literally and \`brand\` is the engine's own object (use \`view\`, \`brand_label\`);
+  the template's \`customer\` has no \`total\` or card fields and there is no
+  top-level \`is_customer\` (gate on \`customer.email\` or \`request.is_customer\`); a
+  \`@container\` rule on its own line in a component \`<style>\` made every later \`{{ }}\`
+  print raw. Docs: <https://docs.elasticfunnels.io/backend-template-engine/variables-and-filters>
 
 ### Frontend (browser, reactive)
 
@@ -265,7 +274,90 @@ package pickers and conditional blocks belong in the frontend engine above (stat
 \`@click\`, \`<template-if>\`, \`data-template-value\`) and native HTML (\`<details name>\`, a
 \`<form>\` posting to a collection). Hand-written DOM \`<script>\` is the last resort, only for what
 the engine and the docs can't do. A form posting to a collection is submitted by the runtime: never
-add your own \`fetch()\` for it (it would post twice).
+add your own \`fetch()\` for it (it would post twice). Anything computed from the cart or checkout
+(progress bars, "spend $X more", totals) is a binding, with pure helpers on
+\`window.efScope.<ns> = { … }\` defined BEFORE the markup: a \`<script>\` that paints the DOM runs once
+and misses the cart's first load.
+
+**Frontend traps** (each broke a live page; docs:
+<https://docs.elasticfunnels.io/frontend-template-engine/limitations-pitfalls>):
+
+| Don't | Do | Why |
+| --- | --- | --- |
+| \`[[ ]]\` inside an attribute (\`class\`, \`style\`, \`src\`, \`value\`) | \`:class\` (merges with the static class), \`:style\`, \`:src\`, \`:value\`, \`data-ef-text\` | the server cloak hides the PREVIOUS element until JS runs (a whole quiz form vanished) |
+| \`;\` anywhere in an expression (\`[[ ]]\`, \`:attr\`, \`data-condition\`), even in a string | a helper on the scope object (\`@click\` may hold statements) | the expression returns \`undefined\` (answers posted empty) |
+| a loop over a method call (\`g in q.list()\`) | loop over a scope path your code assigns (\`g in q.tiles\`) | rendered once, never refreshed |
+| \`ef-value\`/\`data-template-value\` plus \`@click\` on a radio or checkbox | set state in \`@click\` (\`q.a = $el.value\`), show it with \`:checked\` | the box ends unticked, the answer never reaches scope |
+| \`<details>\` with \`display: contents\` | a plain \`<details name="grp">\` (exclusive accordion) | accordions stop opening |
+
+Steppers (quizzes, surveys): one question per screen, state in \`efScope\`, answer tiles advance on
+\`@click\`, a root \`:class\` so that without JS every step shows stacked, posted once.
+
+## Building pages: a working site, not a mock-up
+
+Every page you build or clone must work for a real visitor: every link and
+button does something real, the cart is the platform cart, the account is the
+platform members area.
+
+- **Mirror the function, not just the UI.** A control copied from an original
+  must do here what it did there, or it goes: no chips that select nothing, no
+  "5 replies" with no thread, no counter that never moves, no "Show more" that
+  jumps elsewhere, no "Write a review" without a review system. A choice the
+  catalog doesn't have is stated as text, not offered as a control. A button's
+  label says what it does ("Add to cart" adds to the cart; "trial" means free).
+- **No dead links:** no \`href="#"\`, empty \`href\`, \`javascript:void\`,
+  \`default:'#'\`, icons or \`<button>\`s that go nowhere. A logo links to the entry
+  page; a menu is a \`<button @click>\` opening real pages, or it isn't there; a
+  link the brand can't back (careers, refer a friend) shows only when its
+  variable is set. An in-page anchor needs its target (\`#offer\` → \`id="offer"\`).
+  A link to a real but wrong place is still dead: click each.
+- **Upsells and downsells:** accept and decline both go somewhere real
+  (\`[UPSELL=CODE]\`/\`upsell()\`, \`[UPSELL_DECLINE]\`/\`decline()\`), with a purchase and a
+  decline branch in the funnel graph for every step; a subscription upsell says
+  so in its button. Check with \`ef funnels debug-flow\` and by clicking both.
+- **Cart from the platform:** \`cartItems\`/\`efCart.*\` scope, live count
+  \`<span data-ef-text="efCart.count">0</span>\`, \`data-ef-add-to-cart\` +
+  \`data-product-code\`, \`data-cart-qty-minus|plus|remove\`, checkout via
+  \`data-ef-cart-checkout\`. Never a hand-built cart in localStorage, and no cart
+  icon on a site without a cart. A cart add-on is its own product code, never
+  one also listed as a bump. A cart checkout has no funnel step, so the cart
+  page carries \`fid/fnid/pfnid/pg\` onto its checkout link or the buyer lands on
+  \`/thank-you\`. Docs: <https://docs.elasticfunnels.io/pages/cart>
+- **Modal or page: follow the original.** An interstitial that appears without
+  a URL change (a decline offer, an extra-pairs offer, a size guide) is a modal
+  on that page; anything the original reaches by changing the URL is its own
+  page. Don't invent sections, widgets or controls the original doesn't have.
+- **POST endpoint pages** (a page that only answers a form or \`fetch\`: survey
+  store, plan-change handler) get a page title ending "endpoint", redirect a GET
+  to their human page, and are never linked, listed or screenshotted.
+- **Titles:** the page record's title is human ("Collagen PDP: Checkout", set
+  with \`ef pages settings <slug> --title\`), never the slug. Every page renders
+  a \`<title>\` and \`<meta name="description">\` in its own (or its layout's)
+  \`<head>\`, names as variables with defaults: the SEO title setting is not
+  printed on code-editor pages.
+- **One source for the support e-mail:** \`brand.support_email\` (Brand
+  Settings), then a brand variable via \`@set\` + \`@if\`; never a hard-wired address.
+- **Layout.** Two-column pages (product, checkout, thank-you) are ONE grid with
+  \`minmax(0, …)\` tracks (never bare \`1fr\`: it grows to its min-content) and
+  \`min-width: 0\` on the columns, aligned tops, never wider than the viewport at
+  any width from 320 to 1920, the media side \`position: sticky\` on desktop, and
+  no column ending in a block of empty space. Header grids:
+  \`minmax(0, 1fr) auto minmax(0, 1fr)\`.
+- **CSS specificity.** A page-level reset never out-ranks a component class
+  (\`.page h2 { margin: 0 }\` beats \`.step\` and glues headings together): reset
+  bare elements only where no class sets that property, and scope generic rules
+  like \`.card img\` to direct children (\`.card > img\`).
+- **Images.** Small faces (avatars, reviewer and comment photos, about 96 px or
+  less) are randomuser.me portraits
+  (\`https://randomuser.me/api/portraits/{women|men}/{0-99}.jpg\`) matching the
+  name and audience, a different one per person; never grey silhouettes or
+  initials. Named experts, doctors and founders get no face: an invented one is
+  a fake endorsement. Logos are typeset wordmarks (a real font, as SVG/PNG),
+  never AI-generated and never another brand's logo. Content images: \`srcset\`
+  on the CDN's \`?width=\`, \`width\`/\`height\`, lazy below the fold.
+- **No text walls.** Each section opens with one short line; specifics go in a
+  list or table; paragraphs are 1-3 sentences; a sentence holding 3+ numbers
+  becomes a table row.
 
 ## Forms → collections
 
@@ -325,6 +417,28 @@ as CRM fields. So form submissions are CRM records: readable with
 functions above. You do **not** need a backend script to capture a lead —
 the form writes to CRM by itself.
 
+- **One collection field per question.** A posted key that is not a field is
+  dropped silently (200 OK), and fields can't be added from the CLI: a new
+  question means a new collection.
+- **Consent starts unticked.** A marketing opt-in is never pre-ticked; order
+  e-mails go out either way.
+
+### Quizzes, surveys and data forms: CRM with a reference
+
+A plain collection post keys the entry to the browser session only. Anything that
+collects answers about a person (quiz, survey, profile data) posts JSON once to
+an endpoint page (see "Building pages") whose \`<script scope="backend">\` checks
+\`POST\`, validates \`request.body\` with \`Schema\`, writes
+\`setCrmFields({ slug: '<entity slug>', fields, referenceType, referenceId })\`
+and answers \`response.json(...)\`. Reference: the order when there is one
+(post-purchase survey); an anonymous pre-purchase quiz uses
+\`referenceType: 'quiz_visitor'\` + a session UUID, then \`reassignCrmReference\`
+after login. JSON only, 64 KB body. Contact, newsletter and other simple forms
+keep the plain \`<form>\` + collection. Verify: submit once, then
+\`ef crm entries <entity>\` shows the entry WITH its reference. Docs:
+<https://docs.elasticfunnels.io/backend-scripts/validation>,
+<https://docs.elasticfunnels.io/crm/post-workflow>
+
 ### Verify it actually stores
 
 Never assume a form works because the page renders — a mis-wired form returns
@@ -372,6 +486,27 @@ checkout page. Upsells never render a fresh checkout page — they keep the
 merchant's. So a funnel setting that "does nothing" usually means a
 \`set_checkout_page\` node overrides it. Checkout pages are not funnel-graph
 steps: never report one as unwired.
+
+**Building a checkout** (docs:
+<https://docs.elasticfunnels.io/checkouts/package-selector>,
+<https://docs.elasticfunnels.io/frontend-template-engine/checkout>):
+
+- **Nothing that charges is pre-selected**: one-time is the default row,
+  subscribe-and-save sits beside it with price, cadence and "cancel anytime";
+  bumps start unticked; a recurring row or bump carries a consent line saying
+  how to cancel for real. Pre-ticked recurring charges are a negative-option
+  risk (FTC, card networks, chargebacks) for whoever runs the page.
+- **Packages switch in place**, never a reload per click: a
+  \`data-ef-package-group\` wrapper, one \`data-ef-package="CODE"\` row each, price
+  data in \`data-ef-package-*\`, selected style on \`[data-selected="true"]\` (set
+  from \`?p=\` on first paint), the buy link kept in \`href\` as the no-JS fallback.
+  A script that sets \`checkout_product\` also sets \`checkout_packages\`, or the
+  submit charges the default product. Anything else that depends on the package
+  listens to \`checkout:packageChanged\`.
+- **A checkout preview always carries \`?p=<product>\`** (without it the total
+  reads $0.00); mark the default row \`data-ef-package-default\`.
+- Labels for optional widgets (express checkout, wallets) sit inside the
+  widget's condition, so no heading shows with nothing under it.
 
 ## Tags — label what you create, as you create it
 
@@ -461,6 +596,13 @@ never write or copy it).
   \`asset('/main.css')\`, CRM functions.
 - **HTTP:** can call external APIs. **Cross-file imports:** a script can import
   other backend-script modules.
+- **Only for what the template can't express.** Short, plain ES5 (\`var\`, plain
+  \`for\`), no debug output: every failing request e-mails the brand owner a
+  "Script Rule Error Alert", so load the page once after each push. Call only
+  functions the data-functions page lists: \`getVariable()\` shows up in an
+  example but is not in the sandbox (read \`request.query\`, \`request.body\`,
+  \`session.get()\`). \`formatPrice()\` keeps no fixed decimals: \`toFixed(2)\`, or
+  the template's \`currency\` filter.
 - Manage with the CLI: \`ef scripts list | pull <codeOrId> | push <pathOrCode> | create <code> | delete <codeOrId>\`.
 - Docs: https://docs.elasticfunnels.io/backend-scripts/overview
 
@@ -501,6 +643,18 @@ per main product says how many the buyer gets: exactly N (\`--pick\`), up to N
 - **Never** fake bonuses as $0 order bumps hidden with CSS, and never store a
   gift address in the CRM. Bonuses are not bumps: a code must not be in both
   \`checkout_settings.bumps\` and the bonus options.
+- **Free gifts are real \`bonus\` products** attached per package, so the offer
+  lives in the catalog only, and **every gift display reads it** from product or
+  order data: product page and package grid from each package's bonuses
+  (\`item.bonuses\`), checkout summary from \`checkout.bonus_options\`, cart from
+  \`item.bonuses\`, thank-you and account from the order's bonus lines
+  (\`getOrder(...).products\` where \`is_bonus\`). Never hand-typed gift tiles or a
+  CSS unlock table. Session orders hold no bonus lines yet: until the order is
+  indexed (about a minute), fall back to the ordered package's catalog bonuses,
+  never \`getBonusProducts()\` (every gift that e-mail ever got). Give every
+  product and gift an image and a short checkout title
+  (\`ef products update <id> --image <file> --checkout-title "..."\`).
+  Docs: <https://docs.elasticfunnels.io/products/product-management>
 - **Template contract** (checkout templates are custom): scope
   \`checkout.bonus_rule\` \`{min,max,mode,main_code}\`, \`checkout.bonus_options[]\`
   \`{code,name,image,retail_price,selected,locked}\`, \`checkout.bonus_selected\`,
@@ -517,6 +671,32 @@ per main product says how many the buyer gets: exactly N (\`--pick\`), up to N
   --pick <n>|--up-to <n>|--all [--default first_n|all] [--gift on|off]
   [--gift-shipping same_as_main|free|fixed] [--gift-price X]\` (\`--clear\` deletes).
   Use the \`ef-bonuses-gifts\` skill for a full setup.
+
+## Thank-you pages and the members area
+
+- **Thank-you pages read the real order**: \`getSessionOrders()\` (this purchase:
+  main product, bumps, cart lines, every accepted upsell, complete on the first
+  load) and \`getOrder(...)\` for its lines. Never hard-coded products, never
+  placeholder copy ("your e-mail shows here"), never \`getOrders()\` (whole
+  history) or \`customer.order_ids\` (misses cart lines). The only \`@else\` is the
+  empty state. Line totals exclude tax and shipping. Link to the members area
+  ("View your order"): the buyer is signed in after checkout. Docs:
+  <https://docs.elasticfunnels.io/forms/thank-you-pages>,
+  <https://docs.elasticfunnels.io/members-area/order-details>
+- **Customer-only pages use the page setting Requires Login + Redirect URL**,
+  never a hand-written backend redirect: \`ef pages settings <slug> --file req.json\`
+  with \`{"requires_login": true, "redirect_url": "/account/login"}\`. Check it:
+  an anonymous \`curl -I\` gets a 302 to the login. Docs:
+  <https://docs.elasticfunnels.io/members-area/login>
+- **Subscriptions** (skip, pause, resume, cancel) use the template functions
+  \`skipSubscription\`, \`pauseSubscription\`, \`resumeSubscription\`,
+  \`cancelSubscription\` from an endpoint page; they work on every gateway, while
+  \`window.ef.sub\` loads only for some. A consent line says "cancel any time in
+  your account" when the account can cancel. Profile data is read-only to
+  customers: show it, link to support for changes. Docs:
+  <https://docs.elasticfunnels.io/backend-template-engine/subscriptions>
+- **Verify with a fresh test customer** on the first load after checkout, not a
+  long-lived QA account whose old orders and gifts hide an empty result.
 
 ## Working with the \`ef\` CLI
 
@@ -766,6 +946,26 @@ export async function applyAgentGuidance(
 }
 
 /**
+ * True when a block stamped `stamped` should be rewritten by CLI `current`.
+ * Unversioned blocks (<= 0.14.0) count as older. A NEWER stamp is left alone:
+ * a project regenerated by a newer CLI (another machine, an unpublished build)
+ * must not be rolled back by an older global install on its next pull.
+ */
+export function isOlderGuidance(stamped: string | null, current: string): boolean {
+    if (!stamped) return true;
+    // 0.0.0 = the running version is unknown (package.json not found): fall
+    // back to "differs means stale" rather than freezing the block.
+    if (current === '0.0.0') return stamped !== current;
+    const parse = (v: string): number[] => v.split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+    const a = parse(stamped);
+    const b = parse(current);
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] < b[i];
+    }
+    return false;
+}
+
+/**
  * Bring a project's guidance blocks up to the running CLI's version.
  *
  * The guidance documents how *this* CLI behaves. After `ef update`, a project
@@ -777,8 +977,8 @@ export async function applyAgentGuidance(
  * Deliberately narrow:
  *   - only rewrites files that ALREADY contain a managed block, so a project
  *     set up with `--no-claude` is never given one behind the user's back;
- *   - no-ops when the stamp already matches, making the common path two small
- *     reads and no writes;
+ *   - no-ops when the stamp already matches or is NEWER (never downgrades),
+ *     making the common path two small reads and no writes;
  *   - never throws. A read-only checkout must not fail someone's pull.
  */
 export async function refreshGuidanceIfStale(projectRoot: string): Promise<string[]> {
@@ -789,7 +989,7 @@ export async function refreshGuidanceIfStale(projectRoot: string): Promise<strin
         try {
             const existing = await fs.promises.readFile(target, 'utf8');
             if (!BEGIN_RE.test(existing) || !existing.includes(END)) continue;
-            if (stampedGuidanceVersion(existing) === current) continue;
+            if (!isOlderGuidance(stampedGuidanceVersion(existing), current)) continue;
             await applyAgentGuidance(target);
             updated.push(name);
         } catch { /* missing or unwritable — leave it alone */ }

@@ -323,6 +323,11 @@ platform members area.
   one also listed as a bump. A cart checkout has no funnel step, so the cart
   page carries \`fid/fnid/pfnid/pg\` onto its checkout link or the buyer lands on
   \`/thank-you\`. Docs: <https://docs.elasticfunnels.io/pages/cart>
+- **Cloning a funnel: always follow the original.** Sections, controls, modal vs
+  page, upsell order and branching, offer, gifts per pack, shipping and the
+  original's own timers: do what the original does. Only hard rules override it
+  (nothing that charges pre-selected, no false claims, no real brands or faces,
+  every link real).
 - **Modal or page: follow the original.** An interstitial that appears without
   a URL change (a decline offer, an extra-pairs offer, a size guide) is a modal
   on that page; anything the original reaches by changing the URL is its own

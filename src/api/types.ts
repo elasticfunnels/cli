@@ -20,6 +20,7 @@ export type { ConversionRow, ClickRow, Paginated, SessionDetails, SessionEvent }
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions } from '../models/domain';
 export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';
 export type { BrandTag, TaggableKind } from '../models/tag';
+export type { ShippingProfile, ShippingOverride } from '../models/shippingProfile';
 export { TAGGABLE, TAG_COLORS, TAG_AUTO_COLORS } from '../models/tag';
 export type { BrandSeoConfig, SeoPage, SeoExclusionReason } from '../models/seo';
 export { SEO_EXCLUSION_REASON } from '../models/seo';

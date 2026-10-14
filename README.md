@@ -208,7 +208,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | --- | --- |
 | `ef init` | Bind this folder to a brand. Browser sign-in by default; `--code` for a one-time pairing code, `--api-key`/`--brand-id` (or `$EF_API_KEY`) for unattended runs. Errors if already bound; warns + confirms if the folder isn't empty (`--force` to skip). |
 | `ef login` (alias `ef auth`) | Sign in again for this folder, replacing only the stored credential. Use after disconnecting a device or regenerating a key. `--code` / `--api-key` for headless and CI. Keeps the brand binding and every synced file. |
-| `ef collections` | The form stores behind lead-capture forms: `list`, `get <code>`, `fields`, `entries <code>`, `create <name> --field Email:email:required`. `create` prints the **code** a form's `action` must reference — the reliable way to wire a form on a page that contains `{{ }}` or `@if`, where server-side auto-wiring is skipped. |
+| `ef collections` | The form stores behind lead-capture forms: `list`, `get <code>`, `fields`, `entries <code>`, `create <name> --field Email:email:required`, `delete <code>` (asks first; `--force` in scripts, required without a terminal). `create` prints the **code** a form's `action` must reference — the reliable way to wire a form on a page that contains `{{ }}` or `@if`, where server-side auto-wiring is skipped. |
 | `ef reset` | Unbind this folder — remove `.ef/`. |
 | `ef install-highlighter` | Install the `.ef` syntax-highlighting extension into your editor (Cursor / VS Code / VSCodium). `ef init` also maps `*.ef` → `handlebars` in `.vscode/settings.json` as a no-install fallback. |
 | `ef update` | Update the CLI in place, using whichever package manager installed it (npm/pnpm/yarn/bun) and the same prefix. `--check` reports without installing; `--force` reinstalls the latest anyway. Global installs only — a project-local copy or source checkout is reported, not touched. |
@@ -243,7 +243,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages publish <slug>` | Publish the latest editor draft for a page. |
 | `ef pages preview <slug>` | Print preview + live URLs (draft revision from editor when present). |
 | `ef pages duplicate <slug>` | Duplicate a page. |
-| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. `--checkout-page`/`--no-checkout-page` marks it as a checkout page (the brand must allow checkouts; a refusal exits 2 with the server's message), `--upsell-page`/`--no-upsell-page` as an upsell page. |
+| `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. `--checkout-page`/`--no-checkout-page` marks it as a checkout page (the brand must allow checkouts; a refusal exits 2 with the server's message), `--upsell-page`/`--no-upsell-page` as an upsell page. `--requires-login on\|off` makes it members-only and `--redirect-url <path\|none>` sets where a visitor without a customer session goes. |
 | `ef pages delete <slug>` | Delete a page. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). Mints a `node_code` for any node missing one — the graph's durable identity, used by the split-test cookie, analytics grouping and funnel step URLs. Current servers mint these too; the CLI covers brands on an older release. Neither side ever rewrites an existing code, since a live test's recorded sessions are tied to it. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
@@ -274,6 +274,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef products clone <id>` | Clone a product. |
 | `ef products delete <id>` | Delete a product. |
 | `ef products bonuses <idOrCode>` | Show or edit a main product's **bonuses** (free products the buyer gets or picks): `--add CODE[:qty][:giftable]`, `--remove CODE`, `--order A,B,C`, `--giftable`/`--not-giftable CODE`, `--clear`. Bonus products need classification `bonus`. Bonuses are not bumps. |
+| `ef shipping-profiles` | Shipping rates (alias `ef shipping`): `list`, `get <nameOrId>` (rates + products using it), `create <name> --us 6.95 --intl 14.95 [--override CA:9.95]`, `update <nameOrId>` (only the rates you pass change; `--remove-override`, `--clear-overrides`, `--name`), `assign <products…> --profile <nameOrId>` or `--none`. A product with no profile, or a region with no rate, ships free. |
 | `ef products bonus-rule <idOrCode>` | Show or set the **pick rule**: `--pick <n>` (exactly n), `--up-to <n>`, `--all`; `--default first_n\|all` for when nothing is picked; `--gift on\|off` lets giftable bonuses be sent to a friend (a separate linked gift order); `--gift-shipping same_as_main\|free\|fixed` + `--gift-price`; `--clear`. Without a rule the internal checkout ignores the product's bonuses. |
 | `ef scripts create <code>` | Create a new backend script. |
 | `ef scripts pull <codeOrId>` | Pull one backend script. |
@@ -299,7 +300,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef tags show <target>` | The tags on one record; `--all` also lists the brand tags that aren't on it. |
 | `ef tags create <name>` | Create a tag without attaching it. `--color <swatch\|#rrggbb\|rgb(r,g,b)>`; left unset, the colour is derived from the name so a batch of tags is distinguishable. |
 | `ef tags update <nameOrId>` | Rename (`--name`) or recolour (`--color`) a tag. Every record carrying it follows. |
-| `ef tags delete <nameOrId>` | Delete the tag **brand-wide**, stripping it from every record. Confirms on a TTY; `--force` to skip. Not the same as `detach`. |
+| `ef tags delete <nameOrId>` | Delete the tag **brand-wide**, stripping it from every record. Confirms on a TTY; `--force` to skip, and required without a terminal. `#672` and `672` are both ids. Not the same as `detach`. |
 | `ef folders list` | The Pages list's folder tree with ids, page counts and paths (alias `ef folders ls`). |
 | `ef folders create <name>` | Create a folder; `--parent <id\|name\|path>` nests it, `--color #rrggbb`, `--exists-ok` reuses an existing sibling of that name (exit 0). |
 | `ef folders rename <folder> <newName>` | Rename a folder. A folder is an id, a unique name, or a path like `Kits/My kit`. |

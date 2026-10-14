@@ -547,7 +547,8 @@ ef tags show pricing                                      # what's on one record
   spelling right.
 - \`ef tags detach <target> <name>\` takes a tag off ONE record. \`ef tags delete
   <name>\` destroys the tag brand-wide, on every record. They are not the same
-  thing — do not reach for \`delete\` to clean up one page.
+  thing — do not reach for \`delete\` to clean up one page. \`delete\` needs
+  \`--force\` when there is no terminal to confirm in.
 - Pages and components are the only two kinds the dashboard shows tags for, so
   they are the only two \`ef tags\` targets.
 
@@ -697,8 +698,8 @@ per main product says how many the buyer gets: exactly N (\`--pick\`), up to N
   <https://docs.elasticfunnels.io/forms/thank-you-pages>,
   <https://docs.elasticfunnels.io/members-area/order-details>
 - **Customer-only pages use the page setting Requires Login + Redirect URL**,
-  never a hand-written backend redirect: \`ef pages settings <slug> --file req.json\`
-  with \`{"requires_login": true, "redirect_url": "/account/login"}\`. Check it:
+  never a hand-written backend redirect:
+  \`ef pages settings <slug> --requires-login on --redirect-url /account/login\`. Check it:
   an anonymous \`curl -I\` gets a 302 to the login. Docs:
   <https://docs.elasticfunnels.io/members-area/login>
 - **Subscriptions** (skip, pause, resume, cancel) use the template functions
@@ -756,7 +757,9 @@ Most-used, by task:
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
-| Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` |
+| Members-only page (Requires Login) | \`ef pages settings <slug> --requires-login on --redirect-url /account/login\` · \`--requires-login off\` |
+| Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` · \`ef collections delete <code> --force\` (check no page, component or script names the code first) |
+| Shipping rates (a product with no profile ships free) | \`ef shipping-profiles list\|get\` · \`ef shipping-profiles create "Single jar" --us 6.95 --intl 14.95\` · \`ef shipping-profiles assign <product-code> --profile <name\|id>\` (\`--none\` to remove) · \`update <name> --us 5.95\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
 | Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |

@@ -11,6 +11,9 @@ export interface Page {
     is_active_version?: boolean;
     html?: string | null;
     revision_id?: number | null;
+    /** Requires Login (members-only) and where a visitor without a customer session is sent. */
+    requires_login?: boolean | number | null;
+    redirect_url?: string | null;
     updated_at?: string | null;
     created_at?: string | null;
 }

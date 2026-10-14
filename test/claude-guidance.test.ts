@@ -351,6 +351,10 @@ test('guidance carries the general page-building rules', () => {
     assert.ok(s.includes('href="#"') && s.includes('javascript:void'), 'dead-link forms named');
     assert.match(s, /Modal or page: follow the original/);
     assert.match(s, /without\s+a URL change/);
+    // Popups: page events open platform popups, clicks use data-ef-popup, <dialog> only for page state.
+    assert.ok(s.includes('ef pages events') && s.includes('exit_popup') && s.includes('Never hand-written JS'), 'page-event popups go through the events graph');
+    assert.ok(s.includes('data-ef-popup="<popup name>"') && s.includes('data-ef-popup="#x"'), 'click popups use data-ef-popup');
+    assert.match(s, /by NAME \(ids change when a kit installs\)/);
     assert.match(s, /POST endpoint pages/);
     // Layout + CSS.
     assert.ok(s.includes('minmax(0,') && s.includes('min-width: 0'), 'grid tracks that can shrink');

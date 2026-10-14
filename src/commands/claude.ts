@@ -332,6 +332,21 @@ platform members area.
   a URL change (a decline offer, an extra-pairs offer, a size guide) is a modal
   on that page; anything the original reaches by changing the URL is its own
   page. Don't invent sections, widgets or controls the original doesn't have.
+  Which modal:
+  | The original shows it... | Build | Opened by |
+  |---|---|---|
+  | on a page event: exit intent, page load, a delay, scroll depth, an element in view, video time, form success, add to cart | a platform popup (\`ef popups create/push\`) | the page's events graph (\`ef pages events\`): trigger -> \`has_tag\` -> \`exit_popup\` + \`add_tag\`. Never hand-written JS, never a \`<dialog>\` |
+  | on a click, static copy the store should edit (a decline offer, "what's inside") | the same platform popup | \`data-ef-popup="<popup name>"\` on the link (\`href\` to a real fallback) |
+  | on a click, content from this page's state (the picked pack, the cart, quiz answers) | an inline \`<dialog id="x">\` | \`data-ef-popup="#x"\` / \`ef.popup.open('#x')\` |
+  (\`ef.popup\`/\`data-ef-popup\` need the runtime that ships them: check \`typeof
+  ef.popup\` on a live page; until then a \`data-ef-popup\` link just follows its href.)
+  A popup's box carries \`data-modal-window="true"\` so a click outside it closes.
+  Refer to platform popups by NAME (ids change when a kit installs); kits list
+  them in kit.json \`exit_popups\` with the page events that open them. Close
+  with \`data-ef-popup-close\`; cap with \`data-ef-popup-cap="tag:minutes"\`.
+  Builder interactions run from code via \`ef.interactions.run|add\` or
+  \`data-ef-interaction="click:track-event:Lead"\`. Docs:
+  <https://docs.elasticfunnels.io/funnels/popups-from-code>
 - **POST endpoint pages** (a page that only answers a form or \`fetch\`: survey
   store, plan-change handler) get a page title ending "endpoint", redirect a GET
   to their human page, and are never linked, listed or screenshotted.

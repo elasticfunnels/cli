@@ -1,8 +1,9 @@
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { loadRuntime } from '../utils/store';
-import { c, log } from '../utils/log';
-import { fetchPagePreviewBundle, resolvePageBySlug } from './shared';
+import { log } from '../utils/log';
+import { fetchPagePreviewBundle, printPreviewBundle, resolvePageBySlug } from './shared';
+import { isOfflineStatus, offlinePageNote } from '../sync/sync';
 
 /**
  * Top-level `ef preview` — mirrors the extension’s “Preview draft” flow
@@ -19,22 +20,22 @@ export function registerPreviewCommand(program: Command): void {
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const page = await resolvePageBySlug(api, rt.config.brandId, slugOrId);
             if (opts.live) {
-                const liveUrl = await api.getLiveUrl(rt.config.brandId, page.id).catch(() => null);
+                const offline = isOfflineStatus(page.status);
+                const liveUrl = offline ? null : await api.getLiveUrl(rt.config.brandId, page.id).catch(() => null);
                 if (opts.json) {
                     log.json({ ok: true, pageId: page.id, liveUrl });
                     return;
                 }
-                if (!liveUrl) log.info('No live URL returned for this page.');
+                if (offline) log.warn(offlinePageNote(page.slug ?? slugOrId));
+                else if (!liveUrl) log.info('No live URL returned for this page.');
                 else log.info(liveUrl);
                 return;
             }
-            const { previewUrl, liveUrl, revisionId } = await fetchPagePreviewBundle(api, rt.config.brandId, page.id);
+            const bundle = await fetchPagePreviewBundle(api, rt.config.brandId, page.id);
             if (opts.json) {
-                log.json({ ok: true, pageId: page.id, previewUrl, liveUrl, revisionId });
+                log.json({ ok: true, pageId: page.id, ...bundle });
                 return;
             }
-            const label = revisionId != null ? `${c.bold('Preview (draft)')}` : `${c.bold('Preview')}`;
-            log.info(`${label} ${previewUrl}`);
-            if (liveUrl) log.info(`${c.bold('Live')}           ${liveUrl}`);
+            printPreviewBundle(page.slug ?? slugOrId, bundle);
         });
 }

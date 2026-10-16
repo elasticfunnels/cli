@@ -39,6 +39,49 @@ export function sha256(text: string): string {
     return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+// ── Path safety ──────────────────────────────────────────────────────────
+
+/**
+ * Refuse a project-relative path whose any existing component is a symbolic
+ * link, or that resolves outside the project. A committed `CLAUDE.md` linked
+ * to `~/.aws/credentials` would otherwise be uploaded by a teammate's push,
+ * and a linked `.claude/rules` would let a pull write anywhere on the disk.
+ * Returns the reason, or null when the path is safe.
+ */
+export async function unsafeAgentPath(projectRoot: string, rel: string): Promise<string | null> {
+    const parts = rel.split('/').filter(Boolean);
+    let cur = projectRoot;
+    let deepest = projectRoot;
+    for (const part of parts) {
+        cur = path.join(cur, part);
+        let st: fs.Stats;
+        try {
+            st = await fs.promises.lstat(cur);
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') break;
+            throw err;
+        }
+        const relCur = path.relative(projectRoot, cur).split(path.sep).join('/');
+        if (st.isSymbolicLink()) return `${relCur} is a symbolic link`;
+        if (relCur !== rel && !st.isDirectory()) return `${relCur} is not a directory`;
+        deepest = cur;
+    }
+    const rootReal = await fs.promises.realpath(projectRoot);
+    const real = await fs.promises.realpath(deepest);
+    if (real !== rootReal && !real.startsWith(rootReal + path.sep)) return `${rel} resolves outside the project`;
+    return null;
+}
+
+/** True when `rel` is a refused path or lies under a refused directory. */
+export function isRefused(refused: string[], rel: string): boolean {
+    return refused.some((r) => rel === r || rel.startsWith(`${r}/`));
+}
+
+async function assertSafe(projectRoot: string, rel: string): Promise<void> {
+    const why = await unsafeAgentPath(projectRoot, rel);
+    if (why) throw new CliError(ExitCode.Validation, `Refusing ${rel}: ${why}.`);
+}
+
 // ── CLAUDE.md ⇄ synced text ──────────────────────────────────────────────
 
 /** What gets synced for a file's on-disk text. Null = nothing worth syncing. */
@@ -99,6 +142,7 @@ interface StateShape { version: 1; files: Record<string, Baseline> }
 
 export async function readBaselines(projectRoot: string): Promise<Record<string, Baseline>> {
     try {
+        if (await unsafeAgentPath(projectRoot, '.ef/agent-files.json')) return {};
         const parsed = JSON.parse(await fs.promises.readFile(path.join(projectRoot, STATE_FILE), 'utf8')) as StateShape;
         return parsed && typeof parsed.files === 'object' && parsed.files ? parsed.files : {};
     } catch {
@@ -109,6 +153,7 @@ export async function readBaselines(projectRoot: string): Promise<Record<string,
 async function writeBaselines(projectRoot: string, files: Record<string, Baseline>): Promise<void> {
     const sorted: Record<string, Baseline> = {};
     for (const k of Object.keys(files).sort()) sorted[k] = files[k];
+    await assertSafe(projectRoot, '.ef/agent-files.json');
     await writeFileAtomic(path.join(projectRoot, STATE_FILE), JSON.stringify({ version: 1, files: sorted }, null, 2) + '\n');
 }
 
@@ -120,13 +165,20 @@ async function readText(abs: string): Promise<string> {
  * Local agent files as synced text, keyed by project-relative POSIX path.
  * `ignored` lists files under .claude/rules/ the server would refuse (wrong
  * extension, odd names) so a caller can say why they did not sync.
+ * `refused` lists symbolic links (a file, or `.claude` / `.claude/rules`
+ * itself): never read, never written, never deleted on the brand.
  */
-export async function readLocalAgentFiles(projectRoot: string): Promise<{ files: Map<string, string>; ignored: string[] }> {
+export async function readLocalAgentFiles(projectRoot: string): Promise<{ files: Map<string, string>; ignored: string[]; refused: string[] }> {
     const files = new Map<string, string>();
     const ignored: string[] = [];
+    const refused: string[] = [];
 
-    const claude = toSynced(CLAUDE_MD, await readText(path.join(projectRoot, CLAUDE_MD)));
-    if (claude !== null) files.set(CLAUDE_MD, claude);
+    if (await unsafeAgentPath(projectRoot, CLAUDE_MD)) {
+        refused.push(CLAUDE_MD);
+    } else {
+        const claude = toSynced(CLAUDE_MD, await readText(path.join(projectRoot, CLAUDE_MD)));
+        if (claude !== null) files.set(CLAUDE_MD, claude);
+    }
 
     const walk = async (dirAbs: string): Promise<void> => {
         let entries: fs.Dirent[] = [];
@@ -134,25 +186,48 @@ export async function readLocalAgentFiles(projectRoot: string): Promise<{ files:
         for (const e of entries) {
             if (e.name === '.DS_Store') continue;
             const abs = path.join(dirAbs, e.name);
+            const rel = path.relative(projectRoot, abs).split(path.sep).join('/');
+            // Dirent types come from lstat: a link is neither a file nor a directory.
+            if (e.isSymbolicLink()) { refused.push(rel); continue; }
             if (e.isDirectory()) { await walk(abs); continue; }
             if (!e.isFile()) continue;
             if (/\.tmp-\d+-\d+(?:-[a-z0-9]+)?$/.test(e.name)) continue;
-            const rel = path.relative(projectRoot, abs).split(path.sep).join('/');
             if (!AGENT_PATH_RE.test(rel)) { ignored.push(rel); continue; }
             const synced = toSynced(rel, await readText(abs));
             if (synced !== null) files.set(rel, synced);
         }
     };
-    await walk(path.join(projectRoot, RULES_DIR));
-    return { files, ignored: ignored.sort() };
+    const rulesRel = RULES_DIR.split(path.sep).join('/');
+    const rulesWhy = await unsafeAgentPath(projectRoot, rulesRel);
+    if (rulesWhy) {
+        // `.claude` or `.claude/rules` is a link: refuse everything under it.
+        refused.push(rulesWhy.startsWith('.claude ') ? '.claude' : rulesRel);
+    } else {
+        await walk(path.join(projectRoot, RULES_DIR));
+    }
+    return { files, ignored: ignored.sort(), refused: refused.sort() };
+}
+
+/** On-disk text a write of `synced` would leave at `rel`. */
+async function nextDiskText(projectRoot: string, rel: string, synced: string, guidance: boolean): Promise<string> {
+    return fromSynced(rel, synced, await readText(path.join(projectRoot, ...rel.split('/'))), guidance);
 }
 
 async function writeLocal(projectRoot: string, rel: string, synced: string, guidance: boolean): Promise<void> {
+    await assertSafe(projectRoot, rel);
     const abs = path.join(projectRoot, ...rel.split('/'));
-    await writeFileAtomic(abs, fromSynced(rel, synced, await readText(abs), guidance));
+    await writeFileAtomic(abs, await nextDiskText(projectRoot, rel, synced, guidance));
+}
+
+/** On-disk text a delete would leave at `rel` (null = file removed). */
+async function afterDelete(projectRoot: string, rel: string): Promise<string | null> {
+    if (rel !== CLAUDE_MD) return null;
+    const block = splitGuidanceBlock(await readText(path.join(projectRoot, CLAUDE_MD)))?.block;
+    return block ? `${block}\n` : null;
 }
 
 async function deleteLocal(projectRoot: string, rel: string): Promise<void> {
+    await assertSafe(projectRoot, rel);
     const abs = path.join(projectRoot, ...rel.split('/'));
     if (rel === CLAUDE_MD) {
         // Drop the user's text, keep this machine's ef block.
@@ -164,13 +239,26 @@ async function deleteLocal(projectRoot: string, rel: string): Promise<void> {
 
 async function backupLocal(projectRoot: string, rel: string): Promise<string> {
     const abs = path.join(projectRoot, ...rel.split('/'));
+    await assertSafe(projectRoot, rel);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const dest = path.join(projectRoot, BACKUP_DIR, `${rel}.${stamp}`);
+    const destRel = `${BACKUP_DIR.split(path.sep).join('/')}/${rel}.${stamp}`;
+    await assertSafe(projectRoot, destRel);
+    const dest = path.join(projectRoot, ...destRel.split('/'));
     await writeFileAtomic(dest, await readText(abs));
     return path.relative(projectRoot, dest);
 }
 
 // ── Pull / push ──────────────────────────────────────────────────────────
+
+/** One change a pull would make on disk, for review before it is written. */
+export interface AgentPullChange {
+    path: string;
+    action: 'write' | 'delete' | 'theirs' | 'merge' | 'merge-markers';
+    /** On-disk text now (null = absent). */
+    before: string | null;
+    /** On-disk text after the change (null = file removed). */
+    after: string | null;
+}
 
 export interface AgentSyncOptions {
     /** 3-way merge both-changed files (markers on overlap) instead of keeping local. */
@@ -179,6 +267,13 @@ export interface AgentSyncOptions {
     theirs?: boolean;
     /** Whether this project writes the ef guidance block (config.aiGuidance !== false). */
     guidance?: boolean;
+    /**
+     * Agent files are instructions a coding agent obeys, so a pull never
+     * writes them unasked. Called with every pending change (from one server
+     * read); only a `true` answer writes them. Absent = write nothing and
+     * return the changes in `pending` (what `ef pull` / `ef init` do).
+     */
+    confirm?: (changes: AgentPullChange[]) => Promise<boolean>;
 }
 
 export interface AgentPullResult {
@@ -194,66 +289,106 @@ export interface AgentPullResult {
     conflicted: string[];
     backups: string[];
     ignored: string[];
+    /** Symbolic links (or paths under one): skipped, never followed. */
+    refused: string[];
+    /** Changes found but not written (no confirm, or declined). */
+    pending: AgentPullChange[];
 }
 
 export async function pullAgentFiles(api: ApiClient, brandId: number, projectRoot: string, opts: AgentSyncOptions = {}): Promise<AgentPullResult> {
-    const result: AgentPullResult = { written: [], deleted: [], kept: [], merged: [], conflicted: [], backups: [], ignored: [] };
+    const result: AgentPullResult = { written: [], deleted: [], kept: [], merged: [], conflicted: [], backups: [], ignored: [], refused: [], pending: [] };
     const server = await api.listAgentFiles(brandId);
     if (server === null) return { ...result, unsupported: true };
 
     const guidance = opts.guidance !== false;
     const serverMap = new Map<string, AgentFile>(server.map((f) => [f.path, f]));
-    const { files: local, ignored } = await readLocalAgentFiles(projectRoot);
+    const { files: local, ignored, refused } = await readLocalAgentFiles(projectRoot);
     result.ignored = ignored;
     const baselines = await readBaselines(projectRoot);
     const paths = new Set([...local.keys(), ...serverMap.keys(), ...Object.keys(baselines)]);
+    const diskOf = async (rel: string): Promise<string | null> => {
+        try { return await fs.promises.readFile(path.join(projectRoot, ...rel.split('/')), 'utf8'); } catch { return null; }
+    };
+    const setBase = (rel: string, content: string | null): void => {
+        if (content === null) delete baselines[rel];
+        else baselines[rel] = { hash: sha256(content), content };
+    };
 
+    // Plan first: nothing below touches an agent file until confirmed.
+    interface Step { change: AgentPullChange; base: string | null; synced: string | null; markers?: boolean }
+    const steps: Step[] = [];
     for (const rel of [...paths].sort()) {
         if (!AGENT_PATH_RE.test(rel)) continue;
+        if (isRefused(refused, rel) || await unsafeAgentPath(projectRoot, rel)) { result.refused.push(rel); continue; }
         const l = local.get(rel) ?? null;
         const sf = serverMap.get(rel);
         const s = sf ? sf.content : null;
         const b = baselines[rel]?.content ?? null;
-        const setBase = (content: string | null): void => {
-            if (content === null) delete baselines[rel];
-            else baselines[rel] = { hash: sha256(content), content };
-        };
+        const before = await diskOf(rel);
 
         switch (decidePull(l, s, b)) {
             case 'same':
-                setBase(s);
+                setBase(rel, s);
                 break;
             case 'write-server':
-                await writeLocal(projectRoot, rel, s as string, guidance);
-                setBase(s);
-                result.written.push(rel);
+                steps.push({ change: { path: rel, action: 'write', before, after: await nextDiskText(projectRoot, rel, s as string, guidance) }, base: s, synced: s });
                 break;
             case 'delete-local':
-                await deleteLocal(projectRoot, rel);
-                setBase(null);
-                result.deleted.push(rel);
+                steps.push({ change: { path: rel, action: 'delete', before, after: await afterDelete(projectRoot, rel) }, base: null, synced: null });
                 break;
             case 'keep-local':
                 // Edited here, deleted there: the next push recreates it.
-                if (s === null) setBase(null);
+                if (s === null) setBase(rel, null);
                 break;
             case 'conflict': {
                 if (opts.theirs) {
-                    result.backups.push(await backupLocal(projectRoot, rel));
-                    await writeLocal(projectRoot, rel, s as string, guidance);
-                    setBase(s);
-                    result.written.push(rel);
+                    steps.push({ change: { path: rel, action: 'theirs', before, after: await nextDiskText(projectRoot, rel, s as string, guidance) }, base: s, synced: s });
                 } else if (opts.merge) {
                     const m = threeWayMerge(b ?? '', l as string, s as string, { local: 'local', server: 'server' });
-                    await writeLocal(projectRoot, rel, m.merged, guidance);
-                    setBase(s);
-                    (m.hadConflicts ? result.conflicted : result.merged).push(rel);
+                    steps.push({
+                        change: { path: rel, action: m.hadConflicts ? 'merge-markers' : 'merge', before, after: await nextDiskText(projectRoot, rel, m.merged, guidance) },
+                        base: s, synced: m.merged, markers: m.hadConflicts,
+                    });
                 } else {
                     result.kept.push(rel);
                 }
                 break;
             }
         }
+    }
+    result.refused = [...new Set([...result.refused, ...refused])].sort();
+
+    const changes = steps.map((x) => x.change);
+    const go = changes.length > 0 && opts.confirm ? await opts.confirm(changes) : false;
+    if (!go) {
+        result.pending = changes;
+        await writeBaselines(projectRoot, baselines);
+        return result;
+    }
+
+    for (const st of steps) {
+        const rel = st.change.path;
+        switch (st.change.action) {
+            case 'write':
+                await writeLocal(projectRoot, rel, st.synced as string, guidance);
+                result.written.push(rel);
+                break;
+            case 'delete':
+                await deleteLocal(projectRoot, rel);
+                result.deleted.push(rel);
+                break;
+            case 'theirs':
+                result.backups.push(await backupLocal(projectRoot, rel));
+                await writeLocal(projectRoot, rel, st.synced as string, guidance);
+                result.written.push(rel);
+                break;
+            case 'merge':
+            case 'merge-markers':
+                await writeLocal(projectRoot, rel, st.synced as string, guidance);
+                (st.markers ? result.conflicted : result.merged).push(rel);
+                break;
+        }
+        setBase(rel, st.base);
     }
 
     await writeBaselines(projectRoot, baselines);
@@ -264,27 +399,31 @@ export interface AgentPushResult {
     unsupported?: boolean;
     pushed: string[];
     deleted: string[];
-    /** Server changed meanwhile and the 3-way merge was clean: merged and pushed. */
-    merged: string[];
-    /** Overlapping edits: markers written locally, not pushed. */
-    conflicted: string[];
+    /**
+     * Changed on the brand since the last sync: nothing written here or there.
+     * Review with `ef claude pull` (diff + confirm, `--merge` to merge), then push.
+     * A push never writes the brand's text into local files on its own.
+     */
+    stale: string[];
     /** Local file still has conflict markers: refused. */
     blocked: string[];
-    /** Local delete refused because the server copy changed; server copy restored. */
-    restored: string[];
     ignored: string[];
+    /** Symbolic links (or paths under one): never read, never uploaded, never deleted on the brand. */
+    refused: string[];
 }
 
 interface PlannedWrite { path: string; content: string | null; base_hash: string | null }
 
 /** Local changes since the baseline, as the PUT body would carry them. No network. */
-export async function planAgentPush(projectRoot: string): Promise<{ writes: PlannedWrite[]; blocked: string[]; ignored: string[] }> {
-    const { files: local, ignored } = await readLocalAgentFiles(projectRoot);
+export async function planAgentPush(projectRoot: string): Promise<{ writes: PlannedWrite[]; blocked: string[]; ignored: string[]; refused: string[] }> {
+    const { files: local, ignored, refused } = await readLocalAgentFiles(projectRoot);
     const baselines = await readBaselines(projectRoot);
     const writes: PlannedWrite[] = [];
     const blocked: string[] = [];
     for (const rel of [...new Set([...local.keys(), ...Object.keys(baselines)])].sort()) {
         if (!AGENT_PATH_RE.test(rel)) continue;
+        // A link reads as "absent": never turn that into a delete on the brand.
+        if (isRefused(refused, rel)) continue;
         const l = local.get(rel) ?? null;
         const base = baselines[rel] ?? null;
         if (l !== null) {
@@ -295,21 +434,24 @@ export async function planAgentPush(projectRoot: string): Promise<{ writes: Plan
             writes.push({ path: rel, content: null, base_hash: base.hash });
         }
     }
-    return { writes, blocked, ignored };
+    return { writes, blocked, ignored, refused };
 }
 
-export async function pushAgentFiles(api: ApiClient, brandId: number, projectRoot: string, opts: AgentSyncOptions = {}): Promise<AgentPushResult> {
-    const result: AgentPushResult = { pushed: [], deleted: [], merged: [], conflicted: [], blocked: [], restored: [], ignored: [] };
-    const guidance = opts.guidance !== false;
+export async function pushAgentFiles(api: ApiClient, brandId: number, projectRoot: string, _opts: AgentSyncOptions = {}): Promise<AgentPushResult> {
+    const result: AgentPushResult = { pushed: [], deleted: [], stale: [], blocked: [], ignored: [], refused: [] };
+    const skip = new Set<string>();
 
-    // Two rounds at most: the first may come back 409; clean merges are retried once.
+    // Two rounds at most: a 409 refuses the whole batch, so the files that did
+    // not conflict are sent again without the stale ones.
     for (let round = 0; round < 2; round++) {
         const plan = await planAgentPush(projectRoot);
         result.blocked = plan.blocked;
         result.ignored = plan.ignored;
-        if (plan.writes.length === 0) return result;
+        result.refused = plan.refused;
+        const writes = plan.writes.filter((w) => !skip.has(w.path));
+        if (writes.length === 0) return result;
 
-        const res = await api.putAgentFiles(brandId, plan.writes).catch((err) => {
+        const res = await api.putAgentFiles(brandId, writes).catch((err) => {
             // Server predates the endpoint.
             if (err instanceof CliError && err.code === ExitCode.NotFound) return null;
             throw err;
@@ -318,56 +460,26 @@ export async function pushAgentFiles(api: ApiClient, brandId: number, projectRoo
 
         const baselines = await readBaselines(projectRoot);
         if (res.files) {
-            for (const w of plan.writes) {
+            for (const w of writes) {
                 if (w.content === null) {
                     delete baselines[w.path];
                     result.deleted.push(w.path);
                 } else {
                     baselines[w.path] = { hash: sha256(w.content), content: w.content };
-                    if (!result.merged.includes(w.path)) result.pushed.push(w.path);
+                    result.pushed.push(w.path);
                 }
             }
             await writeBaselines(projectRoot, baselines);
             return result;
         }
 
-        // 409: nothing was written. Resolve each conflict against the server copy.
-        let retry = false;
+        // 409: nothing was written. Local files are left exactly as they are.
         for (const c of res.conflicts) {
-            const w = plan.writes.find((x) => x.path === c.path);
-            if (!w) continue;
-            const base = baselines[c.path]?.content ?? '';
-            if (w.content === null) {
-                // Our delete lost to a server edit: keep the server copy.
-                if (c.content !== null) {
-                    await writeLocal(projectRoot, c.path, c.content, guidance);
-                    baselines[c.path] = { hash: sha256(c.content), content: c.content };
-                    result.restored.push(c.path);
-                } else {
-                    delete baselines[c.path];
-                }
-                continue;
-            }
-            if (c.content === null) {
-                // Deleted on the server while edited here: recreate it.
-                delete baselines[c.path];
-                retry = true;
-                continue;
-            }
-            const m = threeWayMerge(base, w.content, c.content, { local: 'local', server: 'server' });
-            await writeLocal(projectRoot, c.path, m.merged, guidance);
-            baselines[c.path] = { hash: sha256(c.content), content: c.content };
-            if (m.hadConflicts) {
-                result.conflicted.push(c.path);
-            } else {
-                result.merged.push(c.path);
-                retry = true;
-            }
+            if (!writes.some((w) => w.path === c.path)) continue;
+            skip.add(c.path);
+            if (!result.stale.includes(c.path)) result.stale.push(c.path);
         }
-        await writeBaselines(projectRoot, baselines);
-        // A batch is all-or-nothing: retry so the non-conflicting writes land too.
-        const others = plan.writes.some((w) => !res.conflicts.some((c) => c.path === w.path));
-        if (!retry && !others) return result;
+        if (!writes.some((w) => !skip.has(w.path))) return result;
     }
     return result;
 }

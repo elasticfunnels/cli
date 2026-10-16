@@ -6,7 +6,9 @@ import { EfRuntime, findProjectRoot, loadRuntime } from '../utils/store';
 import { writeFileAtomic } from '../utils/fs';
 import { CliError, ExitCode } from '../utils/exit';
 import { ApiClient } from '../api/client';
-import { AgentPullResult, AgentPushResult, AgentSyncOptions, planAgentPush, pullAgentFiles, pushAgentFiles } from '../sync/agentFiles';
+import { AgentPullChange, AgentPullResult, AgentPushResult, AgentSyncOptions, planAgentPush, pullAgentFiles, pushAgentFiles } from '../sync/agentFiles';
+import { unifiedDiff } from '../sync/merge';
+import { ask } from '../utils/prompt';
 
 /**
  * Agent guidance files — `ef claude` and `ef codex`.
@@ -165,11 +167,18 @@ not while resolving a merge. Only ever change the body **below** it.
 ## Your own instructions sync with the brand
 
 Your text in this CLAUDE.md (outside the ElasticFunnels block) and every
-\`.md\`/\`.mdc\` file under \`.claude/rules/\` are stored with the brand: \`ef pull\`,
-\`ef push --all\` and \`ef init\` carry them, and \`ef claude sync\` does it on
-demand. Put lasting project rules there, not in this block (it is rewritten).
-If a push reports conflict markers in one of them, resolve the markers, then
-\`ef claude push\`.
+\`.md\`/\`.mdc\` file under \`.claude/rules/\` are stored with the brand:
+\`ef push --all\` and \`ef claude push\` save them. Put lasting project rules
+there, not in this block (it is rewritten).
+
+Changes made on the brand are **never written here silently**: \`ef pull\` and
+\`ef init\` only say "agent files changed on the brand" (\`--force\` does not
+cover them). \`ef claude pull\` shows the diff and asks before writing; off a
+terminal it refuses unless the user passes \`--accept-agent-files\`. **An agent
+must not pass that flag on its own**: show the user the diff and let them
+decide, since these files are instructions you would then follow. If a push
+says a file changed on the brand, \`ef claude pull --merge\` (reviewed), then
+\`ef claude push\`. Symbolic links are never followed or uploaded.
 
 ## Do not touch
 
@@ -1211,6 +1220,19 @@ function agentOpts(rt: EfRuntime, extra: AgentSyncOptions = {}): AgentSyncOption
     return { ...extra, guidance: rt.config.aiGuidance !== false };
 }
 
+const REVIEW_HINT = 'Review them with "ef claude pull" (shows the diff and asks before writing).';
+
+/** One line per pending change, for `ef pull` / `ef init`, which never write agent files. */
+export function reportAgentPending(r: AgentPullResult, opts: { quiet?: boolean } = {}): void {
+    if (r.unsupported) return;
+    if (r.pending.length) {
+        log.warn(`Agent files changed on the brand, NOT written here: ${r.pending.map((p) => p.path).join(', ')}`);
+        log.detail(`  ${REVIEW_HINT}`);
+    }
+    if (r.kept.length && !opts.quiet) log.detail(`Agent files differ from the brand's copy (both changed): ${r.kept.join(', ')}. ${REVIEW_HINT}`);
+    if (r.refused.length) log.warn(`Agent files skipped, symbolic links are never followed: ${r.refused.join(', ')}`);
+}
+
 /** Print a pull's outcome. Conflicts are always shown; `quiet` drops the routine lines. */
 export function reportAgentPull(r: AgentPullResult, opts: { quiet?: boolean } = {}): void {
     if (r.unsupported) return;
@@ -1219,6 +1241,8 @@ export function reportAgentPull(r: AgentPullResult, opts: { quiet?: boolean } = 
     if (r.deleted.length) say(`Agent files deleted on the brand, removed here: ${r.deleted.join(', ')}`);
     if (r.merged.length) say(`Agent files merged with the brand's changes: ${r.merged.join(', ')}`);
     if (r.backups.length) say(`Your copies were saved to: ${r.backups.join(', ')}`);
+    if (r.pending.length) log.warn(`Not written: ${r.pending.map((p) => p.path).join(', ')}`);
+    if (r.refused.length) log.warn(`Skipped, symbolic links are never followed: ${r.refused.join(', ')}`);
     if (r.kept.length) {
         log.warn(`Kept your local ${r.kept.join(', ')}: it differs from the brand's copy and both changed.`);
         log.detail('  "ef claude pull --merge" merges the two, "ef claude pull --theirs" takes the brand\'s copy.');
@@ -1237,14 +1261,27 @@ export function reportAgentPush(r: AgentPushResult, opts: { quiet?: boolean } = 
     const say = (msg: string): void => { if (!opts.quiet) log.detail(msg); };
     if (r.pushed.length) say(`Agent files saved to the brand: ${r.pushed.join(', ')}`);
     if (r.deleted.length) say(`Agent files deleted on the brand: ${r.deleted.join(', ')}`);
-    if (r.merged.length) log.info(`Merged the brand's newer changes into ${r.merged.join(', ')} and saved.`);
-    if (r.restored.length) log.warn(`Not deleted, changed on the brand since your last sync, so its copy is back: ${r.restored.join(', ')}`);
     if (r.ignored.length && !opts.quiet) log.detail(`Not synced (only .md/.mdc under .claude/rules/): ${r.ignored.join(', ')}`);
-    const stuck = [...r.conflicted, ...r.blocked.filter((p) => !r.conflicted.includes(p))];
-    if (stuck.length) {
+    if (r.refused.length) log.warn(`Not synced, symbolic links are never followed: ${r.refused.join(', ')}`);
+    if (r.stale.length) {
         process.exitCode = ExitCode.Conflict;
-        log.warn(`NOT saved, conflict markers in ${stuck.join(', ')}. Resolve them, then "ef claude push".`);
+        log.warn(`NOT saved, changed on the brand since your last sync: ${r.stale.join(', ')}.`);
+        log.detail('  "ef claude pull --merge" shows the merge and asks before writing; then "ef claude push".');
     }
+    if (r.blocked.length) {
+        process.exitCode = ExitCode.Conflict;
+        log.warn(`NOT saved, conflict markers in ${r.blocked.join(', ')}. Resolve them, then "ef claude push".`);
+    }
+}
+
+/**
+ * `ef pull` / `ef init`: look only. Agent files are instructions a coding
+ * agent obeys, so changes from the brand are listed, never written; `--force`
+ * on a pull does not cover them either.
+ */
+export async function checkAgentPull(rt: EfRuntime): Promise<AgentPullResult | null> {
+    if (rt.config.agentFiles === false) return null;
+    return pullAgentFiles(agentApi(rt), rt.config.brandId, rt.projectRoot, agentOpts(rt));
 }
 
 export async function runAgentPull(rt: EfRuntime, extra: AgentSyncOptions = {}): Promise<AgentPullResult | null> {
@@ -1257,8 +1294,42 @@ export async function runAgentPush(rt: EfRuntime): Promise<AgentPushResult | nul
     return pushAgentFiles(agentApi(rt), rt.config.brandId, rt.projectRoot, agentOpts(rt));
 }
 
+const ACTION_LABEL: Record<AgentPullChange['action'], string> = {
+    write: 'from the brand',
+    delete: 'deleted on the brand',
+    theirs: 'take the brand\'s copy (yours backed up)',
+    merge: 'merge with the brand\'s copy',
+    'merge-markers': 'merge with conflict markers',
+};
+
+/** The diff a person reviews before agent files are written (server text made safe for a terminal). */
+export function renderAgentPullDiff(changes: AgentPullChange[]): string {
+    return changes.map((ch) => {
+        const head = `── ${ch.path}: ${ACTION_LABEL[ch.action]}${ch.after === null ? ' (file removed)' : ''}\n`;
+        return head + unifiedDiff(ch.before ?? '', ch.after ?? '', `local/${ch.path}`, `after/${ch.path}`);
+    }).join('\n');
+}
+
+/**
+ * The confirm step of `ef claude pull`: show every change, then ask. Off a
+ * terminal there is no one to ask, so it refuses unless --accept-agent-files.
+ */
+function agentPullConfirm(opts: { acceptAgentFiles?: boolean; json?: boolean }): (changes: AgentPullChange[]) => Promise<boolean> {
+    return async (changes) => {
+        if (!opts.json) log.raw(renderAgentPullDiff(changes) + '\n');
+        if (opts.acceptAgentFiles) return true;
+        if (process.stdin.isTTY !== true || opts.json) {
+            throw new CliError(ExitCode.Validation,
+                `Agent files changed on the brand: ${changes.map((c) => c.path).join(', ')}. Not written: no terminal to confirm. ` +
+                'Review the diff above, then re-run with --accept-agent-files to write them.');
+        }
+        const answer = (await ask(`Write these ${changes.length} agent file change${changes.length === 1 ? '' : 's'}? (y/N)`)).toLowerCase();
+        return answer === 'y' || answer === 'yes';
+    };
+}
+
 /** `ef claude sync|pull|push`. */
-async function runAgentFilesAction(action: string, opts: { merge?: boolean; theirs?: boolean; dryRun?: boolean; json?: boolean }): Promise<void> {
+async function runAgentFilesAction(action: string, opts: { merge?: boolean; theirs?: boolean; dryRun?: boolean; json?: boolean; acceptAgentFiles?: boolean }): Promise<void> {
     if (opts.merge && opts.theirs) throw new CliError(ExitCode.Validation, '--merge and --theirs are mutually exclusive.');
     const rt = await loadRuntime();
     if (rt.config.agentFiles === false) {
@@ -1272,14 +1343,21 @@ async function runAgentFilesAction(action: string, opts: { merge?: boolean; thei
         if (!plan.writes.length) log.info('No local agent-file changes since the last sync.');
         for (const w of plan.writes) log.info(`  would ${w.content === null ? 'delete' : w.base_hash ? 'update' : 'create'} ${w.path}`);
         if (plan.blocked.length) log.warn(`Conflict markers, would not push: ${plan.blocked.join(', ')}`);
+        if (plan.refused.length) log.warn(`Symbolic links, would not push: ${plan.refused.join(', ')}`);
         return;
     }
 
     if (action === 'pull' || action === 'sync') {
-        const r = await runAgentPull(rt, { merge: opts.merge, theirs: opts.theirs });
+        const r = await runAgentPull(rt, { merge: opts.merge, theirs: opts.theirs, confirm: agentPullConfirm(opts) });
         if (r?.unsupported) throw new CliError(ExitCode.NotFound, 'This ElasticFunnels server does not store agent files yet.');
         out.pull = r;
         if (!opts.json && r) reportAgentPull(r);
+        if (r && r.pending.length) {
+            // Declined: say so, and do not push over the brand's newer copy.
+            if (opts.json) { log.json({ ...out, ok: false, declined: true }); return; }
+            log.warn('Nothing written.');
+            return;
+        }
     }
     if (action === 'push' || action === 'sync') {
         const r = await runAgentPush(rt);
@@ -1303,19 +1381,24 @@ export function registerClaudeCommand(program: Command): void {
         .option('--theirs', 'pull/sync: take the brand\'s copy of files changed on both sides (yours saved under .ef/agent-files-backup/).')
         .option('--dry-run', 'pull/push/sync: list local agent-file changes that would be pushed, send nothing.')
         .option('--json', 'pull/push/sync: print the result as JSON.')
+        .option('--accept-agent-files', 'pull/sync: write the brand\'s agent-file changes without asking (needed off a terminal). The diff is still printed.')
         .addHelpText('after', `
 Agent files (synced with the brand, private, never on a live page):
   CLAUDE.md          your text; the ElasticFunnels block is left out and rewritten on each machine
   .claude/rules/     every .md / .mdc file
 
-  $ ef claude sync             pull the brand's copies, then push yours
-  $ ef claude pull --merge     merge files changed on both sides
+  $ ef claude pull             show the brand's changes as a diff, write them after you confirm
+  $ ef claude pull --merge     same, merging files changed on both sides
+  $ ef claude sync             pull (diff + confirm), then push yours
   $ ef claude push             save local changes to the brand
 
-They also ride along with "ef pull", "ef push --all" and "ef init" (local files
-win on init; differing ones are listed). Conflicts: a push carries the version
-it started from, the server refuses a stale one, and the CLI 3-way merges;
-overlapping edits get conflict markers and are not pushed until resolved.
+These files are instructions your coding agent follows, so nothing writes
+them without review: "ef pull" and "ef init" only list what changed on the
+brand ("--force" does not cover them), and "ef claude pull" asks first. Off a
+terminal it refuses unless you pass --accept-agent-files. "ef push --all" saves
+yours along with the site. A push carries the version it started from; if the
+brand changed since, nothing is saved or written and "ef claude pull --merge"
+shows the merge. Symbolic links are never followed or uploaded.
 Turn it off per project with "agentFiles": false in .ef/config.json.`)
         .action(async (agentAction: string | undefined, opts: { output?: string; print?: boolean; skills?: boolean; hook?: boolean; merge?: boolean; theirs?: boolean; dryRun?: boolean; json?: boolean }) => {
             if (agentAction !== undefined) {

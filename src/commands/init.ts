@@ -7,7 +7,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { ask, confirm } from '../utils/prompt';
 import { Defaults, EF_VSCODE_LANGUAGE, ensureEfFileAssociation, findProjectRoot, loadConfig, persistLogin, readVscodeEfSettings, saveConfig } from '../utils/store';
-import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook, reportAgentPull, runAgentPull } from './claude';
+import { CURSOR_FRONTMATTER, GUIDANCE_FILES, applyAgentGuidance, detectAgentTool, installBundledSkills, installSessionHook, checkAgentPull, reportAgentPending } from './claude';
 import { loader } from '../utils/loader';
 import { runFullSync } from './pull';
 import { redeemPairingCode } from '../api/deviceAuth';
@@ -386,17 +386,14 @@ async function runInit(opts: InitOptions): Promise<void> {
             }
         } catch { /* non-fatal */ }
 
-        // Bring back this brand's CLAUDE.md text and .claude/rules, written on
-        // another machine. Runs after the guidance so CLAUDE.md gets this
-        // machine's block. Local files win; differing ones are listed.
+        // The brand's CLAUDE.md text and .claude/rules are instructions a
+        // coding agent follows, so init never writes them: it lists what the
+        // brand has and "ef claude pull" restores it after a reviewed diff.
         try {
-            const agent = await runAgentPull(runtime);
-            if (agent && !agent.unsupported && !opts.json) {
-                if (agent.written.length) log.success(`Restored from the brand: ${agent.written.join(', ')}`);
-                reportAgentPull({ ...agent, written: [] });
-            }
+            const agent = await checkAgentPull(runtime);
+            if (agent && !agent.unsupported && !opts.json) reportAgentPending(agent);
         } catch (err) {
-            if (!opts.json) log.warn(`Could not restore CLAUDE.md / .claude/rules from the brand: ${err instanceof Error ? err.message : String(err)}`);
+            if (!opts.json) log.warn(`Could not check CLAUDE.md / .claude/rules on the brand: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
 

@@ -20,7 +20,7 @@ import { resolveComponentByCodeOrName, resolvePageBySlug } from './shared';
 import { classifyAbsPath } from '../sync/sync';
 import { pullEventsForAllPages } from './pageEvents';
 import { withReauth } from './authFlow';
-import { guidanceVersion, refreshGuidanceIfStale, reportAgentPull, runAgentPull } from './claude';
+import { guidanceVersion, refreshGuidanceIfStale, checkAgentPull, reportAgentPending } from './claude';
 
 interface PullOpts {
     json?: boolean;
@@ -115,11 +115,13 @@ export async function runFullSync(rt: EfRuntime, opts: {
             log_(`${c.green('✓')} variables → ${variables.rel}`);
             if (opts.agentFiles !== false) {
                 // Never fails the pull: these are instructions, not site content.
+                // Look only: changes from the brand are listed, never written
+                // (not even with --force); "ef claude pull" reviews them.
                 try {
-                    const agent = await runAgentPull(rt, { merge: opts.merge, theirs: opts.force });
+                    const agent = await checkAgentPull(rt);
                     if (agent && !agent.unsupported) {
-                        log_(`${c.green('✓')} agent files (CLAUDE.md, .claude/rules)`);
-                        if (!opts.json) reportAgentPull(agent, { quiet: opts.silent });
+                        if (!agent.pending.length) log_(`${c.green('✓')} agent files (CLAUDE.md, .claude/rules) unchanged on the brand`);
+                        if (!opts.json) reportAgentPending(agent, { quiet: opts.silent });
                     }
                 } catch (err) {
                     if (!opts.json) log.warn(`Agent files not synced: ${err instanceof Error ? err.message : String(err)}`);

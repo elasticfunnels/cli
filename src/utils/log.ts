@@ -8,6 +8,8 @@
  * standard and `process.stderr.isTTY` is enough to detect unsupported
  * terminals (CI logs, pipes, redirected stdout).
  */
+import { safeTerminal } from './sanitize';
+
 const ESC = String.fromCharCode(27);
 const isTTY = process.stderr.isTTY === true;
 const noColor = process.env.NO_COLOR != null && process.env.NO_COLOR !== '';
@@ -29,12 +31,14 @@ export const c = {
 };
 
 export const log = {
-    info(msg: string): void { process.stderr.write(`${msg}\n`); },
-    success(msg: string): void { process.stderr.write(`${c.green('✓')} ${msg}\n`); },
-    warn(msg: string): void { process.stderr.write(`${c.yellow('!')} ${msg}\n`); },
-    error(msg: string): void { process.stderr.write(`${c.red('✗')} ${msg}\n`); },
-    detail(msg: string): void { process.stderr.write(`${c.dim(msg)}\n`); },
-    raw(msg: string): void { process.stderr.write(msg); },
+    // Human output passes through safeTerminal: messages interpolate names and
+    // titles from the server, and those must not drive the terminal.
+    info(msg: string): void { process.stderr.write(safeTerminal(`${msg}\n`)); },
+    success(msg: string): void { process.stderr.write(safeTerminal(`${c.green('✓')} ${msg}\n`)); },
+    warn(msg: string): void { process.stderr.write(safeTerminal(`${c.yellow('!')} ${msg}\n`)); },
+    error(msg: string): void { process.stderr.write(safeTerminal(`${c.red('✗')} ${msg}\n`)); },
+    detail(msg: string): void { process.stderr.write(safeTerminal(`${c.dim(msg)}\n`)); },
+    raw(msg: string): void { process.stderr.write(safeTerminal(msg)); },
     /** Print a structured JSON payload to STDOUT (for `--json`). Always last. */
     json(payload: unknown): void {
         process.stdout.write(JSON.stringify(payload, null, 2) + '\n');

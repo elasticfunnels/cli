@@ -54,11 +54,6 @@ export interface EfConfig {
      */
     aiGuidance?: boolean;
     /**
-     * Set to false to stop syncing CLAUDE.md and .claude/rules with the brand
-     * (see src/sync/agentFiles.ts). Absent means on.
-     */
-    agentFiles?: boolean;
-    /**
      * IANA zone `ef stats` counts days in. Unset → the machine's own zone.
      *
      * Worth setting per project when the brand reports in a zone other than
@@ -221,7 +216,6 @@ export async function loadConfig(projectRoot: string): Promise<EfConfig> {
         // since the file can also be hand-edited.
         // Only ever stored as an explicit false; absent means "never asked".
         aiGuidance: parsed.aiGuidance === false ? false : undefined,
-        agentFiles: parsed.agentFiles === false ? false : undefined,
         analyticsTz: typeof parsed.analyticsTz === 'string' && parsed.analyticsTz.trim() !== ''
             ? parsed.analyticsTz.trim()
             : null,

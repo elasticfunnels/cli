@@ -544,15 +544,24 @@ function hasForm(html: string): boolean {
     return html.includes('<form');
 }
 
+/** A page with status "offline" is not served at all: no live URL, no preview. */
+export function isOfflineStatus(status: string | null | undefined): boolean {
+    return status === 'offline';
+}
+
+export function offlinePageNote(slug: string): string {
+    return `Page is OFFLINE: no preview or live URL. Make it live with: ef pages settings ${slug} --status published`;
+}
+
 async function fetchCanonicalBody(
     ctx: SyncContext,
     type: 'page' | 'component',
     id: number,
-): Promise<{ body: string; revisionId: number | null; updatedAt: string | null } | null> {
+): Promise<{ body: string; revisionId: number | null; updatedAt: string | null; status?: string | null } | null> {
     try {
         if (type === 'page') {
             const p = await ctx.api.getPageContent(ctx.rt.config.brandId, id);
-            return { body: p.html ?? '', revisionId: p.revision_id ?? null, updatedAt: p.updated_at ?? null };
+            return { body: p.html ?? '', revisionId: p.revision_id ?? null, updatedAt: p.updated_at ?? null, status: p.status ?? null };
         }
         const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, id);
         return { body: c.html ?? c.code ?? '', revisionId: c.revision_id ?? null, updatedAt: c.updated_at ?? null };
@@ -846,7 +855,10 @@ export async function pushPageFile(
             action: 'updated',
             serverId: meta.id,
             revisionId: canonRev,
-            previewUrl: res.preview_url ?? null,
+            // An offline page 404s publicly and its preview link answers 400,
+            // so printing one only sends the reader to an error page.
+            previewUrl: isOfflineStatus(canonical?.status) ? null : (res.preview_url ?? null),
+            note: isOfflineStatus(canonical?.status) ? offlinePageNote(meta.slug ?? rel) : undefined,
             apiResponse: shrinkPushApiBody(res),
         };
     }

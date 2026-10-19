@@ -7,6 +7,8 @@ import { EfRuntime } from '../utils/store';
 import { SyncStateFile, StateEntry } from '../sync/stateFile';
 import { safeJoinBrandRoot } from '../sync/paths';
 import { fileExists } from '../utils/fs';
+import { isOfflineStatus, offlinePageNote } from '../sync/sync';
+import { c, log } from '../utils/log';
 
 /**
  * After a server-side delete, remove the local file and its `.ef-state.json`
@@ -36,17 +38,35 @@ export async function removeLocalEntity(
     return removed;
 }
 
+/** Print the preview + live lines for `ef preview` / `ef pages preview`. */
+export function printPreviewBundle(
+    slug: string,
+    b: { previewUrl: string | null; liveUrl: string | null; revisionId: number | null },
+): void {
+    if (!b.previewUrl) {
+        log.warn(offlinePageNote(slug));
+        return;
+    }
+    const label = b.revisionId != null ? c.bold('Preview (draft)') : c.bold('Preview');
+    log.info(`${label} ${b.previewUrl}`);
+    if (b.liveUrl) log.info(`${c.bold('Live')}           ${b.liveUrl}`);
+}
+
 /** Preview URL uses GET /editor revision_id when present — same as the VS Code extension. */
 export async function fetchPagePreviewBundle(
     api: ApiClient,
     brandId: number,
     pageId: number,
-): Promise<{ previewUrl: string; liveUrl: string | null; revisionId: number | null }> {
+): Promise<{ previewUrl: string | null; liveUrl: string | null; revisionId: number | null; status: string | null }> {
     const editor = await api.getPageContent(brandId, pageId);
     const revisionId = editor.revision_id ?? null;
+    const status = editor.status ?? null;
+    // Offline pages are not served: the preview link answers 400 and the live
+    // URL 404s, so hand back neither.
+    if (isOfflineStatus(status)) return { previewUrl: null, liveUrl: null, revisionId, status };
     const previewUrl = await api.getPreviewUrl(brandId, pageId, revisionId);
     const liveUrl = await api.getLiveUrl(brandId, pageId).catch(() => null);
-    return { previewUrl, liveUrl, revisionId };
+    return { previewUrl, liveUrl, revisionId, status };
 }
 
 /**

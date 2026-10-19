@@ -4,9 +4,10 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { Page, TAGGABLE } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
-import { c, log } from '../utils/log';
+import { log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
-import { fetchPagePreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug } from './shared';
+import { fetchPagePreviewBundle, printPreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug } from './shared';
+import { isOfflineStatus, offlinePageNote } from '../sync/sync';
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
 import { EfMeta, parseEfMeta, withEfMeta } from '../sync/efMeta';
 import { fileExists, sha256, writeFileAtomic } from '../utils/fs';
@@ -300,6 +301,14 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             const html = draft.html ?? '';
             const res = await api.updatePageHtml(rt.config.brandId, page.id, html, { draft: false });
             if (opts.json) { log.json({ ok: true, page: { id: page.id, slug: page.slug }, response: res }); return; }
+            // Publishing saves the content live, but it does not change the
+            // page status: an offline page stays offline (404).
+            const after = await api.getPageContent(rt.config.brandId, page.id).catch(() => null);
+            if (isOfflineStatus(after?.status ?? page.status)) {
+                log.success(`Saved page #${page.id} (${page.slug}) as the live version.`);
+                log.warn(offlinePageNote(page.slug ?? slug));
+                return;
+            }
             log.success(`Published page #${page.id} (${page.slug}).`);
             if (res.preview_url) log.detail(`Preview: ${res.preview_url}`);
         });
@@ -311,11 +320,9 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const page = await resolvePageBySlug(api, rt.config.brandId, slug);
-            const { previewUrl, liveUrl, revisionId } = await fetchPagePreviewBundle(api, rt.config.brandId, page.id);
-            if (opts.json) { log.json({ ok: true, previewUrl, liveUrl, revisionId }); return; }
-            const label = revisionId != null ? `${c.bold('Preview (draft)')}` : `${c.bold('Preview')}`;
-            log.info(`${label} ${previewUrl}`);
-            if (liveUrl) log.info(`${c.bold('Live')}           ${liveUrl}`);
+            const bundle = await fetchPagePreviewBundle(api, rt.config.brandId, page.id);
+            if (opts.json) { log.json({ ok: true, ...bundle }); return; }
+            printPreviewBundle(page.slug ?? slug, bundle);
         });
 
     cmd.command('duplicate <slug>')

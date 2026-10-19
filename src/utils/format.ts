@@ -1,4 +1,5 @@
 import { c } from './log';
+import { safeCell } from './sanitize';
 
 /**
  * Tiny printable table. Truncates long cells so a single row never
@@ -18,8 +19,9 @@ export interface TableOptions {
 
 export function renderTable(opts: TableOptions): string {
     const max = opts.maxCellWidth ?? 80;
-    const head = opts.head.map(h => truncate(h, max));
-    const rows = opts.rows.map(row => row.map(cell => truncate(cell ?? '', max)));
+    // Cells hold server-supplied names: one line each, no terminal controls.
+    const head = opts.head.map(h => truncate(safeCell(h), max));
+    const rows = opts.rows.map(row => row.map(cell => truncate(safeCell(cell), max)));
     const cols = head.length;
 
     const widths: number[] = [];

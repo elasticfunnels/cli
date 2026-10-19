@@ -5,6 +5,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { renderTable } from '../utils/format';
+import { hasControlChars } from '../utils/sanitize';
 
 /**
  * `ef folders` — the Folders sidebar of the dashboard's Pages list.
@@ -164,6 +165,7 @@ Folders must be switched on for the brand ("Page folders" in the brand settings)
         .action(async (name: string, opts: { parent?: string; color?: string; existsOk?: boolean; json?: boolean }) => {
             const trimmed = (name ?? '').trim();
             if (!trimmed) throw new CliError(ExitCode.Validation, 'Folder name is empty.');
+            if (hasControlChars(trimmed)) throw new CliError(ExitCode.Validation, 'Folder name has control or bidi characters; use plain text.');
             const color = opts.color ? normalizeFolderColor(opts.color) : undefined;
             const { api, brandId } = await runtime();
             const flat = flattenFolders(await api.getPageFolderTree(brandId));
@@ -193,6 +195,7 @@ Folders must be switched on for the brand ("Page folders" in the brand settings)
         .action(async (ref: string, newName: string, opts: { json?: boolean }) => {
             const trimmed = (newName ?? '').trim();
             if (!trimmed) throw new CliError(ExitCode.Validation, 'New folder name is empty.');
+            if (hasControlChars(trimmed)) throw new CliError(ExitCode.Validation, 'Folder name has control or bidi characters; use plain text.');
             const { api, brandId } = await runtime();
             const flat = flattenFolders(await api.getPageFolderTree(brandId));
             const folder = resolveFolder(flat, ref);

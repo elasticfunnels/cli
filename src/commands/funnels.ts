@@ -5,6 +5,7 @@ import { ApiClient } from '../api/client';
 import { Funnel, FunnelDetails } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
+import { safeCell } from '../utils/sanitize';
 import { EfRuntime, loadRuntime } from '../utils/store';
 import { sha256, writeFileAtomic } from '../utils/fs';
 import { readSnapshot, writeSnapshot } from '../sync/baselineSnapshots';
@@ -242,7 +243,7 @@ Examples:
                 ['Entry rules', details.rules?.conditions?.length ? `${details.rules.conditions.length} condition(s), match ${details.rules.match ?? 'all'}` : c.dim('none')],
             ];
             const w = Math.max(...rows.map(([k]) => k.length));
-            for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${v}\n`);
+            for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${safeCell(v)}\n`);
         });
 
     cmd.command('settings <codeOrId>')

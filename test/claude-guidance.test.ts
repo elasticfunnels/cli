@@ -338,3 +338,22 @@ test('ef update --cached answers from the cache, never the network, and is quiet
 
     await fs.promises.rm(home, { recursive: true, force: true });
 });
+
+test('installBundledSkills ships kit-customize: verbatim customer copy, drafts only, ends with ef context missing', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-cli-skills-kit-'));
+    try {
+        const installed = await installBundledSkills(dir);
+        assert.ok(installed.includes('kit-customize'));
+        const body = await fs.promises.readFile(path.join(dir, '.claude', 'skills', 'kit-customize', 'SKILL.md'), 'utf8');
+        assert.match(body, /\nname: kit-customize\b/);
+        assert.match(body, /\*\*verbatim\*\*/);
+        assert.match(body, /Do not soften them, remove them, fact-check them/);
+        assert.match(body, /ef push <file> --draft/);
+        assert.match(body, /`blocking: true`/);
+        assert.match(body, /ef context missing/);
+        assert.doesNotMatch(body, /never invent/i, 'owner 2026-10-20: no claim policing');
+        assert.doesNotMatch(body, /—/, 'no em dashes in a prompt that makes a model write copy');
+    } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+});

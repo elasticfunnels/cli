@@ -1674,6 +1674,18 @@ export class ApiClient {
 
     // ── Internal HTTP helper ────────────────────────────────────────
 
+    /**
+     * Untyped request with the client's auth, retries and exit-code mapping, for
+     * feature modules that keep their endpoints in one file (src/api/kitContextApi.ts).
+     */
+    async request(
+        method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+        url: string,
+        opts?: { params?: Record<string, unknown>; data?: unknown; headers?: Record<string, string> },
+    ): Promise<AxiosResponse> {
+        return this.raw(method, url, opts);
+    }
+
     private async raw(
         method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
         url: string,
@@ -1843,7 +1855,7 @@ function normalizePage<T>(data: unknown, what: string): Paginated<T> {
     };
 }
 
-function httpError(label: string, res: AxiosResponse): CliError {
+export function httpError(label: string, res: AxiosResponse): CliError {
     const status = res.status;
     const data = res.data as { message?: string; error?: string; errors?: Record<string, string[]> } | undefined;
     let detail = '';

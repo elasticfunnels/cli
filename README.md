@@ -284,6 +284,13 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef assets bulk-upload <paths…>` | Upload many files/dirs at once (batched ≤20/request). `--to`, `--flat`, `--concurrency`. |
 | `ef assets pull <remotePath>` | Pull one asset. |
 | `ef assets delete <remotePath>` | Delete an asset. |
+| `ef assets add <file> --product CODE --role packshot` | Add a customer image (or brief file) to the kit AI context. Roles: packshot, label, logo, lifestyle, reference, testimonial, certificate. |
+| `ef assets sync-drive [<url>]` | Import a link-shared Google Drive folder into the kit AI context, no Google login. Docs to md, Sheets to csv, Slides to pdf, docx to md; images and pdf/md/txt/csv/xlsx kept; anything else skipped. Exit 2 = incomplete. |
+| `ef context pull` | Write the kit AI context to `.ef/context/` (kit.json, brief.md, facts.json, assets.json + assets/, slots.json, missing.json). Read-only; only changed files are downloaded. |
+| `ef context missing` | What the kit still needs (product images, slot images, facts, Drive problems), blocking rows first. |
+| `ef context facts set <key> <value>` | Set one offer fact (dotted keys nest; numbers and JSON parse). |
+| `ef context brief set --file <path>` | Replace the brief with a .md/.txt file, or a .docx converted to Markdown. |
+| `ef images generate --slot <slot> [--prompt "..."] [--product CODE] [--aspect 4:5] [--reference <id>]` | Generate one image into a kit slot. Prints the credit price first; `--yes` skips the confirm (required off a terminal); `--max-credits N` refuses a dearer image. |
 | `ef variables get` | Print brand variables JSON. |
 | `ef variables set <key> <value>` | Set one variable, then push. Dotted keys nest (`brand.name`); values are JSON-typed (`180`, `true`, `{…}`) or a string; `@file` reads from a file; `--string` forces a literal. |
 | `ef variables pull` | Write `<brandRoot>/variables.json`. |

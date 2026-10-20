@@ -37,3 +37,13 @@ export type { EfMeta } from './sync/efMeta';
 // Needed to type a SyncContext handed back to pushDir.
 export type { SyncContext, PushResult } from './sync/sync';
 export type { EfAuth } from './utils/store';
+
+// Kit AI context (kit customise): pull it into a workspace, read what is missing, sync Drive.
+export { pullKitContext, convertPendingBriefs, readMissing, formatMissing, CONTEXT_DIR } from './lib/kitContext';
+export type { PullContextResult, FetchBytes } from './lib/kitContext';
+export { syncDrive } from './lib/driveSync';
+export type { SyncDriveResult } from './lib/driveSync';
+export { KitContextApi } from './api/kitContextApi';
+export type { MissingRow, KitContextBundle } from './api/kitContextApi';
+export { docxBytesToMarkdown } from './lib/docx2md';
+export { ApiClient } from './api/client';

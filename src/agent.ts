@@ -47,3 +47,4 @@ export { KitContextApi } from './api/kitContextApi';
 export type { MissingRow, KitContextBundle } from './api/kitContextApi';
 export { docxBytesToMarkdown } from './lib/docx2md';
 export { ApiClient } from './api/client';
+export { buildGenerateRequest } from './commands/images';

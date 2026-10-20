@@ -10,6 +10,11 @@ import { buildSyncContext, pullAsset } from '../sync/sync';
 import { relPathForAsset } from '../sync/paths';
 import { removeLocalEntity } from './shared';
 import { sha256 } from '../utils/fs';
+import { KitContextApi } from '../api/kitContextApi';
+import { IMAGE_EXTS, ALLOWED_EXTS } from '../lib/driveFetch';
+import { syncDrive, mimeFor } from '../lib/driveSync';
+
+export const ASSET_ROLES = ['packshot', 'label', 'logo', 'lifestyle', 'reference', 'testimonial', 'certificate'];
 
 const TEN_MB = 10 * 1024 * 1024;
 
@@ -61,6 +66,55 @@ export function registerAssetsCommand(program: Command): void {
             await ctx.state.save();
             if (opts.json) { log.json({ ok: true, asset: uploaded }); return; }
             log.success(`Uploaded ${remote} (#${uploaded.id}).`);
+        });
+
+    cmd.command('add <file>')
+        .description('Add a product image or brief file to the kit AI context (images: jpg/png/webp/avif/gif; files: pdf/docx/md/txt/csv/xlsx).')
+        .option('--product <code>', 'Product code the image shows.')
+        .option('--role <role>', `What it is: ${ASSET_ROLES.join(', ')}.`)
+        .option('--json', 'Print the result as JSON.')
+        .action(async (file: string, opts: { product?: string; role?: string; json?: boolean }) => {
+            if (opts.role && !ASSET_ROLES.includes(opts.role)) {
+                throw new CliError(ExitCode.Validation, `Unknown role "${opts.role}". Roles: ${ASSET_ROLES.join(', ')}.`);
+            }
+            const abs = path.resolve(process.cwd(), file);
+            let bytes: Buffer;
+            try { bytes = await fs.promises.readFile(abs); } catch {
+                throw new CliError(ExitCode.NotFound, `File not found: ${file}`);
+            }
+            const name = path.basename(abs);
+            const ext = path.extname(name).toLowerCase();
+            if (!ALLOWED_EXTS.has(ext)) throw new CliError(ExitCode.Validation, `${name}: type ${ext || '(none)'} is not allowed. Images: jpg, jpeg, png, webp, avif, gif; files: pdf, docx, md, txt, csv, xlsx.`);
+            const rt = await loadRuntime();
+            const ctxApi = new KitContextApi(new ApiClient(rt.config.apiUrl, rt.apiKey, rt.auth), rt.config.brandId);
+            if (IMAGE_EXTS.includes(ext)) {
+                const a = await ctxApi.addAsset({ name, mime: mimeFor(name), bytes, productCode: opts.product, role: opts.role, source: 'upload', sha256: sha256(bytes) });
+                if (opts.json) { log.json({ ok: true, asset: a }); return; }
+                log.success(`Added ${name} as asset #${a.id}${opts.product ? ` for ${opts.product}` : ''}${opts.role ? ` (${opts.role})` : ''}.`);
+                return;
+            }
+            if (opts.product || opts.role) log.warn('--product/--role apply to images only; saving this as a brief file.');
+            const f = await ctxApi.addFile({ name, mime: mimeFor(name), bytes, source: 'upload', sha256: sha256(bytes), ...(ext === '.md' || ext === '.txt' ? { convertedMd: bytes.toString('utf8') } : {}) });
+            if (opts.json) { log.json({ ok: true, file: f }); return; }
+            log.success(`Added ${name} as file #${f.id}.`);
+        });
+
+    cmd.command('sync-drive [url]')
+        .description('Download the kit\'s link-shared Google Drive folder (no Google login) and add it to the kit AI context. Docs -> md, Sheets -> csv, Slides -> pdf, docx -> md; other types are skipped. Exit 2 = incomplete.')
+        .option('--json', 'Print the result as JSON.')
+        .action(async (url: string | undefined, opts: { json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey, rt.auth);
+            const r = await syncDrive(api, rt.config.brandId, { url, log: opts.json ? undefined : (l) => log.detail(l) });
+            if (opts.json) {
+                log.json({ ok: r.code === 0, code: r.code, url: r.url, error: r.error ?? null, uploaded: r.uploaded, alreadyThere: r.alreadyThere, uploadFailed: r.uploadFailed, skipped: r.manifest?.skipped ?? [], failures: r.manifest?.failures ?? [], warnings: r.manifest?.warnings ?? [] });
+            } else {
+                if (r.error) log.error(r.error);
+                for (const n of r.notes) process.stderr.write(`sync-drive: ${n}\n`);
+                for (const f of r.uploadFailed) log.warn(`upload ${f.name}: ${f.error}`);
+                if (r.code !== 1) log.success(`Drive sync: ${r.uploaded.length} added, ${r.alreadyThere.length} already there${r.code === 2 ? ' (INCOMPLETE: see above)' : ''}.`);
+            }
+            if (r.code !== 0) process.exitCode = r.code === 1 ? ExitCode.Error : ExitCode.Validation;
         });
 
     cmd.command('bulk-upload <paths...>')

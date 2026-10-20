@@ -3,6 +3,7 @@ import { ApiClient } from '../api/client';
 import { Page } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
+import { safeCell } from '../utils/sanitize';
 import { loadRuntime } from '../utils/store';
 
 /**
@@ -100,6 +101,6 @@ lists them).`)
             if (details.parent_page_id) rows.push(['Variant of', `#${details.parent_page_id}${details.is_active_version ? ' (active version)' : ''}`]);
             if (details.page_classification) rows.push(['Classified as', `${details.page_classification}${details.has_buy_link ? ', has buy link' : ''}`]);
             const w = Math.max(...rows.map(([k]) => k.length));
-            for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${v}\n`);
+            for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${safeCell(v)}\n`);
         });
 }

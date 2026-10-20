@@ -3,6 +3,7 @@ import { ApiClient } from '../api/client';
 import { ClickRow, SessionEvent } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
+import { safeCell } from '../utils/sanitize';
 import { loadRuntime } from '../utils/store';
 import { renderTable } from '../utils/format';
 import { brandHostsFrom, displayUrl, findTrackingGaps, firstEventValue, NOISY_EVENTS, pagePath, sortEvents } from '../utils/sessions';
@@ -159,7 +160,7 @@ recorded its view, so that page's conversion rate is understated.`)
                 ['Path', pagePath(events, { brandHosts: hosts }).join(' → ') || '-'],
             ];
             const w = Math.max(...summary.map(([k]) => k.length));
-            for (const [k, val] of summary) process.stdout.write(`${c.bold(k.padEnd(w))}  ${val}\n`);
+            for (const [k, val] of summary) process.stdout.write(`${c.bold(k.padEnd(w))}  ${safeCell(val)}\n`);
 
             const gaps = new Set(findTrackingGaps(events));
             const shown: Array<[SessionEvent, number]> = [];

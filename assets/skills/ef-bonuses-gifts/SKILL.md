@@ -48,6 +48,9 @@ description: >-
 
 - Bonuses are per order **line**, not per unit: qty 2 of a package = one set.
 - Upsells/downsells (one-click, no picker): default fill, ship with the buyer, no gift.
+  A PAID upsell can still go to someone else: that is an upsell form,
+  `[UPSELL=CODE form=gift-address]` or `window.ef.quickBuy(code, { ship_to, gift: true })`
+  (NMI, Stripe, Test merchants; docs products/upsell-forms). Its bonuses ship with it.
 - External networks (Digistore24, BuyGoods, Shopify) and manual orders: default
   fill when a rule exists, never over the max, never a gift (they cannot collect one).
 - Subscriptions: bonuses on the initial order only; rebills never add bonuses or gifts.

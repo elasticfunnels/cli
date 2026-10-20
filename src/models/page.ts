@@ -23,6 +23,8 @@ export interface PageUpdateResponse {
     revision_id?: number | null;
     preview_url?: string | null;
     collections_created?: Array<{ code: string; id: number; name?: string }>;
+    /** Tracking snippets this save added to the page (keys from the app's TrackingCodeInPage). */
+    tracking_code_in_page?: string[];
     /** Present on HTTP 409 from /editor — the server's idea of the current state. */
     code?: string;
     server_revision_id?: number | null;

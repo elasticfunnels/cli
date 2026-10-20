@@ -290,6 +290,11 @@ platform members area.
   A gift or ship-to-someone-else upsell uses \`[UPSELL=CODE form=gift-address]\`
   (or the page's own form calling \`window.ef.quickBuy(code, { ship_to, gift })\`,
   which returns \`{ success, nextUrl }\`); never a second checkout for it.
+- **Tracking code (pixels, gtag/GTM, Meta, TikTok, JVZoo pixel or one-click script,
+  ClickBank hop, ClickFlare, RedTrack) never goes in a page file.** It belongs in the
+  app's Pages -> Tracking Scripts (pick the pages, Head or Footer); \`ef\` does not sync
+  those, so tell the user to add it there. Pasted into a \`.ef\` body it renders in
+  \`<body>\`, and \`ef push\` warns about it.
 - **Cart from the platform:** \`cartItems\`/\`efCart.*\` scope, live count
   \`<span data-ef-text="efCart.count">0</span>\`, \`data-ef-add-to-cart\` +
   \`data-product-code\`, \`data-cart-qty-minus|plus|remove\`, checkout via

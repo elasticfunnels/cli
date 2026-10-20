@@ -535,6 +535,28 @@ function reportCollectionsCreated(
     }
 }
 
+const TRACKING_CODE_LABELS: Record<string, string> = {
+    jvzoo_pixel: 'JVZoo sales pixel',
+    jvzoo_one_click: 'JVZoo one-click upsell script',
+    clickbank_hop: 'ClickBank tracking script',
+    meta_pixel: 'Meta pixel',
+    google_tag: 'Google tag / Tag Manager',
+    tiktok_pixel: 'TikTok pixel',
+    clickflare: 'ClickFlare script',
+    redtrack: 'RedTrack script',
+};
+
+/**
+ * The server (TrackingCodeInPage) names tracking snippets this push added to the page.
+ * They belong in the app's Pages -> Tracking Scripts (not synced by ef), where they get Head
+ * or Footer placement and page targeting; pasted into a page they render in the body.
+ */
+function reportTrackingCodeInPage(found: string[] | undefined, rel: string): void {
+    if (!found?.length) return;
+    const names = found.map((key) => TRACKING_CODE_LABELS[key] ?? key).join(', ');
+    log.warn(`${rel} now contains tracking code (${names}). Put it in a tracking script instead (Pages -> Tracking Scripts, pick this page, Head or Footer).`);
+}
+
 /** Mirrors PageEditorController's own guard, so we can explain a skip it makes silently. */
 function hasBackendTemplateSyntax(html: string): boolean {
     return /@(if|else|endif|foreach|endforeach|extends|block|endblock|component|set)\b/.test(html) || html.includes('{{');
@@ -827,6 +849,7 @@ export async function pushPageFile(
             autoCreateCollections: true,
         });
         reportCollectionsCreated(res.collections_created, rel, body);
+        reportTrackingCodeInPage(res.tracking_code_in_page, rel);
         const newMeta: EfMeta = { ...meta, path: rel };
         // Adopt the server's canonical version (inline-split-test ids, reindent,
         // auto-created collections) so the next push doesn't see a phantom diff.
@@ -878,6 +901,7 @@ export async function pushPageFile(
         autoCreateCollections: true,
     });
     reportCollectionsCreated(res.collections_created, rel, body);
+    reportTrackingCodeInPage(res.tracking_code_in_page, rel);
     const newMeta: EfMeta = {
         v: 1, type: 'page', brandId: ctx.rt.config.brandId, id: created.id,
         slug: created.slug ?? slug, name: created.title ?? title,

@@ -858,6 +858,15 @@ Most-used, by task:
     push REFUSES (exit 4). See the delta with \`ef diff pages/x.events.json\` / \`ef diff funnels/x.flow.json\`,
     then pick a side — \`--force\` on push (keep local) or \`pull --force\` (take server).
   - A funnel's \`flow\`/\`product_flow\`/\`variant_seeds\` are read-only (server regenerates on save) — never edit them.
+- **Kit customise (a kit applied, pages still about the kit's demo product)** — use the
+  **\`kit-customize\` skill**. \`ef context pull\` writes \`.ef/context/\` (kit.json, brief.md, facts.json,
+  assets.json + assets/, slots.json, missing.json); \`ef context missing\` lists what is still missing
+  (\`blocking\` rows first); \`ef context facts set <key> <value>\` and \`ef context brief set --file <path>\`
+  write back. \`ef assets add <file> --product CODE --role packshot\` adds a customer image;
+  \`ef assets sync-drive [<url>]\` imports a link-shared Drive folder (exit 2 = incomplete).
+  \`ef images generate --slot <slot> [--product CODE] [--prompt "..."] [--aspect 4:5] --yes\` costs AI
+  credits: it prints the price first, and \`--max-credits N\` refuses anything dearer. The customer's
+  brief copy goes in verbatim; kit pages stay drafts (\`ef push --draft\`), the owner publishes.
 - \`ef config get\` / \`ef config set saveMode direct\` — view/change project config.
 - \`ef preview <slug>\` — editor preview URL.
 - \`ef list pages --json\` — machine-readable listings (every command takes

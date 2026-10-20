@@ -43,6 +43,8 @@ import { registerShippingProfilesCommand } from './commands/shippingProfiles';
 import { registerFoldersCommand } from './commands/folders';
 import { registerOrdersCommand } from './commands/orders';
 import { registerSessionsCommand } from './commands/sessions';
+import { registerContextCommand } from './commands/context';
+import { registerImagesCommand } from './commands/images';
 // Temporarily DISABLED — kept in the tree but not wired up. Emails need a raw
 // code-editor path (not just the GrapesJS builder) and automations need real
 // graph UX before they're safe to ship; re-enable by restoring these two lines
@@ -119,6 +121,8 @@ Designed for Claude Code, scripts, and humans equally:
     registerTagsCommand(program);
     registerShippingProfilesCommand(program);
     registerFoldersCommand(program);
+    registerContextCommand(program);
+    registerImagesCommand(program);
     // Disabled for now (see the commented imports above):
     // registerAutomationsCommand(program);
     // registerEmailsCommand(program);

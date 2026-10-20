@@ -287,6 +287,9 @@ platform members area.
   (\`[UPSELL=CODE]\`/\`upsell()\`, \`[UPSELL_DECLINE]\`/\`decline()\`), with a purchase and a
   decline branch in the funnel graph for every step; a subscription upsell says
   so in its button. Check with \`ef funnels debug-flow\` and by clicking both.
+  A gift or ship-to-someone-else upsell uses \`[UPSELL=CODE form=gift-address]\`
+  (or the page's own form calling \`window.ef.quickBuy(code, { ship_to, gift })\`,
+  which returns \`{ success, nextUrl }\`); never a second checkout for it.
 - **Cart from the platform:** \`cartItems\`/\`efCart.*\` scope, live count
   \`<span data-ef-text="efCart.count">0</span>\`, \`data-ef-add-to-cart\` +
   \`data-product-code\`, \`data-cart-qty-minus|plus|remove\`, checkout via

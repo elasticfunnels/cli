@@ -211,7 +211,15 @@ test('ef images generate: shows the cost, refuses without --yes when not interac
         assert.equal(r.code, 2);
         assert.match(r.stderr, /over the cap of 50/);
 
-        r = await runEf(root, ['images', 'generate', '--slot', 'hero', '--product', 'CAL1', '--aspect', '1:1', '--yes', '--json'], { EF_IMAGE_POLL_MS: '10' });
+        // A cap that is not a whole number used to parse to NaN and skip the check.
+        for (const bad of ['abc', '-5', '1e3', '12.5']) {
+            r = await runEf(root, ['images', 'generate', '--slot', 'hero', '--yes', `--max-credits=${bad}`]);
+            assert.equal(r.code, 2, `${bad}: ${r.stderr}`);
+            assert.match(r.stderr, /--max-credits takes a whole number/);
+        }
+        assert.ok(!mock.requests.some((q) => q.method === 'POST' && q.url.startsWith('/api/brands/7/ai-images')), 'a bad cap never reaches the generate call');
+
+        r = await runEf(root, ['images', 'generate', '--slot', 'hero', '--product', 'CAL1', '--aspect', '1:1', '--yes', '--max-credits', '200', '--json'], { EF_IMAGE_POLL_MS: '10' });
         assert.equal(r.code, 0, r.stderr);
         const out = JSON.parse(r.stdout);
         assert.equal(out.image.status, 'done');
@@ -223,6 +231,7 @@ test('ef images generate: shows the cost, refuses without --yes when not interac
         assert.deepEqual(sent.reference_ids, [21]);
         assert.match(sent.prompt, /^A bottle on a kitchen table\n\nThe product is "Calvessa VesselGuard Chews"/);
         assert.match(sent.idempotency_key, /^[0-9a-f]{32}$/);
+        assert.equal(sent.max_credits, 200, 'the cap rides along for the server to enforce');
 
         r = await runEf(root, ['images', 'generate', '--prompt', 'x y z', '--yes']);
         assert.equal(r.code, 2);

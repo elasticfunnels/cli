@@ -58,6 +58,14 @@ export function buildGenerateRequest(b: KitContextBundle, opts: { slot?: string;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** `--max-credits`: a non-negative whole number, or the command refuses (a NaN cap used to skip the check). */
+export function parseMaxCredits(v: string): number {
+    const t = String(v).trim();
+    const n = /^\d+$/.test(t) ? Number(t) : NaN;
+    if (!Number.isSafeInteger(n)) throw new CliError(ExitCode.Validation, `--max-credits takes a whole number of credits, got ${JSON.stringify(v)}.`);
+    return n;
+}
+
 export function registerImagesCommand(program: Command): void {
     const cmd = program.command('images').description('AI images for the kit\'s image slots, paid in AI credits.');
     cmd.command('generate')
@@ -67,7 +75,7 @@ export function registerImagesCommand(program: Command): void {
         .option('--product <code>', 'Product the image shows: adds its name and its packshot/label images as references.')
         .option('--aspect <w:h>', 'Aspect ratio, e.g. 4:5 (default: the slot\'s).')
         .option('--reference <assetId...>', 'Asset ids to use as reference images (repeat or comma-separate).')
-        .option('--max-credits <n>', 'Refuse if one image costs more than this (a job\'s credit cap).', (v) => parseInt(v, 10))
+        .option('--max-credits <n>', 'Refuse if one image costs more than this (a job\'s credit cap).', parseMaxCredits)
         .option('-y, --yes', 'Do not ask to confirm the cost (needed in non-interactive runs).')
         .option('--no-wait', 'Return as soon as the image is queued.')
         .option('--json', 'Print the result as JSON.')
@@ -80,7 +88,10 @@ export function registerImagesCommand(program: Command): void {
             const est = await ctxApi.imageEstimate(1);
             const cost = est.credits_per_image;
             if (!opts.json) log.info(`One image into "${req.slot}" costs ${cost} AI credits (balance ${est.balance}, after ${est.balance_after}).`);
-            if (opts.maxCredits !== undefined && Number.isFinite(opts.maxCredits) && cost > opts.maxCredits) {
+            if (opts.maxCredits !== undefined && !(typeof cost === 'number' && Number.isFinite(cost))) {
+                throw new CliError(ExitCode.Error, 'The server did not return a price for this image, so the --max-credits cap cannot be checked. Not generated.');
+            }
+            if (opts.maxCredits !== undefined && cost > opts.maxCredits) {
                 throw new CliError(ExitCode.Validation, `This image costs ${cost} credits, over the cap of ${opts.maxCredits}. Not generated.`);
             }
             if (!est.can_afford) throw new CliError(ExitCode.Validation, `Not enough AI credits: ${cost} needed, ${est.balance} available.`);
@@ -90,7 +101,9 @@ export function registerImagesCommand(program: Command): void {
                 if (!(await confirm(`Spend ${cost} AI credits on this image?`, false))) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
 
-            let image: KitImage = await ctxApi.generateImage({ ...req, idempotencyKey: crypto.randomBytes(16).toString('hex') });
+            // max_credits goes along so the server can refuse a price that moved after the
+            // estimate; until the app enforces it, the check above is the cap.
+            let image: KitImage = await ctxApi.generateImage({ ...req, idempotencyKey: crypto.randomBytes(16).toString('hex'), ...(opts.maxCredits !== undefined ? { maxCredits: opts.maxCredits } : {}) });
             if (opts.wait !== false) {
                 const until = Date.now() + Number(process.env.EF_IMAGE_WAIT_MS ?? 5 * 60_000);
                 const every = Number(process.env.EF_IMAGE_POLL_MS ?? 3000);

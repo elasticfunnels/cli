@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../api/client';
 import { KitContextApi, type KitContextBundle, type MissingRow } from '../api/kitContextApi';
+import { safeText } from '../utils/sanitize';
 
 export const CONTEXT_DIR = path.join('.ef', 'context');
 const MAX_DOWNLOAD = 50 * 1024 * 1024;
@@ -27,12 +28,63 @@ export type FetchBytes = (url: string) => Promise<Uint8Array>;
 export const defaultFetchBytes: FetchBytes = async (url) => {
     const res = await fetch(url, { redirect: 'follow' });
     if (!res.ok) throw new Error(`GET ${url} failed: HTTP ${res.status}`);
-    const len = Number(res.headers.get('content-length') || 0);
-    if (len > MAX_DOWNLOAD) throw new Error(`${url} is ${len} bytes, over the ${MAX_DOWNLOAD} byte limit`);
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength > MAX_DOWNLOAD) throw new Error(`${url} is over the ${MAX_DOWNLOAD} byte limit`);
-    return buf;
+    const { readCapped } = await import('./driveFetch');
+    return new Uint8Array(await readCapped(res, MAX_DOWNLOAD, url));
 };
+
+/**
+ * `<root>/<rel>` as a real directory inside the real project root: each component is lstat'ed,
+ * created when missing, and refused when it is a symlink or not a directory. A planted
+ * `.ef/context/assets -> ~/Documents` would otherwise have `ef context pull` write into, and
+ * clean up (delete from), a directory outside the project.
+ */
+export async function ensureContainedDir(rootDir: string, rel: string): Promise<string> {
+    const realRoot = await fs.promises.realpath(rootDir);
+    let cur = realRoot;
+    for (const part of rel.split(/[\\/]+/).filter(Boolean)) {
+        cur = path.join(cur, part);
+        let st: fs.Stats | null = null;
+        try {
+            st = await fs.promises.lstat(cur);
+        } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+        }
+        if (!st) {
+            await fs.promises.mkdir(cur);
+            continue;
+        }
+        if (st.isSymbolicLink()) throw new Error(`${path.relative(realRoot, cur)} is a symlink; refusing to write the kit context through it. Remove it and re-run.`);
+        if (!st.isDirectory()) throw new Error(`${path.relative(realRoot, cur)} is not a directory; remove it and re-run.`);
+    }
+    const real = await fs.promises.realpath(cur);
+    if (real !== cur || !(real === realRoot || real.startsWith(realRoot + path.sep))) {
+        throw new Error(`${rel} resolves outside the project (${real}); refusing.`);
+    }
+    return real;
+}
+
+/** Refuse a path that exists as anything but a regular file (a symlink above all). */
+async function assertRegularOrAbsent(file: string): Promise<void> {
+    try {
+        const st = await fs.promises.lstat(file);
+        if (!st.isFile()) throw new Error(`${path.basename(file)} is a symlink or not a regular file; refusing to write through it.`);
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+}
+
+/** Write through a fresh temp file (O_EXCL, so a planted temp symlink fails) and rename over the target. */
+async function atomicWrite(file: string, content: string | Uint8Array): Promise<void> {
+    await assertRegularOrAbsent(file);
+    const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    try {
+        await fs.promises.writeFile(tmp, content, { flag: 'wx' });
+        await fs.promises.rename(tmp, file);
+    } catch (e) {
+        await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+        throw e;
+    }
+}
 
 export interface PullContextResult {
     dir: string;
@@ -68,15 +120,14 @@ function extFromUrl(url: string): string {
 }
 
 async function writeIfChanged(file: string, content: string, out: PullContextResult, rel: string): Promise<void> {
+    await assertRegularOrAbsent(file);
     try {
         if ((await fs.promises.readFile(file, 'utf8')) === content) {
             out.unchanged.push(rel);
             return;
         }
     } catch { /* new file */ }
-    const tmp = `${file}.tmp-${process.pid}`;
-    await fs.promises.writeFile(tmp, content);
-    await fs.promises.rename(tmp, file);
+    await atomicWrite(file, content);
     out.written.push(rel);
 }
 
@@ -84,6 +135,7 @@ const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';
 
 async function fileSha(p: string): Promise<string | null> {
     try {
+        if (!(await fs.promises.lstat(p)).isFile()) return null;
         return sha256Hex(await fs.promises.readFile(p));
     } catch {
         return null;
@@ -109,9 +161,8 @@ export function composeBrief(b: KitContextBundle): string {
 export async function pullKitContext(rootDir: string, api: ApiClient, brandId: number, opts: PullContextOptions = {}): Promise<PullContextResult> {
     const fetchBytes = opts.fetchBytes ?? defaultFetchBytes;
     const ctxApi = new KitContextApi(api, brandId);
-    const dir = path.join(rootDir, CONTEXT_DIR);
-    const assetsDir = path.join(dir, 'assets');
-    await fs.promises.mkdir(assetsDir, { recursive: true });
+    const dir = await ensureContainedDir(rootDir, CONTEXT_DIR);
+    const assetsDir = await ensureContainedDir(rootDir, path.join(CONTEXT_DIR, 'assets'));
 
     const out: PullContextResult = { dir, hasContext: false, written: [], unchanged: [], downloaded: [], kept: [], removed: [], failed: [], missing: [], blockers: [] };
     const bundle = await ctxApi.get();
@@ -140,7 +191,8 @@ export async function pullKitContext(rootDir: string, api: ApiClient, brandId: n
     const nextState: Record<string, { url: string; sha256: string }> = {};
     const fetchOne = async (key: string, name: string, url: string | null | undefined, sha: string | null | undefined): Promise<string | null> => {
         if (!url) return null;
-        const local = `${key}-${safeName(name.replace(/\.[^.]+$/, ''))}${path.extname(name) || extFromUrl(url)}`;
+        const ext = path.extname(name);
+        const local = `${safeName(key)}-${safeName(name.replace(/\.[^.]+$/, ''))}${/^\.[a-z0-9]{1,8}$/i.test(ext) ? ext : extFromUrl(url)}`;
         const abs = path.join(assetsDir, local);
         wanted.add(local);
         const have = await fileSha(abs);
@@ -153,7 +205,7 @@ export async function pullKitContext(rootDir: string, api: ApiClient, brandId: n
         }
         try {
             const bytes = await fetchBytes(url);
-            await fs.promises.writeFile(abs, bytes);
+            await atomicWrite(abs, bytes);
             out.downloaded.push(local);
             nextState[local] = { url, sha256: sha256Hex(bytes) };
             return `assets/${local}`;
@@ -172,12 +224,12 @@ export async function pullKitContext(rootDir: string, api: ApiClient, brandId: n
         files.push({ ...f, local: await fetchOne(`f${f.id}`, f.name || `file-${f.id}`, f.url, f.sha256) });
     }
 
-    // Anything in assets/ the server no longer lists goes.
-    for (const name of await fs.promises.readdir(assetsDir)) {
-        if (!wanted.has(name)) {
-            await fs.promises.rm(path.join(assetsDir, name), { force: true, recursive: true });
-            out.removed.push(name);
-        }
+    // Any regular file in assets/ the server no longer lists goes. Never recursive, never
+    // through a symlink: a directory or link someone put there is left alone.
+    for (const ent of await fs.promises.readdir(assetsDir, { withFileTypes: true })) {
+        if (wanted.has(ent.name) || !ent.isFile()) continue;
+        await fs.promises.unlink(path.join(assetsDir, ent.name));
+        out.removed.push(ent.name);
     }
 
     await writeIfChanged(path.join(dir, 'kit.json'), json(kit), out, 'kit.json');
@@ -212,9 +264,9 @@ export async function readMissing(rootDir: string): Promise<MissingRow[] | null>
 export function formatMissing(rows: MissingRow[]): string[] {
     const sorted = [...rows].sort((a, b) => Number(b.blocking) - Number(a.blocking));
     return sorted.map((r) => {
-        const pages = r.pages?.length ? ` (pages: ${r.pages.join(', ')})` : '';
-        const fix = r.fix ? ` -> ${r.fix}` : '';
-        return `${r.blocking ? 'BLOCKER ' : ''}[${r.kind}] ${r.label}${pages}${fix}`;
+        const pages = Array.isArray(r.pages) && r.pages.length ? ` (pages: ${r.pages.map(safeText).join(', ')})` : '';
+        const fix = r.fix ? ` -> ${safeText(r.fix)}` : '';
+        return `${r.blocking ? 'BLOCKER ' : ''}[${safeText(r.kind)}] ${safeText(r.label)}${pages}${fix}`;
     });
 }
 

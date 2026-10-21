@@ -13,6 +13,7 @@ import { sha256 } from '../utils/fs';
 import { KitContextApi } from '../api/kitContextApi';
 import { IMAGE_EXTS, ALLOWED_EXTS } from '../lib/driveFetch';
 import { syncDrive, mimeFor } from '../lib/driveSync';
+import { safeText } from '../utils/sanitize';
 
 export const ASSET_ROLES = ['packshot', 'label', 'logo', 'lifestyle', 'reference', 'testimonial', 'certificate'];
 
@@ -110,8 +111,8 @@ export function registerAssetsCommand(program: Command): void {
                 log.json({ ok: r.code === 0, code: r.code, url: r.url, error: r.error ?? null, uploaded: r.uploaded, alreadyThere: r.alreadyThere, uploadFailed: r.uploadFailed, skipped: r.manifest?.skipped ?? [], failures: r.manifest?.failures ?? [], warnings: r.manifest?.warnings ?? [] });
             } else {
                 if (r.error) log.error(r.error);
-                for (const n of r.notes) process.stderr.write(`sync-drive: ${n}\n`);
-                for (const f of r.uploadFailed) log.warn(`upload ${f.name}: ${f.error}`);
+                for (const n of r.notes) process.stderr.write(`sync-drive: ${safeText(n)}\n`);
+                for (const f of r.uploadFailed) log.warn(`upload ${safeText(f.name)}: ${safeText(f.error)}`);
                 if (r.code !== 1) log.success(`Drive sync: ${r.uploaded.length} added, ${r.alreadyThere.length} already there${r.code === 2 ? ' (INCOMPLETE: see above)' : ''}.`);
             }
             if (r.code !== 0) process.exitCode = r.code === 1 ? ExitCode.Error : ExitCode.Validation;

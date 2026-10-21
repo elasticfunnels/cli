@@ -8,6 +8,7 @@ import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { formatMissing, pullKitContext, CONTEXT_DIR } from '../lib/kitContext';
 import { docxBytesToMarkdown } from '../lib/docx2md';
+import { safeText } from '../utils/sanitize';
 
 /** `"12"` -> 12, `"true"` -> true, `'["a"]'` -> array; anything else stays the string it is. */
 export function parseFactValue(raw: string): unknown {
@@ -20,14 +21,18 @@ export function parseFactValue(raw: string): unknown {
     return raw;
 }
 
-/** Set `a.b.c` in a copy of `obj`. */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+/** Set `a.b.c` in a copy of `obj`. `__proto__`, `prototype` and `constructor` are refused (prototype pollution). */
 export function setPath(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
     const out = JSON.parse(JSON.stringify(obj ?? {})) as Record<string, unknown>;
     const parts = key.split('.').filter(Boolean);
     if (!parts.length) throw new CliError(ExitCode.Validation, 'A fact key is required.');
+    const bad = parts.find((p) => FORBIDDEN_KEYS.has(p));
+    if (bad) throw new CliError(ExitCode.Validation, `"${bad}" cannot be part of a fact key.`);
     let cur: Record<string, unknown> = out;
     for (const p of parts.slice(0, -1)) {
-        if (!cur[p] || typeof cur[p] !== 'object' || Array.isArray(cur[p])) cur[p] = {};
+        if (!Object.prototype.hasOwnProperty.call(cur, p) || !cur[p] || typeof cur[p] !== 'object' || Array.isArray(cur[p])) cur[p] = {};
         cur = cur[p] as Record<string, unknown>;
     }
     cur[parts[parts.length - 1]] = value;
@@ -51,7 +56,7 @@ export function registerContextCommand(program: Command): void {
             } else {
                 if (!r.hasContext) log.warn('This brand has no kit context yet (no kit applied, no brief). Files written are empty.');
                 log.success(`Kit context in ${path.relative(process.cwd(), r.dir) || r.dir}: ${r.written.length} file(s) updated, ${r.unchanged.length} unchanged, ${r.downloaded.length} asset(s) downloaded, ${r.kept.length} kept, ${r.removed.length} removed.`);
-                for (const f of r.failed) log.warn(`${f.name}: ${f.error}`);
+                for (const f of r.failed) log.warn(`${safeText(f.name)}: ${safeText(f.error)}`);
                 if (r.missing.length) log.info(`${r.missing.length} item(s) missing${r.blockers.length ? `, ${r.blockers.length} blocking` : ''}: run ${c.bold('ef context missing')}.`);
             }
             if (r.failed.length) process.exitCode = ExitCode.Error;
@@ -71,7 +76,7 @@ export function registerContextCommand(program: Command): void {
                 log.success('Nothing missing.');
                 return;
             }
-            for (const line of formatMissing(rows)) console.log(line);
+            for (const line of formatMissing(rows)) console.log(safeText(line));
         });
 
     const facts = cmd.command('facts').description('Offer facts (product names, prices, guarantee, ingredients, audience).');

@@ -10,10 +10,20 @@ import * as zlib from 'zlib';
 
 // ── zip ──────────────────────────────────────────────────────────────
 
-export class ZipReader {
-    private entries = new Map<string, { method: number; compSize: number; localOffset: number }>();
+/** Limits for an untrusted .docx: a small zip must not expand into gigabytes (zip bomb). */
+export const ZIP_LIMITS = {
+    maxEntries: 5000,
+    /** Uncompressed bytes for one entry (document.xml, one embedded image). */
+    maxEntryBytes: 64 * 1024 * 1024,
+    /** Uncompressed bytes for the whole archive, declared and actually inflated. */
+    maxTotalBytes: 256 * 1024 * 1024,
+};
 
-    constructor(private readonly buf: Buffer) {
+export class ZipReader {
+    private entries = new Map<string, { method: number; compSize: number; size: number; localOffset: number }>();
+    private inflated = 0;
+
+    constructor(private readonly buf: Buffer, private readonly limits = ZIP_LIMITS) {
         // End of central directory: last 22..65557 bytes.
         let eocd = -1;
         for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
@@ -24,17 +34,23 @@ export class ZipReader {
         }
         if (eocd < 0) throw new Error('not a zip file (no end of central directory)');
         const count = buf.readUInt16LE(eocd + 10);
+        if (count > limits.maxEntries) throw new Error(`zip has ${count} entries, over the ${limits.maxEntries} limit`);
+        let declared = 0;
         let p = buf.readUInt32LE(eocd + 16);
         for (let n = 0; n < count; n++) {
-            if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('corrupt zip central directory');
+            if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) throw new Error('corrupt zip central directory');
             const method = buf.readUInt16LE(p + 10);
             const compSize = buf.readUInt32LE(p + 20);
+            const size = buf.readUInt32LE(p + 24);
             const nameLen = buf.readUInt16LE(p + 28);
             const extraLen = buf.readUInt16LE(p + 30);
             const commentLen = buf.readUInt16LE(p + 32);
             const localOffset = buf.readUInt32LE(p + 42);
             const name = buf.subarray(p + 46, p + 46 + nameLen).toString('utf8');
-            this.entries.set(name, { method, compSize, localOffset });
+            if (size > limits.maxEntryBytes) throw new Error(`zip entry ${name} unpacks to ${size} bytes, over the ${limits.maxEntryBytes} limit`);
+            declared += size;
+            if (declared > limits.maxTotalBytes) throw new Error(`zip unpacks to more than ${limits.maxTotalBytes} bytes`);
+            this.entries.set(name, { method, compSize, size, localOffset });
             p += 46 + nameLen + extraLen + commentLen;
         }
     }
@@ -47,12 +63,30 @@ export class ZipReader {
         const e = this.entries.get(name);
         if (!e) return null;
         const p = e.localOffset;
-        if (this.buf.readUInt32LE(p) !== 0x04034b50) throw new Error(`corrupt zip local header for ${name}`);
+        if (p + 30 > this.buf.length || this.buf.readUInt32LE(p) !== 0x04034b50) throw new Error(`corrupt zip local header for ${name}`);
         const start = p + 30 + this.buf.readUInt16LE(p + 26) + this.buf.readUInt16LE(p + 28);
         const data = this.buf.subarray(start, start + e.compSize);
-        if (e.method === 0) return Buffer.from(data);
-        if (e.method === 8) return zlib.inflateRawSync(data);
-        throw new Error(`unsupported zip compression ${e.method} for ${name}`);
+        let out: Buffer;
+        if (e.method === 0) {
+            out = Buffer.from(data);
+        } else if (e.method === 8) {
+            // The declared size is the header's word; the real inflate is capped too, so a
+            // header that lies about the size cannot get more than the limits allow.
+            const room = Math.min(this.limits.maxEntryBytes, this.limits.maxTotalBytes - this.inflated);
+            try {
+                out = zlib.inflateRawSync(data, { maxOutputLength: Math.max(1, Math.min(room, e.size || room)) });
+            } catch (err) {
+                if ((err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
+                    throw new Error(`zip entry ${name} unpacks to more than its declared size or the size limit`);
+                }
+                throw err;
+            }
+        } else {
+            throw new Error(`unsupported zip compression ${e.method} for ${name}`);
+        }
+        this.inflated += out.length;
+        if (this.inflated > this.limits.maxTotalBytes) throw new Error(`zip unpacks to more than ${this.limits.maxTotalBytes} bytes`);
+        return out;
     }
 }
 

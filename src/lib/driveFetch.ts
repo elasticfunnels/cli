@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { convertDocx } from './docx2md';
+import { safeText } from '../utils/sanitize';
 
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -64,22 +65,99 @@ export interface HttpResponse {
 /** One GET. Tests inject a fake; the default keeps cookies across calls (Drive's confirm flow needs them). */
 export type HttpGet = (url: string) => Promise<HttpResponse>;
 
-export function makeHttpGet(): HttpGet {
-    const jar = new Map<string, string>();
-    return async (url) => {
-        const cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
-        const res = await fetch(url, { headers: { 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) }, redirect: 'follow', signal: AbortSignal.timeout(180_000) });
-        const h = res.headers as unknown as { getSetCookie?: () => string[] };
-        const set = typeof h.getSetCookie === 'function' ? h.getSetCookie() : (res.headers.get('set-cookie') ? [res.headers.get('set-cookie') as string] : []);
-        for (const c of set) {
-            const m = /^([^=;\s]+)=([^;]*)/.exec(c);
-            if (m) jar.set(m[1], m[2]);
+/** Hosts a Drive download, export or confirm form may point at. */
+const DRIVE_HOSTS = new Set(['drive.usercontent.google.com', 'drive.google.com', 'docs.google.com']);
+/**
+ * Redirect hops only: exports and downloads land on Google's content CDN, and a folder that
+ * is not link-shared bounces to the sign-in page (listFolder turns that into the sharing help).
+ */
+const REDIRECT_SUFFIX = '.googleusercontent.com';
+const REDIRECT_HOSTS = new Set(['accounts.google.com']);
+
+/**
+ * Throws unless `raw` is an https URL on a Google Drive host on the default port, with no
+ * userinfo. `redirect` also admits *.googleusercontent.com (where exports land). This is the
+ * only thing standing between a planted HTML "confirm page" in a shared folder and a GET to
+ * localhost or a metadata endpoint, so every URL the downloader fetches goes through it.
+ */
+export function assertDriveUrl(raw: string, opts: { redirect?: boolean } = {}): URL {
+    let u: URL;
+    try {
+        u = new URL(raw);
+    } catch {
+        throw new DriveError(`refusing to fetch a malformed URL from Drive: ${JSON.stringify(raw.slice(0, 200))}`);
+    }
+    const host = u.hostname.toLowerCase();
+    const hostOk = DRIVE_HOSTS.has(host) || (!!opts.redirect && (REDIRECT_HOSTS.has(host) || (host.endsWith(REDIRECT_SUFFIX) && /^[a-z0-9.-]+$/.test(host))));
+    if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !hostOk) {
+        throw new DriveError(`refusing to fetch ${u.protocol}//${host}${u.port ? `:${u.port}` : ''}: only https Google Drive hosts are allowed`);
+    }
+    return u;
+}
+
+/** Read a response body, aborting once it passes `max` bytes (Content-Length can be absent or wrong). */
+export async function readCapped(res: Response, max: number, what = 'response'): Promise<Buffer> {
+    const len = Number(res.headers.get('content-length') || 0);
+    if (len > max) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new DriveError(`${what} is ${len} bytes, over the ${max} byte limit`);
+    }
+    if (!res.body) return Buffer.alloc(0);
+    const reader = res.body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > max) {
+            await reader.cancel().catch(() => undefined);
+            throw new DriveError(`${what} is over the ${max} byte limit`);
         }
-        const len = Number(res.headers.get('content-length') || 0);
-        if (len > MAX_BYTES) throw new DriveError(`file is ${len} bytes, over the ${MAX_BYTES} byte limit`);
-        const body = Buffer.from(await res.arrayBuffer());
-        return { status: res.status, headers: res.headers, body };
+        chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, total);
+}
+
+type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * The real GET: Drive hosts only (checked on the first URL and on every redirect hop, which
+ * are followed by hand), cookies kept per host and sent only back to the host that set them,
+ * and the body capped while it streams. `fetchImpl` is for tests.
+ */
+export function makeHttpGet(fetchImpl: FetchLike = fetch, maxBytes = MAX_BYTES): HttpGet {
+    const jars = new Map<string, Map<string, string>>();
+    return async (url) => {
+        let u = assertDriveUrl(url, { redirect: true });
+        for (let hop = 0; ; hop++) {
+            const jar = jars.get(u.hostname) ?? new Map<string, string>();
+            jars.set(u.hostname, jar);
+            const cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+            const res = await fetchImpl(u.toString(), { headers: { 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) }, redirect: 'manual', signal: AbortSignal.timeout(180_000) });
+            const h = res.headers as unknown as { getSetCookie?: () => string[] };
+            const set = typeof h.getSetCookie === 'function' ? h.getSetCookie() : (res.headers.get('set-cookie') ? [res.headers.get('set-cookie') as string] : []);
+            for (const c of set) {
+                const m = /^([^=;\s]+)=([^;]*)/.exec(c);
+                if (m) jar.set(m[1], m[2]);
+            }
+            const loc = res.headers.get('location');
+            if (res.status >= 300 && res.status < 400 && loc) {
+                await res.body?.cancel().catch(() => undefined);
+                if (hop >= 10) throw new DriveError('too many redirects');
+                u = assertDriveUrl(new URL(loc, u).toString(), { redirect: true });
+                continue;
+            }
+            const body = await readCapped(res, maxBytes, 'file');
+            return { status: res.status, headers: res.headers, body };
+        }
     };
+}
+
+/** Drive ids are [A-Za-z0-9_-]; anything else from a listing never goes into a URL. */
+export function assertDriveId(id: string): string {
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new DriveError(`not a Drive id: ${JSON.stringify(id.slice(0, 80))}`);
+    return id;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -143,7 +221,7 @@ export interface DriveEntry { id: string; name: string; mimeType: string }
 export async function listFolder(get: HttpGet, fid: string): Promise<{ title: string; entries: DriveEntry[] }> {
     let html: string;
     try {
-        html = (await fetchUrl(get, `https://drive.google.com/drive/folders/${fid}`)).toString('utf8');
+        html = (await fetchUrl(get, `https://drive.google.com/drive/folders/${assertDriveId(fid)}`)).toString('utf8');
     } catch (e) {
         if (e instanceof DriveError && e.code !== null && [401, 403, 404].includes(e.code)) throw new DriveError(NOT_SHARED(fid, e.code));
         throw e;
@@ -189,7 +267,7 @@ export function uniquePath(dir: string, name: string): string {
 
 /** A real file, through Drive's large-file confirmation page when it shows one. */
 export async function downloadBinary(get: HttpGet, fid: string, dest: string): Promise<number> {
-    const url = `https://drive.usercontent.google.com/download?id=${fid}&export=download&confirm=t`;
+    const url = `https://drive.usercontent.google.com/download?id=${assertDriveId(fid)}&export=download&confirm=t`;
     let res = await get(url);
     if (res.status >= 400) throw new DriveError(`GET ${url} failed: HTTP ${res.status}`, res.status);
     if ((res.headers.get('content-type') || '').startsWith('text/html')) {
@@ -201,13 +279,14 @@ export async function downloadBinary(get: HttpGet, fid: string, dest: string): P
                 "have viewed or downloaded this file'), which clears on its own within a day; sometimes the file itself is " +
                 'not link-shared even though its folder is. Open the file\'s own Drive link in a private window to tell them apart.');
         }
-        const action = form[1].replace(/&amp;/g, '&');
+        const action = assertDriveUrl(form[1].replace(/&amp;/g, '&'));
+        if (action.search || action.hash) throw new DriveError('Drive confirm form has an unexpected action URL; not following it.');
         const fields = new URLSearchParams();
         const re = /<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(form[2]))) fields.set(m[1], m[2]);
         if (!fields.has('confirm')) fields.set('confirm', 't');
-        res = await get(`${action}?${fields.toString()}`);
+        res = await get(`${action.origin}${action.pathname}?${fields.toString()}`);
         if (res.status >= 400) throw new DriveError(`download confirm failed: HTTP ${res.status}`, res.status);
     }
     return writeChecked(res, dest);
@@ -234,7 +313,7 @@ function writeChecked(res: HttpResponse, dest: string): number {
 
 export async function exportNative(get: HttpGet, fid: string, mime: string, dest: string): Promise<number> {
     const [url] = NATIVE_EXPORTS[mime];
-    const data = await fetchUrl(get, url.replace('{id}', fid));
+    const data = await fetchUrl(get, url.replace('{id}', assertDriveId(fid)));
     const head = data.subarray(0, 15).toString('utf8').trimStart();
     if (head.startsWith('<!DOCTYPE html') || data.subarray(0, 6).toString('utf8') === '<html>') {
         throw new DriveError('export returned an HTML error page (not link-shared?)');
@@ -332,9 +411,9 @@ async function walk(get: HttpGet, fid: string, outDir: string, rel: string, m: D
     const log = opts.log ?? (() => {});
     const { title, entries } = await listFolder(get, fid);
     if (depth === 0) m.source.title = title;
-    log(`${'  '.repeat(depth)}[dir] ${title} (${entries.length} entries)`);
+    log(`${'  '.repeat(depth)}[dir] ${safeText(title)} (${entries.length} entries)`);
     if (entries.length >= 50) {
-        m.warnings.push(`folder '${title}' (${fid}) listed ${entries.length} entries; Drive pages its listing, so some files may be missing. Verify manually.`);
+        m.warnings.push(`folder '${safeText(title)}' (${fid}) listed ${entries.length} entries; Drive pages its listing, so some files may be missing. Verify manually.`);
     }
     m.folders.push({ driveId: fid, name: title, path: rel || '.' });
     if (!opts.dryRun) fs.mkdirSync(outDir, { recursive: true });
@@ -349,21 +428,21 @@ async function walk(get: HttpGet, fid: string, outDir: string, rel: string, m: D
             const nativeOk = !e.mimeType.startsWith('application/vnd.google-apps.') || !!NATIVE_EXPORTS[e.mimeType];
             if (nativeOk && !ALLOWED_EXTS.has(ext)) {
                 m.skipped.push({ driveId: e.id, name: e.name, mimeType: e.mimeType, reason: `type ${ext || '(none)'} is not allowed` });
-                log(`${'  '.repeat(depth)}  skip ${name} (type ${ext || 'none'} not allowed)`);
+                log(`${'  '.repeat(depth)}  skip ${safeText(name)} (type ${safeText(ext) || 'none'} not allowed)`);
                 continue;
             }
         }
         if (opts.skipIds?.has(e.id)) {
             m.files.push({ driveId: e.id, name, mimeType: e.mimeType, path: rel ? `${rel}/${name}` : name, kind: 'kept', bytes: null, sha256: null });
-            log(`${'  '.repeat(depth)}  kept ${name} (already in the context)`);
+            log(`${'  '.repeat(depth)}  kept ${safeText(name)} (already in the context)`);
             continue;
         }
         try {
             const rec = await handleFile(get, e, name, outDir, rel, opts);
             m.files.push(rec);
-            log(`${'  '.repeat(depth)}  ${rec.kind.slice(0, 4)} ${rec.path} (${rec.bytes ?? 0}B)`);
+            log(`${'  '.repeat(depth)}  ${rec.kind.slice(0, 4)} ${safeText(rec.path)} (${rec.bytes ?? 0}B)`);
         } catch (err) {
-            log(`${'  '.repeat(depth)}  !! ${name}: ${(err as Error).message}`);
+            log(`${'  '.repeat(depth)}  !! ${safeText(name)}: ${safeText((err as Error).message)}`);
             m.failures.push({ driveId: e.id, name: e.name, mimeType: e.mimeType, error: (err as Error).message });
         }
     }
@@ -401,13 +480,13 @@ export async function driveFetch(ref: string, opts: DriveFetchOptions): Promise<
         fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(m, null, 2) + '\n');
     }
     const notes: string[] = [];
-    for (const f of m.files) if (f.caveat) notes.push(`caveat: ${f.path}: ${f.caveat}`);
-    for (const w of m.warnings) notes.push(`WARNING: ${w}`);
+    for (const f of m.files) if (f.caveat) notes.push(`caveat: ${safeText(f.path)}: ${f.caveat}`);
+    for (const w of m.warnings) notes.push(`WARNING: ${safeText(w)}`);
     if (m.failures.length) {
         notes.push(`${m.failures.length} file(s) did NOT come down:`);
-        for (const f of m.failures) notes.push(`  - ${f.name}: ${f.error}`);
+        for (const f of m.failures) notes.push(`  - ${safeText(f.name)}: ${safeText(f.error)}`);
     }
-    for (const s of m.skipped) notes.push(`skipped ${s.name}: ${s.reason}`);
+    for (const s of m.skipped) notes.push(`skipped ${safeText(s.name)}: ${safeText(s.reason)}`);
     if (!m.files.length && !opts.dryRun && !m.skipped.length) {
         notes.push(`the folder listed no files at all. Check that the vendor put the material in ${fid} and not in a subfolder shared separately.`);
         return { code: 2, manifest: m, notes };

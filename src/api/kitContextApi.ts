@@ -186,7 +186,7 @@ export class KitContextApi {
         return res.data as ImageEstimate;
     }
 
-    async generateImage(input: { kitId: number; slot: string; prompt: string; aspect?: string; referenceIds?: number[]; idempotencyKey: string }): Promise<KitImage> {
+    async generateImage(input: { kitId: number; slot: string; prompt: string; aspect?: string; referenceIds?: number[]; idempotencyKey: string; maxCredits?: number }): Promise<KitImage> {
         const res = await this.api.request('POST', `/api/brands/${this.brandId}/ai-images`, {
             data: {
                 kit_id: input.kitId,
@@ -195,6 +195,7 @@ export class KitContextApi {
                 ...(input.aspect ? { aspect: input.aspect } : {}),
                 ...(input.referenceIds?.length ? { reference_ids: input.referenceIds } : {}),
                 idempotency_key: input.idempotencyKey,
+                ...(input.maxCredits !== undefined ? { max_credits: input.maxCredits } : {}),
             },
         });
         if (res.status === 402) {

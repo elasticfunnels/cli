@@ -18,6 +18,7 @@ import { assetEditorPayloadToBuffer, needsLocalAssetFallback } from '../api/type
 import { readSnapshot, writeSnapshot } from './baselineSnapshots';
 import { hasConflictMarkers, threeWayMerge } from './merge';
 import { log } from '../utils/log';
+import { formatLinkWarnings, PageLinkWarning } from './linkWarnings';
 
 const VERBOSE_BODY_FULL_MAX = 8000;
 const VERBOSE_BODY_HEAD = 1400;
@@ -557,6 +558,14 @@ function reportTrackingCodeInPage(found: string[] | undefined, rel: string): voi
     log.warn(`${rel} now contains tracking code (${names}). Put it in a tracking script instead (Pages -> Tracking Scripts, pick this page, Head or Footer).`);
 }
 
+/** Link warnings the page list shows for this page (wrong merchant account, unmapped product, pasted buy link). */
+function reportLinkWarnings(warnings: PageLinkWarning[] | undefined, rel: string): void {
+    for (const { level, line } of formatLinkWarnings(warnings, rel)) {
+        if (level === 'error') log.error(line);
+        else log.warn(line);
+    }
+}
+
 /** Mirrors PageEditorController's own guard, so we can explain a skip it makes silently. */
 function hasBackendTemplateSyntax(html: string): boolean {
     return /@(if|else|endif|foreach|endforeach|extends|block|endblock|component|set)\b/.test(html) || html.includes('{{');
@@ -850,6 +859,7 @@ export async function pushPageFile(
         });
         reportCollectionsCreated(res.collections_created, rel, body);
         reportTrackingCodeInPage(res.tracking_code_in_page, rel);
+        reportLinkWarnings(res.link_warnings, rel);
         const newMeta: EfMeta = { ...meta, path: rel };
         // Adopt the server's canonical version (inline-split-test ids, reindent,
         // auto-created collections) so the next push doesn't see a phantom diff.
@@ -902,6 +912,7 @@ export async function pushPageFile(
     });
     reportCollectionsCreated(res.collections_created, rel, body);
     reportTrackingCodeInPage(res.tracking_code_in_page, rel);
+    reportLinkWarnings(res.link_warnings, rel);
     const newMeta: EfMeta = {
         v: 1, type: 'page', brandId: ctx.rt.config.brandId, id: created.id,
         slug: created.slug ?? slug, name: created.title ?? title,

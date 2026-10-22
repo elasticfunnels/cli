@@ -60,6 +60,8 @@ rewrite anything, check that what the customer gave you is about THIS brand's pr
   brand sells Inflamora." Put the asset and file ids from `assets.json` on the flag.
 - After flagging, stop: do not rewrite any page in this turn. Tell the owner what you flagged and
   that they can confirm the files or replace them on the kit screen.
+- An image whose content is a placeholder (text such as "VSL poster frame") is not real art: treat
+  it as missing.
 - A Drive link to a single file (not a folder) is an error to report, not something to work around.
   Ask the owner for the link to the folder, shared as Anyone with the link can view.
 - A check the owner confirmed (`ef context checks` shows it as `confirmed`) means the owner says the
@@ -87,9 +89,12 @@ The customer is responsible for their own claims. Use their brief and copy as wr
   "X, not Y" sentence per page; vary sentence and paragraph length; do not give every section the
   same skeleton.
 - Write in the language of the brief.
-- Match the customer's real offer from `facts.json`: their packs, prices, upsell and downsell
-  prices. Where the kit has a section the customer has no material for (subscriptions, bonuses,
-  testimonials), drop the section instead of inventing its content.
+- The brief may be one long document organised by module numbers instead of one per page: map
+  each module to its page.
+- Placeholder copy in the brief (testimonials with "(fill in)" names) is not copy: leave it out and
+  list it as missing.
+- The kit's own proof (ratings, review and customer counts, demo comments, its expert) belongs to
+  the demo product: remove it unless the customer gave their own.
 
 ## 5. Products
 
@@ -103,6 +108,10 @@ no product tool: there, list the title and price each product needs in the summa
 
 For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
 
+- Match the customer's real offer from `facts.json` (packs, upsell and downsell prices), not the
+  kit's shape. A kit page or section for something they do not sell (extra upsells,
+  subscriptions, a 12-pack, a shipping bump, gift ebooks, bonuses) is dropped, not rewritten into
+  a dead offer: leave the page as it is and list it for the owner.
 - Keep the kit's structure, sections, directives, components, `[BUY=...]` links, product items and
   page events. Change the words and images, not the machinery.
 - Swap every mention of the kit's demo product (name, price, guarantee, ingredients, testimonials,
@@ -116,8 +125,18 @@ For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
 - The kit's demo text also lives in shared components, not only in pages: the header, footer,
   theme, guarantee seals, package cards, the sign-in box, the upsell top bar. Rewrite the components
   under `components/` the kit pages use (`ef pull components/<name>.ef`, push with `--draft`).
+  Check each one for kit product codes in selectors (`:has([data-ef-package="RLF-..."])`), a
+  "% OFF" built from a retail price the customer does not have, the kit's `seo_title`, and
+  placeholder empty-state copy.
+- Policy pages (shipping, refunds, privacy, terms) need facts from the owner. Do not make up
+  procedures, carriers or timings: list what is missing.
 - One funnel only should claim the landing pages. If two funnels point at the same landing page,
   say so in the summary.
+- Page previews render the PUBLISHED components, so a component draft does not show in a page
+  preview. Check components with `ef components preview <name>` (runner: `preview_ef` on
+  `components/<name>.ef`), or say they could not be checked; never call one fine from a page preview.
+- Before you call a page done, look at its desktop and mobile screenshots (`preview_ef` in the
+  runner): text searches miss layout bugs.
 - When every page is done, search pages AND components for the kit's demo product names (the
   `old_code` products in `kit.json` and their names) and fix what is left.
 
@@ -136,6 +155,8 @@ End every run with:
 1. `ef context missing` (runner: `kit_context_missing`) and its list, blocking rows first.
 2. A short summary per page: which sections you rewrote, which customer copy you used verbatim,
    which images you used or generated, and anything you were unsure about.
-3. For the owner to decide, never deleted by you: the kit's demo products (archive candidates),
-   and any kit funnel or kit page for a product the customer does not sell.
+3. For the owner to decide, never deleted by you: the kit's demo products to archive, listed by
+   code (in the product map their `old_code` equals `code`); kit pages you dropped; any kit funnel
+   or page for a product the customer does not sell, including a kit funnel that is still the
+   domain default and fires on the pages; the policy facts you need.
 4. One line telling the owner that the pages are drafts and need their review and publish.

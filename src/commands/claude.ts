@@ -758,6 +758,8 @@ Most-used, by task:
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` · \`ef collections delete <code> --force\` (check no page, component or script names the code first) |
 | Shipping rates (a product with no profile ships free) | \`ef shipping-profiles list|get\` · \`ef shipping-profiles create "Single jar" --us 6.95 --intl 14.95\` · \`ef shipping-profiles assign <product-code> --profile <name|id>\` (\`--none\` to remove) · \`update <name> --us 5.95\` |
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
+| Audience segments (who bought, skipped an upsell, abandoned, refunded) | \`ef audiences validate --segql '…'\` · \`ef audiences count --segql '…'\` · \`ef audiences create --name … --segql '…'\` · \`ef audiences list\\|get\\|members\` (use the \`ef-segql\` skill) |
+| Email / SMS campaigns | \`ef campaigns email\\|sms create\\|set\\|audience-preview\\|test\\|schedule\\|launch\\|stats\` — launch and schedule print the audience size and need \`--yes\`; never pass it without the user's go (use the \`ef-campaigns\` skill) |
 | Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
 | Which funnel a URL runs, and why (wrong funnel, override check, before traffic) | \`ef funnels which <url> [--param aff=123] [--country GB]\`, read only (use the \`ef-funnel-which\` skill) |

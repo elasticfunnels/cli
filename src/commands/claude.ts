@@ -750,6 +750,7 @@ Most-used, by task:
 | Move a domain to another brand (same organization) | \`ef domains move <domain> --to-brand <id> [--with-pages] --dry-run\` then \`--yes\` |
 | Publish a draft | \`ef pages publish <slug>\` |
 | Preview / live URL | \`ef preview <slug>\` |
+| See the page (screenshot of the draft or \`--live\`) | \`ef shot <slug> [--size both] [--selector "#id"] [--chunk 1600]\` (use the \`ef-page-check\` skill; \`ef shot --check\` first) |
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
@@ -881,6 +882,9 @@ Most-used, by task:
   brief copy goes in verbatim; kit pages stay drafts (\`ef push --draft\`), the owner publishes.
 - \`ef config get\` / \`ef config set saveMode direct\` — view/change project config.
 - \`ef preview <slug>\` — editor preview URL.
+- \`ef shot <slug>\` — screenshot of the current draft (\`--live\` for the published page; \`--size
+  desktop|mobile|both|WxH\`, \`--selector <css>\`, \`--viewport\`, \`--chunk <px>\`). Look at a page after
+  you change it, before you call it done: the **\`ef-page-check\`** skill (falls back to Claude in Chrome).
 - \`ef list pages --json\` — machine-readable listings (every command takes
   \`--json\`; output goes to stdout, logs to stderr, so piping is safe).
 

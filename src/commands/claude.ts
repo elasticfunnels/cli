@@ -750,7 +750,7 @@ Most-used, by task:
 | Move a domain to another brand (same organization) | \`ef domains move <domain> --to-brand <id> [--with-pages] --dry-run\` then \`--yes\` |
 | Publish a draft | \`ef pages publish <slug>\` |
 | Preview / live URL | \`ef preview <slug>\` |
-| See the page (screenshot of the draft or \`--live\`) | \`ef shot <slug> [--size both] [--selector "#id"] [--chunk 1600]\` (use the \`ef-page-check\` skill; \`ef shot --check\` first) |
+| See the page (screenshot of the draft or \`--live\`) | \`ef shot <slug> [--size both] [--selector "#id"]\` (use the \`ef-page-check\` skill; \`ef shot --check\` first) |
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |

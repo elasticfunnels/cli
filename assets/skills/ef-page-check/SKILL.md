@@ -28,20 +28,26 @@ change a page, look at it before you report it done.
 ## 2. Shoot
 
 ```bash
-ef shot <slug>                         # current draft, desktop 1440x900, full page
+ef shot <slug>                         # current draft, desktop 1440x900, full page in 1500px pieces
 ef shot <slug> --size both             # desktop + mobile (390x844)
 ef shot <slug> --live                  # the published page
 ef shot <slug> --selector "#pricing"   # one section
 ef shot <slug> --viewport              # first screen only (above the fold)
-ef shot <slug> --chunk 1600            # long page split into readable pieces
+ef shot <slug> --chunk 0               # one tall image instead of pieces
 ef shot <slug> --size 1280x720,mobile --json   # file list as JSON
 ef shot https://example.com/page       # any URL
 ```
 
-Images go to `.ef/shots/` (or `--out <dir>`); open each file with your image
-reader. A full page taller than about 3000 px gets too small to read as one
-image: use `--chunk 1600` (desktop) or `--chunk 1400` (mobile), or
-`--selector` for the part you changed.
+Images go to `.ef/shots/` (or `--out <dir>`), named `<slug>-draft-<size>-<n>.png`;
+open each file with your image reader. Long pages come in pieces (1500 px,
+1300 px on phones) so each one stays readable; old pieces of the same page and
+size are removed first. Use `--selector` to look at just the part you changed.
+
+Read the summary lines too. `ef shot` warns when a page scrolls sideways on
+that screen ("the page is 520px wide on a 390px screen") and names what sticks
+out, and when a phone shot has no `<meta name="viewport">`. Both are mobile
+bugs to fix even if the images look fine. `--json` has them under `pages[]`
+(`overflowX`, `overflowing`, `noViewportMeta`).
 
 Draft vs live: `ef push --draft` changes only the draft, so shoot without
 `--live`. After `ef push` (direct) or `ef pages publish`, shoot `--live` too:
@@ -54,6 +60,7 @@ Look at every image for:
 - the part you changed: is it there, in the right place, with the right copy?
 - empty or collapsed sections, broken images, raw `{{ }}` or `[[ ]]` tags,
   template placeholder text
+- leftover placeholders: `[4]`, `[NAME]`, `XX`, lorem ipsum
 - mobile: text overflowing the screen, buttons cut off, images wider than the
   viewport, tap targets too small
 - the page ending where it should (a missing footer often means an unclosed tag)

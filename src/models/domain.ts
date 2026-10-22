@@ -56,3 +56,46 @@ export interface DomainValidationInstructions {
     error?: string;
     message?: string;
 }
+
+/** What a domain move would change (`POST domains/{id}/move/preview`). */
+export interface DomainMoveChange {
+    type: 'domain_transfer' | 'pages_unassign' | 'pages_move' | 'components' | 'links_unassign' | string;
+    count?: number;
+    pages?: Array<{ id: number; title?: string; slug?: string; is_index?: boolean }>;
+    action?: string;
+    move_count?: number;
+    copy_count?: number;
+    funnels?: number;
+    blogs?: number;
+    courses?: number;
+    course_domain?: boolean;
+    tracking_scripts?: number;
+    merchant?: boolean;
+}
+
+export interface DomainMovePreview {
+    domain: string;
+    domain_id: number;
+    source_brand_id: number;
+    target_brand_id: number;
+    changes: DomainMoveChange[];
+    warnings: string[];
+    summary: string;
+}
+
+/**
+ * `POST domains/{id}/move/apply`. A domain-only move runs in the request
+ * (`moved: true` + `result`); moving pages along is queued (`queued: true`).
+ */
+export interface DomainMoveResult {
+    queued: boolean;
+    moved?: boolean;
+    message?: string;
+    result?: { domain_moved?: boolean; pages_moved?: number; warnings?: string[]; links_unassigned?: Record<string, number | boolean> };
+}
+
+export interface DomainMoveOptions {
+    target_brand_id: number;
+    move_pages?: boolean;
+    component_action?: 'move' | 'copy' | null;
+}

@@ -1,10 +1,11 @@
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { BrandDomain, DomainValidationInstructions } from '../api/types';
+import { BrandDomain, DomainMoveChange, DomainMovePreview, DomainValidationInstructions } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { formatRelative, renderTable } from '../utils/format';
+import { safeText } from '../utils/sanitize';
 
 /**
  * `ef domains` — manage a brand's custom domains.
@@ -167,6 +168,72 @@ entries), "ef domains validate", then attach pages as above.`);
             log.detail(`Check progress with "ef domains records ${domain.domain}".`);
         });
 
+    cmd.command('move <domain>')
+        .description('Move a domain to another brand of the same organization. No DNS re-verification; the domain stays live.')
+        .requiredOption('--to-brand <brand>', 'Target brand: id, code or name.')
+        .option('--with-pages', 'Move the pages on this domain too (queued; can take a few minutes).')
+        .option('--components <action>', 'With --with-pages: "move" or "copy" the custom components those pages use.')
+        .option('--dry-run', 'Show what would change and stop.')
+        .option('-y, --yes', 'Skip the confirmation prompt (required when not on a terminal).')
+        .option('--json', 'Print the preview / result as JSON.')
+        .addHelpText('after', `
+Without --with-pages the pages on the domain stay in this brand, unassigned.
+Funnels, blogs, courses and tracking scripts in this brand let go of the
+domain either way. You need domains.update in both brands.
+
+  $ ef domains move shop.example.com --to-brand 512 --dry-run
+  $ ef domains move shop.example.com --to-brand "Main Store" --with-pages --components copy --yes`)
+        .action(async (domainRef: string, opts: { toBrand: string; withPages?: boolean; components?: string; dryRun?: boolean; yes?: boolean; json?: boolean }) => {
+            if (opts.components !== undefined && !opts.withPages) {
+                throw new CliError(ExitCode.Validation, '--components only applies with --with-pages.');
+            }
+            if (opts.components !== undefined && opts.components !== 'move' && opts.components !== 'copy') {
+                throw new CliError(ExitCode.Validation, `--components must be "move" or "copy", got "${opts.components}".`);
+            }
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const domain = await resolveDomain(api, rt.config.brandId, domainRef);
+            const target = await resolveTargetBrand(api, opts.toBrand);
+            if (target.id === rt.config.brandId) {
+                throw new CliError(ExitCode.Validation, 'The domain is already in that brand.');
+            }
+            const moveOpts = {
+                target_brand_id: target.id,
+                move_pages: Boolean(opts.withPages),
+                component_action: opts.withPages ? ((opts.components as 'move' | 'copy' | undefined) ?? null) : null,
+            };
+
+            const preview = await api.previewDomainMove(rt.config.brandId, domain.id, moveOpts);
+            if (opts.dryRun) {
+                if (opts.json) { log.json({ ok: true, dry_run: true, preview }); return; }
+                printMovePreview(domain, target, preview);
+                log.detail('Dry run: nothing changed.');
+                return;
+            }
+            if (!opts.json) printMovePreview(domain, target, preview);
+
+            if (!opts.yes) {
+                if (!process.stdin.isTTY) {
+                    throw new CliError(ExitCode.Validation, 'Moving a domain changes which brand serves it. Re-run with --yes to confirm.');
+                }
+                const { confirm } = await import('../utils/prompt');
+                if (!(await confirm(`Move ${safeText(domain.domain)} to brand #${target.id}?`, false))) {
+                    throw new CliError(ExitCode.Validation, 'Cancelled.');
+                }
+            }
+
+            const result = await api.applyDomainMove(rt.config.brandId, domain.id, moveOpts);
+            if (opts.json) { log.json({ ok: true, id: domain.id, domain: domain.domain, target_brand_id: target.id, ...result }); return; }
+            if (result.moved) {
+                log.success(`Moved ${c.bold(safeText(domain.domain))} (#${domain.id}) to brand #${target.id}.`);
+                for (const w of result.result?.warnings ?? []) log.detail(safeText(w));
+                log.detail(`It is no longer in this brand's "ef domains list"; manage it from a folder linked to brand #${target.id}.`);
+            } else {
+                log.success(`Move of ${c.bold(safeText(domain.domain))} to brand #${target.id} queued. Pages move in the background.`);
+                log.detail('When it is done the domain leaves this brand\'s "ef domains list".');
+            }
+        });
+
     cmd.command('remove <domain>')
         .alias('rm')
         .description('Delete a domain from the brand.')
@@ -179,6 +246,68 @@ entries), "ef domains validate", then attach pages as above.`);
             if (opts.json) { log.json({ ok: true, id: domain.id, domain: domain.domain, deleted: true }); return; }
             log.success(`Deleted ${c.bold(domain.domain ?? domainRef)} (#${domain.id}).`);
         });
+}
+
+/** Resolve --to-brand: a numeric id, or a brand code/name from the brands you can access. */
+export async function resolveTargetBrand(api: ApiClient, ref: string): Promise<{ id: number; name?: string }> {
+    const trimmed = ref.trim();
+    if (/^\d+$/.test(trimmed)) return { id: parseInt(trimmed, 10) };
+    const needle = trimmed.toLowerCase();
+    const brands = await api.listBrands();
+    const hits = brands.filter((b) => [b.name, b.slug, (b as { code?: string }).code]
+        .some((v) => typeof v === 'string' && v.toLowerCase() === needle));
+    if (hits.length === 1) return { id: hits[0].id, name: hits[0].name };
+    if (hits.length > 1) {
+        throw new CliError(ExitCode.Validation, `"${ref}" matches ${hits.length} brands (${hits.map((b) => `#${b.id}`).join(', ')}). Pass the id.`);
+    }
+    throw new CliError(ExitCode.NotFound, `No brand "${ref}" among the brands you can access. Pass the brand id.`);
+}
+
+/** One line per change the move makes, for the confirmation screen. */
+export function describeMoveChanges(preview: DomainMovePreview): string[] {
+    const lines: string[] = [];
+    const n = (v: number | undefined, word: string) => `${v ?? 0} ${word}${v === 1 ? '' : 's'}`;
+    for (const ch of preview.changes ?? []) {
+        switch (ch.type) {
+            case 'domain_transfer':
+                lines.push(`Domain moves to brand #${preview.target_brand_id}. DNS, SSL and validation stay as they are.`);
+                break;
+            case 'pages_unassign':
+                lines.push(`${n(ch.count, 'page')} on this domain ${ch.count === 1 ? 'stays' : 'stay'} in this brand, without a domain (pass --with-pages to move them).`);
+                break;
+            case 'pages_move':
+                lines.push(`${n(ch.count, 'page')} ${ch.count === 1 ? 'moves' : 'move'} with the domain.`);
+                break;
+            case 'components':
+                lines.push(`Components: ${ch.move_count ?? 0} moved, ${ch.copy_count ?? 0} copied.`);
+                break;
+            case 'links_unassign':
+                lines.push(...unlinkLines(ch));
+                break;
+            default:
+                break;
+        }
+    }
+    return lines;
+}
+
+function unlinkLines(ch: DomainMoveChange): string[] {
+    const parts: string[] = [];
+    if (ch.funnels) parts.push(`${ch.funnels} funnel link${ch.funnels === 1 ? '' : 's'}`);
+    if (ch.blogs) parts.push(`${ch.blogs} blog${ch.blogs === 1 ? '' : 's'}`);
+    if (ch.courses) parts.push(`${ch.courses} course${ch.courses === 1 ? '' : 's'}`);
+    if (ch.course_domain) parts.push('the courses domain setting');
+    if (ch.tracking_scripts) parts.push(`${ch.tracking_scripts} tracking script${ch.tracking_scripts === 1 ? '' : 's'}`);
+    const out = parts.length ? [`Stop using it in this brand: ${parts.join(', ')}.`] : [];
+    if (ch.merchant) out.push('Its merchant belongs to this brand and is removed from the domain.');
+    return out;
+}
+
+function printMovePreview(domain: BrandDomain, target: { id: number; name?: string }, preview: DomainMovePreview): void {
+    const name = target.name ? ` (${safeText(target.name)})` : '';
+    log.info(`Move ${c.bold(safeText(domain.domain))} (#${domain.id}) to brand #${target.id}${name}:`);
+    for (const line of describeMoveChanges(preview)) log.detail(`  - ${line}`);
+    for (const w of preview.warnings ?? []) log.warn(safeText(w));
 }
 
 /**

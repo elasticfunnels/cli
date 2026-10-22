@@ -299,6 +299,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef domains add <domain>` | Add a dedicated (customer-owned) domain — kicks off Cloudflare hostname creation. `--subdomain <label>` (+ `--root`) adds a platform subdomain instead. `--records` waits for and prints the DNS records. |
 | `ef domains records <domain>` | Print the DNS records to add: a TXT ownership record + a CNAME to the platform domain. `--wait` polls until the TXT record is ready. |
 | `ef domains validate <domain>` | Queue validation for a dedicated domain (checks DNS + issues SSL). |
+| `ef domains move <domain> --to-brand <brand>` | Move a domain to another brand of the same organization (you need `domains.update` in both). No DNS re-verification; it stays live. Pages stay behind unassigned unless `--with-pages` (+ `--components move\|copy`); funnels, blogs, courses and tracking scripts in this brand let go of it. `--dry-run` shows the changes; `--yes` skips the prompt. |
 | `ef domains remove <domain>` | Delete a domain from the brand (alias `ef domains rm`). |
 | `ef tags list` | List the brand's tags with their colours (alias `ef tags ls`). |
 | `ef tags attach <target> <names…>` | Put tags on a page or component, **creating any that don't exist** (alias `ef tags add`). `<target>` is a page slug/id, or `component:<code>`. `--no-create` to require an existing tag; `--color` for the ones it makes. |

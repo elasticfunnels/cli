@@ -747,6 +747,7 @@ Most-used, by task:
 | Put a page on a domain | \`ef pages settings <slug> --domain <name> [--homepage]\` |
 | Mark a checkout page / set a funnel's checkout | \`ef pages settings <slug> --checkout-page\` · \`ef funnels settings <code> --checkout-page <slug\\|none>\` · \`ef funnels get <code>\` |
 | Manage domains + DNS | \`ef domains list\\|add\\|records\\|validate\\|remove\` |
+| Move a domain to another brand (same organization) | \`ef domains move <domain> --to-brand <id> [--with-pages] --dry-run\` then \`--yes\` |
 | Publish a draft | \`ef pages publish <slug>\` |
 | Preview / live URL | \`ef preview <slug>\` |
 | Check my work statically | \`ef lint\` |

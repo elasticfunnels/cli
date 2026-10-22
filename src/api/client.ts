@@ -22,6 +22,9 @@ import {
     CrmPipeline,
     CrmStage,
     DomainValidationInstructions,
+    DomainMoveOptions,
+    DomainMovePreview,
+    DomainMoveResult,
     Funnel,
     FunnelDetails,
     Page,
@@ -1464,6 +1467,20 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Delete domain', res);
     }
 
+    /** Dry run of moving a domain to another brand of the same organization. */
+    async previewDomainMove(brandId: number, domainId: number, opts: DomainMoveOptions): Promise<DomainMovePreview> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/domains/${domainId}/move/preview`, { data: opts });
+        if (res.status >= 400) throw domainMoveError('Preview domain move', res);
+        return res.data as DomainMovePreview;
+    }
+
+    /** Move a domain to another brand. No DNS re-verification: the domain stays live. */
+    async applyDomainMove(brandId: number, domainId: number, opts: DomainMoveOptions): Promise<DomainMoveResult> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/domains/${domainId}/move/apply`, { data: opts });
+        if (res.status >= 400) throw domainMoveError('Move domain', res);
+        return res.data as DomainMoveResult;
+    }
+
     // ── Tags ─────────────────────────────────────────────────────────
     // The coloured labels the dashboard's Pages and Components lists show.
     // One flat table per brand plus a join row per tagged record, so the
@@ -1971,6 +1988,20 @@ export function httpError(label: string, res: AxiosResponse): CliError {
         : status >= 500 ? ExitCode.Server
         : ExitCode.Error;
     return new CliError(code, `${label} failed (HTTP ${status}): ${detail || res.statusText || 'unknown error'}`);
+}
+
+/**
+ * A refused move is about the TARGET brand (not a member, missing
+ * domains.update there, another organization), not about the stored
+ * credential, so a 403 here must not read as "your key was rejected".
+ */
+function domainMoveError(label: string, res: AxiosResponse): CliError {
+    const data = res.data as { error?: string; message?: string; missing_permissions?: string[]; errors?: unknown } | undefined;
+    if ((res.status === 403 || res.status === 422) && !data?.errors && (data?.error || data?.message)) {
+        const missing = data?.missing_permissions?.length ? ` Missing: ${data.missing_permissions.join(', ')}.` : '';
+        return new CliError(ExitCode.Validation, `${label} refused: ${data.error ?? data.message}${missing}`);
+    }
+    return httpError(label, res);
 }
 
 /**

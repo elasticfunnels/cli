@@ -25,6 +25,8 @@ export interface PageUpdateResponse {
     collections_created?: Array<{ code: string; id: number; name?: string }>;
     /** Tracking snippets this save added to the page (keys from the app's TrackingCodeInPage). */
     tracking_code_in_page?: string[];
+    /** Link warnings for the saved page (the app's page list triangle). */
+    link_warnings?: import('../sync/linkWarnings').PageLinkWarning[];
     /** Present on HTTP 409 from /editor — the server's idea of the current state. */
     code?: string;
     server_revision_id?: number | null;

@@ -6,6 +6,7 @@ import type { Browser, Page as PwPage } from 'playwright-core';
 import { ApiClient } from '../api/client';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
+import { safeText } from '../utils/sanitize';
 import { findProjectRoot, loadRuntime, CONFIG_DIR } from '../utils/store';
 import { fetchPagePreviewBundle, resolvePageBySlug } from './shared';
 import { isOfflineStatus, offlinePageNote } from '../sync/sync';
@@ -66,6 +67,40 @@ export function chunkPlan(total: number, chunk: number): Array<{ y: number; heig
     for (let y = 0; y < total; y += chunk) out.push({ y, height: Math.min(chunk, total - y) });
     return out;
 }
+
+/** `--chunk auto`: pieces short enough to read as one image (1500 px wide screens, 1300 px phones). */
+export function resolveChunk(spec: string, size: ShotSize): number {
+    if (spec.trim().toLowerCase() === 'auto') return size.width < 768 ? 1300 : 1500;
+    const n = Number(spec);
+    if (!Number.isInteger(n) || n < 0 || n > 20000) throw new CliError(ExitCode.Validation, '--chunk must be auto or a whole number from 0 to 20000.');
+    return n;
+}
+
+/** Old images of this page and size (`<base>-<size>.png`, `<base>-<size>-<n>.png`), so a shorter page leaves no stale pieces. */
+export function staleShots(files: string[], base: string, sizeName: string, ext: string): string[] {
+    const stem = shotFileName(base, sizeName, ext, null).slice(0, -(ext.length + 1));
+    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(-\\d+)?\\.${ext}$`);
+    return files.filter((f) => re.test(f));
+}
+
+/** What sticks out past the right edge: up to 5 of the outermost elements, as tag#id.class. */
+const OVERFLOW_JS = `(() => {
+    const w = document.documentElement.clientWidth;
+    const out = [];
+    const seen = new Set();
+    for (const el of document.body ? document.body.querySelectorAll('*') : []) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.right <= w + 1) continue;
+        let p = el.parentElement, inside = false;
+        while (p) { if (seen.has(p)) { inside = true; break; } p = p.parentElement; }
+        if (inside) continue;
+        seen.add(el);
+        const cls = (typeof el.className === 'string' ? el.className.trim().split(/\\s+/).slice(0, 2).join('.') : '');
+        out.push(el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '') + ' (' + Math.round(r.right) + 'px)');
+        if (out.length >= 5) break;
+    }
+    return { scrollWidth: document.documentElement.scrollWidth, clientWidth: w, culprits: out, viewportMeta: !!document.querySelector('meta[name="viewport"]') };
+})()`;
 
 /** Output file for one capture; `-<n>` is added per chunk. */
 export function shotFileName(base: string, sizeName: string, ext: string, chunkIndex: number | null): string {
@@ -280,7 +315,7 @@ export function registerShotCommand(program: Command): void {
         .option('--size <spec>', 'desktop (1440x900), laptop, tablet, mobile (390x844), both, WIDTHxHEIGHT, or a comma list.', 'desktop')
         .option('--selector <css>', 'Shoot only the first element matching this CSS selector (a section).')
         .option('--viewport', 'Shoot only the first screen, not the full page.')
-        .option('--chunk <px>', 'Split a full-page shot into pieces this tall (easier to read for an AI). 0 = one image.', '0')
+        .option('--chunk <px>', 'Split a full-page shot into pieces this tall so each stays readable. auto = 1500 (1300 on phones), 0 = one tall image.', 'auto')
         .option('--scale <n>', 'Device pixel ratio, 1-3.', '1')
         .option('--wait <ms>', 'Extra wait after load, before the shot.', '800')
         .option('--timeout <ms>', 'Page load timeout.', '45000')
@@ -304,7 +339,7 @@ export function registerShotCommand(program: Command): void {
             }
             if (!ref) throw new CliError(ExitCode.Validation, 'Give a page slug, id or URL (or --check / --install).');
             const sizes = parseSizes(opts.size);
-            const chunk = intOpt('chunk', opts.chunk, 0, 20000);
+            for (const s of sizes) resolveChunk(opts.chunk, s);
             const scale = intOpt('scale', opts.scale, 1, 3);
             const wait = intOpt('wait', opts.wait, 0, 60000);
             const timeout = intOpt('timeout', opts.timeout, 1000, 300000);
@@ -326,6 +361,7 @@ export function registerShotCommand(program: Command): void {
 
             const ext = format === 'jpeg' ? 'jpg' : 'png';
             const files: Array<{ size: string; file: string; width: number; height: number }> = [];
+            const pages: Array<{ size: string; viewport: number; height: number; scrollWidth: number; overflowX: boolean; overflowing: string[]; noViewportMeta: boolean }> = [];
             let browser: Browser | null = null;
             try {
                 browser = await chromium.launch({ executablePath: exe, headless: true });
@@ -346,6 +382,11 @@ export function registerShotCommand(program: Command): void {
                     await page.addStyleTag({ content: HIDE_CSS }).catch(() => undefined);
                     if (!opts.viewport) await settle(page);
                     if (wait) await page.waitForTimeout(wait);
+                    const m = (await page.evaluate(OVERFLOW_JS)) as { scrollWidth: number; clientWidth: number; culprits: string[]; viewportMeta: boolean };
+                    const pageHeight = Number(await page.evaluate('Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)'));
+                    const overflowX = m.scrollWidth > m.clientWidth + 1;
+                    pages.push({ size: size.name, viewport: size.width, height: pageHeight, scrollWidth: m.scrollWidth, overflowX, overflowing: overflowX ? m.culprits : [], noViewportMeta: size.mobile && !m.viewportMeta });
+                    for (const old of staleShots(fs.readdirSync(outDir), target.label, size.name, ext)) fs.rmSync(path.join(outDir, old), { force: true });
                     const shotOpts = { type: format as 'png' | 'jpeg', ...(quality != null ? { quality } : {}), animations: 'disabled' as const };
 
                     if (opts.selector) {
@@ -362,8 +403,7 @@ export function registerShotCommand(program: Command): void {
                         await page.screenshot({ ...shotOpts, path: file });
                         files.push({ size: size.name, file, width: size.width, height: size.height });
                     } else {
-                        const total = Number(await page.evaluate('Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)'));
-                        const plan = chunkPlan(total, chunk);
+                        const plan = chunkPlan(pageHeight, resolveChunk(opts.chunk, size));
                         for (let i = 0; i < plan.length; i++) {
                             const file = path.join(outDir, shotFileName(target.label, size.name, ext, plan.length > 1 ? i : null));
                             if (plan.length === 1) await page.screenshot({ ...shotOpts, path: file, fullPage: true });
@@ -378,10 +418,18 @@ export function registerShotCommand(program: Command): void {
             }
 
             if (opts.json) {
-                log.json({ ok: true, kind: target.kind, pageId: target.pageId, url: target.url, files });
+                log.json({ ok: true, kind: target.kind, pageId: target.pageId, url: target.url, pages, files });
                 return;
             }
             log.info(`${target.kind === 'url' ? 'URL' : target.kind === 'live' ? 'Live page' : 'Draft'}: ${target.url}`);
+            for (const pg of pages) {
+                const n = files.filter((f) => f.size === pg.size).length;
+                log.info(`${pg.size}: page ${pg.viewport}x${pg.height}, ${n} image${n === 1 ? '' : 's'}`);
+                if (pg.noViewportMeta) log.warn(`${pg.size}: no <meta name="viewport">, so phones draw the page 980px wide and zoom it out.`);
+                if (pg.overflowX) {
+                    log.warn(`${pg.size}: the page is ${pg.scrollWidth}px wide on a ${pg.viewport}px screen, so it scrolls sideways.${pg.overflowing.length ? ` Sticking out: ${pg.overflowing.map((o) => safeText(o)).join(', ')}` : ''}`);
+                }
+            }
             for (const f of files) log.info(`${f.file}  (${f.size}, ${f.width}x${f.height})`);
         });
 }

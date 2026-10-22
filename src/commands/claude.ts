@@ -871,7 +871,10 @@ Most-used, by task:
   **\`kit-customize\` skill**. \`ef context pull\` writes \`.ef/context/\` (kit.json, brief.md, facts.json,
   assets.json + assets/, slots.json, missing.json); \`ef context missing\` lists what is still missing
   (\`blocking\` rows first); \`ef context facts set <key> <value>\` and \`ef context brief set --file <path>\`
-  write back. \`ef assets add <file> --product CODE --role packshot\` adds a customer image;
+  write back. When the brief or an image is for another product or brand,
+  \`ef context flag --kind asset_mismatch|brief_mismatch|other --message "..." [--asset 12,13] [--file 4]\`
+  tells the owner and blocks the rewrite (stop after it); \`ef context checks\` lists the checks.
+  \`ef assets add <file> --product CODE --role packshot\` adds a customer image;
   \`ef assets sync-drive [<url>]\` imports a link-shared Drive folder (exit 2 = incomplete).
   \`ef images generate --slot <slot> [--product CODE] [--prompt "..."] [--aspect 4:5] --yes\` costs AI
   credits: it prints the price first, and \`--max-credits N\` refuses anything dearer. The customer's

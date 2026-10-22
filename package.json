@@ -79,5 +79,8 @@
       "default": "./out/agent.js"
     },
     "./package.json": "./package.json"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

@@ -16,6 +16,7 @@ import { registerPagesCommand } from './commands/pageCommands';
 import { registerComponentsCommand } from './commands/componentCommands';
 import { registerProductsCommand } from './commands/productCommands';
 import { registerPreviewCommand } from './commands/preview';
+import { registerShotCommand } from './commands/shot';
 import { registerScriptsCommand } from './commands/scripts';
 import { registerAssetsCommand } from './commands/assets';
 import { registerVariablesCommand } from './commands/variables';
@@ -88,6 +89,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerStatusCommand(program);
     registerListCommand(program);
     registerPreviewCommand(program);
+    registerShotCommand(program);
     registerGetCommand(program);
     registerPullCommand(program);
     registerPushCommand(program);

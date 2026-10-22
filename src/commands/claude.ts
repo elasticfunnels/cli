@@ -760,6 +760,7 @@ Most-used, by task:
 | CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
 | Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
+| Which funnel a URL runs, and why (wrong funnel, override check, before traffic) | \`ef funnels which <url> [--param aff=123] [--country GB]\`, read only (use the \`ef-funnel-which\` skill) |
 | Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |
 | Where should we optimize / analyze funnel performance | Use the \`ef-funnel-performance\` skill (data checks, affiliates, AOV, profit, per-buyer upsell take, session traces, dev brief) |
@@ -859,6 +860,10 @@ Most-used, by task:
     (nested slugs preserved). NOT pulled by \`ef pull\` unless \`--events\`.
   - \`ef funnels pull|push|diff <code>\` → \`funnels/<code>.flow.json\` (the funnel's builder graph);
     \`ef funnels debug-flow|product-flow <code>\` print the compiled READ-ONLY artifacts.
+  - \`ef funnels which <url>\` asks the page runtime which funnel that URL runs and why (the
+    override that matched, or why the domain default won), plus the merchant and the page after
+    each purchase. Read only. Affiliate and query come from the URL (\`--param k=v\` adds them).
+    Geo comes from the IP, so pass \`--country\`/\`--region\`. Run it before changing entry rules.
   - Structure: \`{ "drawflow": { "Home": { "data": { "<id>": { id, name, data:{type,…}, inputs, outputs, pos_x, pos_y } } } } }\`.
     The \`<split-test>\` container in the \`.ef\` markup shows the default; its variants live in this graph.
   - Node types + connection rules (\`only_on\`, \`max_per_output\`, \`one_of_type\`) are the SERVER's

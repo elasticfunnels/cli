@@ -46,6 +46,7 @@ import {
     SplitTestSignificance,
     DashboardConfig,
     DashboardPreset,
+    FunnelResolveResult,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
 import { requestStart, requestEnd } from '../utils/loader';
@@ -557,6 +558,35 @@ export class ApiClient {
         const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${id}/debug-product-flow`);
         if (res.status >= 400) throw httpError('Get funnel product-flow', res);
         return res.data;
+    }
+
+    /**
+     * The funnels list's "Which funnel runs?" tester (FunnelTriggerController@resolveTest).
+     * Read only: the app sends a real request to the URL with a resolve-and-report header,
+     * so affiliate, query, host and path come from the URL itself. Only geo is passed.
+     */
+    async resolveFunnelTest(brandId: number, body: { url: string; country_code?: string | null; region?: string | null }): Promise<FunnelResolveResult> {
+        const res = await this.raw('POST', `/api/brands/${brandId}/funnels/resolve-test`, { data: body });
+        if (res.status < 400) return res.data as FunnelResolveResult;
+        const data = res.data as { error?: string; host?: string } | undefined;
+        const label = 'Funnel resolve test';
+        if (res.status === 404) {
+            throw new CliError(ExitCode.NotFound, `${label}: this server has no "which funnel runs" tester (POST funnels/resolve-test). The app may be older than this CLI.`);
+        }
+        if (res.status === 422 && data?.error === 'foreign_domain') {
+            throw new CliError(ExitCode.Validation, `${label}: ${data.host ?? 'that host'} is not one of this brand's domains. Run "ef domains list".`);
+        }
+        if (res.status === 422 && data?.error === 'malformed_url') {
+            throw new CliError(ExitCode.Validation, `${label}: the server could not parse that URL.`);
+        }
+        if (res.status === 422) throw validationError(label, res);
+        if (data?.error === 'runtime_not_configured') {
+            throw new CliError(ExitCode.Server, `${label}: the page runtime is not configured on this server, so the test cannot run.`);
+        }
+        if (data?.error === 'runtime_unreachable') {
+            throw new CliError(ExitCode.Server, `${label}: the app could not reach the page runtime. Try again in a minute.`);
+        }
+        throw httpError(label, res);
     }
 
     // ── Components ───────────────────────────────────────────────────

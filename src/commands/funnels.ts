@@ -5,7 +5,7 @@ import { ApiClient } from '../api/client';
 import { Funnel, FunnelDetails } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
-import { safeCell } from '../utils/sanitize';
+import { safeCell, safeText } from '../utils/sanitize';
 import { EfRuntime, loadRuntime } from '../utils/store';
 import { sha256, writeFileAtomic } from '../utils/fs';
 import { readSnapshot, writeSnapshot } from '../sync/baselineSnapshots';
@@ -14,6 +14,7 @@ import { unifiedDiff } from '../sync/merge';
 import { safeJoinBrandRoot } from '../sync/paths';
 import { formatRelative, renderTable } from '../utils/format';
 import { resolveAnyPageId } from './pageGet';
+import { buildWhichUrl, normaliseCountry, normaliseRegion, renderWhich, unresolvedMessage } from './funnelWhich';
 
 /** Starter graph written when a funnel has no builder graph yet. */
 const EMPTY_GRAPH = { drawflow: { Home: { data: {} } } };
@@ -187,7 +188,7 @@ async function ctx(): Promise<{ rt: EfRuntime; api: ApiClient; brandId: number }
 export function registerFunnelsCommand(program: Command): void {
     const cmd = program
         .command('funnels')
-        .description('Funnels: list, get, settings (checkout page), pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
+        .description('Funnels: list, get, which (which funnel a URL runs), settings (checkout page), pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
 
     cmd.command('list')
         .alias('ls')
@@ -244,6 +245,40 @@ Examples:
             ];
             const w = Math.max(...rows.map(([k]) => k.length));
             for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${safeCell(v)}\n`);
+        });
+
+    cmd.command('which <url>')
+        .alias('resolve')
+        .description('Which funnel runs for a URL and visitor, and why. The page runtime resolves it exactly as a live request would (read only).')
+        .option('--country <code>', 'Visitor country (two letters, e.g. US). Geo comes from the IP, so the URL cannot carry it.')
+        .option('--region <region>', 'Visitor region or state (e.g. CA).')
+        .option('--param <key=value>', 'Add a query parameter to the URL (repeatable), e.g. an affiliate id or utm_source.', (v: string, acc: string[]) => [...acc, v], [] as string[])
+        .option('--json', 'Print the tester\'s payload as JSON.')
+        .addHelpText('after', `
+Affiliate, query parameters, host and path are read from the URL itself, the same way a
+live visitor's request is. Put them in the URL or add them with --param.
+
+Examples:
+  $ ef funnels which https://shop.example.com/offer
+  $ ef funnels which https://shop.example.com/offer --param aff=123 --country GB
+  $ ef funnels which "https://shop.example.com/offer?utm_source=fb" --json`)
+        .action(async (rawUrl: string, opts: { country?: string; region?: string; param: string[]; json?: boolean }) => {
+            const url = buildWhichUrl(rawUrl, opts.param);
+            const country = normaliseCountry(opts.country);
+            const region = normaliseRegion(opts.region);
+            const { api, brandId } = await ctx();
+            const result = await api.resolveFunnelTest(brandId, { url, country_code: country, region });
+            const unresolved = result.resolved === false ? unresolvedMessage(result) : null;
+            if (opts.json) {
+                log.json({ url, country_code: country, region, ...result });
+                if (unresolved) process.exitCode = unresolved.code;
+                return;
+            }
+            if (unresolved) throw new CliError(unresolved.code, unresolved.message);
+            const visitor = [country, region].filter(Boolean).join(' / ');
+            process.stdout.write(c.dim(`Tested ${safeText(url)}${visitor ? ` as a visitor from ${safeText(visitor)}` : ''}`) + '\n\n');
+            for (const line of renderWhich(result)) process.stdout.write(line + '\n');
+            if (result.winner?.code) log.detail(`\n"ef funnels get ${safeText(result.winner.code)}" shows its entry pages and override rules.`);
         });
 
     cmd.command('settings <codeOrId>')

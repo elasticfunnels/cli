@@ -42,6 +42,7 @@ function startMock() {
         ],
         image: { id: 400, slot: 'hero', status: 'queued', credits: 101, url: null as string | null },
         imagePolls: 0,
+        checks: [] as Array<Record<string, unknown>>,
     };
     let base = '';
     const server = http.createServer((req, res) => {
@@ -53,7 +54,7 @@ function startMock() {
             requests.push({ method: req.method || '', url: req.url || '', headers: req.headers, body });
             const json = (p: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(p)); };
             if (blobs[url]) { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(blobs[url]); return; }
-            const bundle = () => ({ context: state.context, assets: state.assets, files: state.files.map((f) => ({ ...f, url: f.url || `${base}/cdn/brief.pdf` })), slots: state.slots });
+            const bundle = () => ({ context: state.context, assets: state.assets, files: state.files.map((f) => ({ ...f, url: f.url || `${base}/cdn/brief.pdf` })), slots: state.slots, checks: state.checks });
             if (req.method === 'GET' && url === '/api/brands/7/ai-context') return json(bundle());
             if (req.method === 'PUT' && url === '/api/brands/7/ai-context') {
                 const b = JSON.parse(body.toString('utf8'));
@@ -61,6 +62,13 @@ function startMock() {
                 return json(bundle());
             }
             if (req.method === 'GET' && url === '/api/brands/7/ai-context/missing') return json({ data: state.missing });
+            if (req.method === 'POST' && url === '/api/brands/7/ai-context/checks') {
+                const b = JSON.parse(body.toString('utf8'));
+                if ((b.asset_ids ?? []).includes(99)) return json({ message: 'The given data was invalid.', errors: { asset_ids: ['Asset 99 is not in this brand.'] } }, 422);
+                const check = { id: `ck_${state.checks.length + 1}`, kind: b.kind, message: b.message, asset_ids: b.asset_ids ?? [], file_ids: b.file_ids ?? [], status: 'open', created_at: '2026-10-22T10:00:00Z', resolved_at: null, resolved_by: null };
+                state.checks.unshift(check);
+                return json({ check }, 201);
+            }
             if (req.method === 'POST' && (url === '/api/brands/7/ai-context/assets' || url === '/api/brands/7/ai-context/files')) {
                 const text = body.toString('latin1');
                 const field = (n: string) => (new RegExp(`name="${n}"\\r\\n\\r\\n([^\\r]*)`).exec(text) || [])[1] ?? null;
@@ -236,6 +244,51 @@ test('ef images generate: shows the cost, refuses without --yes when not interac
         r = await runEf(root, ['images', 'generate', '--prompt', 'x y z', '--yes']);
         assert.equal(r.code, 2);
         assert.match(r.stderr, /Pass --slot/);
+    } finally {
+        await mock.close();
+    }
+});
+
+test('ef context flag posts a check with asset and file ids; ef context checks lists it; bad input is refused', async () => {
+    const mock = await startMock();
+    const root = await setup(mock.url);
+    try {
+        let r = await runEf(root, ['context', 'flag', '--kind', 'asset_mismatch', '--message', 'The Drive image shows Brain Memory Keeper bottles, not Inflamora.', '--asset', '12,13', '--asset', '14', '--file', '4', '--json']);
+        assert.equal(r.code, 0, r.stderr);
+        const j = JSON.parse(r.stdout);
+        assert.equal(j.check.id, 'ck_1');
+        const post = mock.requests.find((q) => q.method === 'POST' && q.url === '/api/brands/7/ai-context/checks');
+        assert.deepEqual(JSON.parse(post!.body.toString('utf8')), { kind: 'asset_mismatch', message: 'The Drive image shows Brain Memory Keeper bottles, not Inflamora.', asset_ids: [12, 13, 14], file_ids: [4] });
+        assert.equal(post!.headers['ef-access-key'], 'secret-key');
+
+        r = await runEf(root, ['context', 'flag', '--kind', 'brief_mismatch', '--message', 'The brief is about a sleep gummy.']);
+        assert.equal(r.code, 0, r.stderr);
+        assert.match(r.stdout + r.stderr, /blocked until the owner confirms or replaces/);
+        const second = mock.requests.filter((q) => q.method === 'POST' && q.url === '/api/brands/7/ai-context/checks')[1];
+        assert.deepEqual(JSON.parse(second.body.toString('utf8')), { kind: 'brief_mismatch', message: 'The brief is about a sleep gummy.' }, 'no empty id lists sent');
+
+        const posts = () => mock.requests.filter((q) => q.method === 'POST' && q.url === '/api/brands/7/ai-context/checks').length;
+        r = await runEf(root, ['context', 'flag', '--kind', 'wrong', '--message', 'x']);
+        assert.equal(r.code, 2);
+        r = await runEf(root, ['context', 'flag', '--kind', 'other', '--message', 'x', '--asset', '12,abc']);
+        assert.equal(r.code, 2);
+        r = await runEf(root, ['context', 'flag', '--kind', 'other', '--message', 'x'.repeat(501)]);
+        assert.equal(r.code, 2);
+        assert.equal(posts(), 2, 'invalid input never reaches the API');
+        r = await runEf(root, ['context', 'flag', '--kind', 'other', '--message', 'x', '--asset', '99']);
+        assert.notEqual(r.code, 0);
+        assert.match(r.stderr, /Asset 99 is not in this brand|422/);
+
+        r = await runEf(root, ['context', 'checks', '--json']);
+        assert.equal(r.code, 0, r.stderr);
+        const list = JSON.parse(r.stdout);
+        assert.equal(list.open, 2);
+        assert.deepEqual(list.data.map((c: { id: string }) => c.id), ['ck_2', 'ck_1']);
+        mock.state.checks[1].status = 'confirmed';
+        r = await runEf(root, ['context', 'checks']);
+        const lines = r.stdout.trim().split('\n');
+        assert.match(lines[0], /^BLOCKER \[open\] ck_2 brief_mismatch: The brief is about a sleep gummy\.$/);
+        assert.match(lines[1], /^\[confirmed\] ck_1 asset_mismatch: .*\(assets 12,13,14; files 4\)$/);
     } finally {
         await mock.close();
     }

@@ -411,6 +411,10 @@ test('installBundledSkills ships kit-customize: verbatim customer copy, drafts o
         assert.match(body, /ef push <file> --draft/);
         assert.match(body, /`blocking: true`/);
         assert.match(body, /ef context missing/);
+        assert.match(body, /ef context flag --kind asset_mismatch/, 'wrong assets are flagged, not worked around');
+        assert.match(body, /shared components/, 'kit demo text survives in components (Inflamora rework)');
+        const desc = /description: >-\n([\s\S]*?)\n---/.exec(body)?.[1].split('\n').map((l) => l.trim()).join(' ') ?? '';
+        assert.ok(desc.length > 0 && desc.length <= 250, `description is ${desc.length} characters`);
         assert.doesNotMatch(body, /never invent/i, 'owner 2026-10-20: no claim policing');
         assert.doesNotMatch(body, /—/, 'no em dashes in a prompt that makes a model write copy');
     } finally {

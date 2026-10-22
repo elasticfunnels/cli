@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
 import { ApiClient } from '../api/client';
-import { KitContextApi } from '../api/kitContextApi';
+import { KitContextApi, CHECK_KINDS, type KitCheckKind } from '../api/kitContextApi';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
@@ -38,6 +38,20 @@ export function setPath(obj: Record<string, unknown>, key: string, value: unknow
     cur[parts[parts.length - 1]] = value;
     return out;
 }
+
+/** `"12,13"` (repeatable) -> [12, 13]; anything that is not a positive whole number is refused. */
+export function parseIdList(values: string[] | undefined, what: string): number[] {
+    const out: number[] = [];
+    for (const v of values ?? []) {
+        for (const part of v.split(',').map((x) => x.trim()).filter(Boolean)) {
+            if (!/^\d+$/.test(part) || Number(part) <= 0) throw new CliError(ExitCode.Validation, `${what} ids are positive numbers (got "${part}").`);
+            out.push(Number(part));
+        }
+    }
+    return [...new Set(out)];
+}
+
+const collect = (v: string, prev: string[] = []) => [...prev, v];
 
 export function registerContextCommand(program: Command): void {
     const cmd = program
@@ -133,5 +147,48 @@ export function registerContextCommand(program: Command): void {
                 return;
             }
             log.success(`Saved the brief (${md.length} characters).`);
+        });
+
+    cmd.command('flag')
+        .description('Tell the owner the brief or some assets are wrong for this brand (another product or brand). Blocks the kit rewrite until the owner confirms or replaces them.')
+        .requiredOption('--kind <kind>', `What is wrong: ${CHECK_KINDS.join(', ')}.`)
+        .requiredOption('--message <text>', 'One sentence for the owner: what you saw and what you expected (max 500 characters).')
+        .option('--asset <ids>', 'Asset ids from assets.json, comma separated (repeatable).', collect)
+        .option('--file <ids>', 'Brief file ids, comma separated (repeatable).', collect)
+        .option('--json', 'Print the check as JSON.')
+        .action(async (opts: { kind: string; message: string; asset?: string[]; file?: string[]; json?: boolean }) => {
+            if (!(CHECK_KINDS as readonly string[]).includes(opts.kind)) throw new CliError(ExitCode.Validation, `--kind is one of ${CHECK_KINDS.join(', ')}.`);
+            const message = opts.message.trim();
+            if (!message) throw new CliError(ExitCode.Validation, '--message is required.');
+            if (message.length > 500) throw new CliError(ExitCode.Validation, '--message is at most 500 characters.');
+            const assetIds = parseIdList(opts.asset, 'Asset');
+            const fileIds = parseIdList(opts.file, 'File');
+            const rt = await loadRuntime();
+            const check = await new KitContextApi(new ApiClient(rt.config.apiUrl, rt.apiKey, rt.auth), rt.config.brandId).flagAssets({ kind: opts.kind as KitCheckKind, message, assetIds, fileIds });
+            if (opts.json) {
+                log.json({ ok: true, check });
+                return;
+            }
+            log.success(`Flagged ${safeText(check.id ?? '')}: the kit rewrite is blocked until the owner confirms or replaces these files.`);
+        });
+
+    cmd.command('checks')
+        .description('List the asset checks on the kit context (open ones block the rewrite; confirmed means the owner said the files are right).')
+        .option('--json', 'Print the checks as JSON.')
+        .action(async (opts: { json?: boolean }) => {
+            const rt = await loadRuntime();
+            const checks = await new KitContextApi(new ApiClient(rt.config.apiUrl, rt.apiKey, rt.auth), rt.config.brandId).listChecks();
+            if (opts.json) {
+                log.json({ ok: true, open: checks.filter((x) => x.status === 'open').length, data: checks });
+                return;
+            }
+            if (!checks.length) {
+                log.success('No asset checks.');
+                return;
+            }
+            for (const k of checks) {
+                const ids = [k.asset_ids?.length ? `assets ${k.asset_ids.join(',')}` : '', k.file_ids?.length ? `files ${k.file_ids.join(',')}` : ''].filter(Boolean).join('; ');
+                console.log(safeText(`${k.status === 'open' ? 'BLOCKER ' : ''}[${k.status}] ${k.id} ${k.kind}: ${k.message}${ids ? ` (${ids})` : ''}`));
+            }
         });
 }

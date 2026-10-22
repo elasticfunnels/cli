@@ -290,6 +290,8 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef context missing` | What the kit still needs (product images, slot images, facts, Drive problems), blocking rows first. |
 | `ef context facts set <key> <value>` | Set one offer fact (dotted keys nest; numbers and JSON parse). |
 | `ef context brief set --file <path>` | Replace the brief with a .md/.txt file, or a .docx converted to Markdown. |
+| `ef context flag --kind <k> --message "..." [--asset 12,13] [--file 4]` | Flag the brief or assets as wrong for this brand (`asset_mismatch`, `brief_mismatch`, `other`). The rewrite is blocked until the owner confirms or replaces them. |
+| `ef context checks` | List the asset checks: open ones block the rewrite, confirmed ones mean the owner said the files are right. |
 | `ef images generate --slot <slot> [--prompt "..."] [--product CODE] [--aspect 4:5] [--reference <id>]` | Generate one image into a kit slot. Prints the credit price first; `--yes` skips the confirm (required off a terminal); `--max-credits N` refuses a dearer image. |
 | `ef variables get` | Print brand variables JSON. |
 | `ef variables set <key> <value>` | Set one variable, then push. Dotted keys nest (`brand.name`); values are JSON-typed (`180`, `true`, `{…}`) or a string; `@file` reads from a file; `--string` forces a literal. |

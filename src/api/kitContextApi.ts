@@ -73,6 +73,25 @@ export interface MissingRow {
     pages?: string[];
     fix?: string | null;
     blocking: boolean;
+    /** kind 'asset_check': an open check the owner has not answered yet. */
+    check_id?: string;
+    asset_ids?: number[];
+    file_ids?: number[];
+}
+
+/** The AI flagged the brief or some assets as wrong for this brand; the owner confirms or replaces them. */
+export const CHECK_KINDS = ['asset_mismatch', 'brief_mismatch', 'other'] as const;
+export type KitCheckKind = (typeof CHECK_KINDS)[number];
+export interface KitCheck {
+    id: string;
+    kind: KitCheckKind;
+    message: string;
+    asset_ids: number[];
+    file_ids: number[];
+    status: 'open' | 'confirmed' | 'resolved';
+    created_at?: string | null;
+    resolved_at?: string | null;
+    resolved_by?: unknown;
 }
 
 export interface KitContextBundle {
@@ -80,6 +99,8 @@ export interface KitContextBundle {
     assets: KitAsset[];
     files: KitContextFile[];
     slots: KitSlot[];
+    /** Asset checks, newest first (app 2026-10-22; absent on older servers). */
+    checks?: KitCheck[];
 }
 
 export interface ImageEstimate {
@@ -178,6 +199,28 @@ export class KitContextApi {
         return d.file ?? d;
     }
 
+    // ── Asset checks (the AI flags, the owner answers) ──────────────────
+
+    /** POST ai-context/checks: flag the brief or assets as wrong for this brand. Blocks the rewrite until the owner answers. */
+    async flagAssets(input: { kind: KitCheckKind; message: string; assetIds?: number[]; fileIds?: number[] }): Promise<KitCheck> {
+        const res = await this.api.request('POST', `${this.base()}/checks`, {
+            data: {
+                kind: input.kind,
+                message: input.message,
+                ...(input.assetIds?.length ? { asset_ids: input.assetIds } : {}),
+                ...(input.fileIds?.length ? { file_ids: input.fileIds } : {}),
+            },
+        });
+        if (res.status >= 400) throw httpError('Flag assets', res);
+        const d = res.data as { check?: KitCheck } & KitCheck;
+        return d.check ?? d;
+    }
+
+    /** Every check on the brand's AI context, newest first (from GET ai-context). */
+    async listChecks(): Promise<KitCheck[]> {
+        return (await this.get()).checks ?? [];
+    }
+
     // ── Kit images (KitImagesController) ──────────────────────────────
 
     async imageEstimate(count = 1): Promise<ImageEstimate> {
@@ -215,6 +258,6 @@ export class KitContextApi {
     private bundle(data: unknown): KitContextBundle {
         const d = (data ?? {}) as Record<string, unknown>;
         const ctx = (d.context ?? null) as KitContext | null;
-        return { context: ctx, assets: arr<KitAsset>(d.assets), files: arr<KitContextFile>(d.files), slots: arr<KitSlot>(d.slots) };
+        return { context: ctx, assets: arr<KitAsset>(d.assets), files: arr<KitContextFile>(d.files), slots: arr<KitSlot>(d.slots), checks: arr<KitCheck>(d.checks) };
     }
 }

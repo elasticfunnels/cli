@@ -1,14 +1,9 @@
 ---
 name: kit-customize
 description: >-
-  Turn an applied ElasticFunnels template kit into the customer's own product:
-  rewrite every kit page from the customer's brief and facts, swap the kit's
-  demo product names, prices, guarantee and images for theirs, keep the kit's
-  structure and directives, and leave every page unpublished for the owner to
-  review. Use when a task says "customise the kit", "make the kit about my
-  product", "rewrite the kit pages for <product>", "kit_customize", when
-  .ef/context/kit.json exists and the pages still show the kit's demo product,
-  or when a job was started from "Customise with AI" on the kit apply screen.
+  Rewrite an applied ElasticFunnels template kit for the customer's own product
+  from their brief, facts and images, pages unpublished. Use for "customise the
+  kit", kit_customize jobs, or when .ef/context/kit.json exists.
 ---
 
 # Customise a kit for the customer's product
@@ -23,7 +18,8 @@ gave you, and to leave them unpublished.
 - **In the ElasticFunnels runner (no shell):** the runner has already pulled the context into
   `.ef/context/`, synced the Drive folder and converted brief documents before your first turn.
   Read the files there. Use the page tools instead of shell commands:
-  `kit_context_missing` for `ef context missing`, and `generate_kit_image` for `ef images generate`.
+  `kit_context_missing` for `ef context missing`, `generate_kit_image` for `ef images generate`,
+  and `flag_kit_assets` for `ef context flag`.
   Your edits are saved as drafts when the turn ends.
 
 ## 1. Read the context
@@ -43,11 +39,33 @@ Read `brief.md`, `facts.json` and `kit.json` in full before editing anything. PD
 part of the brief: read them too.
 
 **Stop only for a blocking row.** If `missing.json` has a row with `blocking: true` (an incomplete
-Drive sync), do not rewrite pages in this turn: tell the owner what is blocked and how to fix it,
-then end the turn. Every other missing item (a fact, a product image, a slot without an image) does
-not stop you; you report it at the end.
+Drive sync, or an open `asset_check` row), do not rewrite pages in this turn: tell the owner what is
+blocked and how to fix it, then end the turn. An `asset_check` row is a check you or an earlier run
+flagged; the owner answers it on the kit screen by confirming the files or replacing them. Every
+other missing item (a fact, a product image, a slot without an image) does not stop you; you report
+it at the end.
 
-## 2. Drive and assets
+## 2. Check the brief and assets are for this product
+
+The system prompt names the brand and its products, and `kit.json` has the product map. Before you
+rewrite anything, check that what the customer gave you is about THIS brand's product:
+
+- Look at every image in `assets/` (packshots and labels most of all) and read the product name on
+  it. Read the product name the brief is about.
+- If an image or a brief file shows another product or another brand, or the brief is about another
+  product, flag it: `ef context flag --kind asset_mismatch --message "..." --asset 12,13 [--file 4]`
+  (runner: `flag_kit_assets`). Use `--kind brief_mismatch` when the brief is the problem and
+  `--kind other` for anything else. The message is one sentence for the owner that names what you
+  saw and what you expected, for example "The Drive image shows Brain Memory Keeper bottles, but this
+  brand sells Inflamora." Put the asset and file ids from `assets.json` on the flag.
+- After flagging, stop: do not rewrite any page in this turn. Tell the owner what you flagged and
+  that they can confirm the files or replace them on the kit screen.
+- A Drive link to a single file (not a folder) is an error to report, not something to work around.
+  Ask the owner for the link to the folder, shared as Anyone with the link can view.
+- A check the owner confirmed (`ef context checks` shows it as `confirmed`) means the owner says the
+  files are right. Do not flag them again: go on.
+
+## 3. Drive and assets
 
 - If `kit.json` has a `drive_url` and `drive_synced_at` is empty, run `ef assets sync-drive` (the
   runner already did). Exit code 2 means incomplete: report what did not come down.
@@ -55,7 +73,7 @@ not stop you; you report it at the end.
   (roles: packshot, label, logo, lifestyle, reference, testimonial, certificate).
 - When you cannot tell which product an image shows, say so in the summary instead of guessing.
 
-## 3. The customer's copy is used as given
+## 4. The customer's copy is used as given
 
 The customer is responsible for their own claims. Use their brief and copy as written:
 
@@ -69,8 +87,11 @@ The customer is responsible for their own claims. Use their brief and copy as wr
   "X, not Y" sentence per page; vary sentence and paragraph length; do not give every section the
   same skeleton.
 - Write in the language of the brief.
+- Match the customer's real offer from `facts.json`: their packs, prices, upsell and downsell
+  prices. Where the kit has a section the customer has no material for (subscriptions, bonuses,
+  testimonials), drop the section instead of inventing its content.
 
-## 4. Products
+## 5. Products
 
 The kit apply already created the products with the customer's codes (`kit.json` products: the
 kit's `old_code` -> the new `code`). Rename and price them from `facts.json`:
@@ -78,7 +99,7 @@ kit's `old_code` -> the new `code`). Rename and price them from `facts.json`:
 `kit.json`). Never change a product code: pages, funnels and checkouts point at it. The runner has
 no product tool: there, list the title and price each product needs in the summary.
 
-## 5. Pages
+## 6. Pages and shared components
 
 For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
 
@@ -92,8 +113,15 @@ For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
   (runner: `generate_kit_image`). Each image costs credits; the job has a credit cap. Stop
   generating when the cap is near and list the remaining slots as missing.
 - Run `ef lint` (runner: `lint_ef`) after each page and fix what it reports.
+- The kit's demo text also lives in shared components, not only in pages: the header, footer,
+  theme, guarantee seals, package cards, the sign-in box, the upsell top bar. Rewrite the components
+  under `components/` the kit pages use (`ef pull components/<name>.ef`, push with `--draft`).
+- One funnel only should claim the landing pages. If two funnels point at the same landing page,
+  say so in the summary.
+- When every page is done, search pages AND components for the kit's demo product names (the
+  `old_code` products in `kit.json` and their names) and fix what is left.
 
-## 6. Pages stay unpublished
+## 7. Pages stay unpublished
 
 `ef push` **publishes** by default: the page goes live. Here the owner publishes, never you.
 
@@ -101,11 +129,13 @@ For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
 - Never run `ef pages publish`, never push with `--direct`, never set a page online.
 - The runner saves your edits as drafts on its own.
 
-## 7. Finish
+## 8. Finish
 
 End every run with:
 
 1. `ef context missing` (runner: `kit_context_missing`) and its list, blocking rows first.
 2. A short summary per page: which sections you rewrote, which customer copy you used verbatim,
    which images you used or generated, and anything you were unsure about.
-3. One line telling the owner that the pages are drafts and need their review and publish.
+3. For the owner to decide, never deleted by you: the kit's demo products (archive candidates),
+   and any kit funnel or kit page for a product the customer does not sell.
+4. One line telling the owner that the pages are drafts and need their review and publish.

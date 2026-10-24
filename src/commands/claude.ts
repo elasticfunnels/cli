@@ -768,6 +768,7 @@ Most-used, by task:
 | Where should we optimize / analyze funnel performance | Use the \`ef-funnel-performance\` skill (data checks, affiliates, AOV, profit, per-buyer upsell take, session traces, dev brief) |
 | Which funnel sells, and where buyers drop off | \`ef stats by funnel_id\` · \`ef funnels product-flow <id>\` (use the \`ef-funnel-analysis\` skill; for weak upsells, \`ef-upsell-diagnosis\`) |
 | Orders, and who bought what after the front end | \`ef orders list --funnel <id> --range 30d\` · \`ef orders buyers --funnel <id>\` (per-buyer upsell take; \`--by page\`) — read-only; customer PII never printed, \`--json\` strips it unless \`--include-pii\` |
+| Find a person (lead or buyer) and their consent | \`ef contacts search <name/email/phone>\` · \`ef contacts get <public_id>\` — read-only; personal data never printed, \`--json\` drops it unless \`--include-pii\` (and the server masks it without contacts.view_pii) |
 | Trace one visit / check traffic quality | \`ef sessions show <session_id>\` (visit, path, timeline, tracking gaps) · \`ef sessions list --funnel <id>\` (device, country, bot/hosting flags) |
 | What is page #312? (any page, incl. builder/legacy) | \`ef pages get <idOrSlug>\` · \`ef list pages --all\` — plain \`ef list pages\` shows only the editor pages that sync |
 | End a split test on a winner | \`ef splits variants <id>\` · \`ef splits winner <id> <variant>\` — a business call the user makes; record it in \`split-tests.md\` |

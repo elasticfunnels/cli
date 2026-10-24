@@ -47,6 +47,8 @@ import {
     DashboardConfig,
     DashboardPreset,
     FunnelResolveResult,
+    ContactListPage,
+    ContactDetail,
 } from './types';
 import { CliError, ExitCode, ExitCodeValue } from '../utils/exit';
 import { requestStart, requestEnd } from '../utils/loader';
@@ -1786,6 +1788,33 @@ export class ApiClient {
     }
 
     /** Every click + event of one session (`ClicksController@sessionDetails`). Accepts a session id or a click code. */
+    /**
+     * One page of contacts (`ContactsController@index`). Params: `q` (name, email
+     * or phone), `lifecycle` (all | customer | lead), `tag`, `email_status`,
+     * `sms_status`, `sort`, `page`, `per_page` (max 100). PII arrives masked
+     * unless the user holds `contacts.view_pii`.
+     */
+    async listContacts(brandId: number, params: Record<string, unknown>): Promise<ContactListPage> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/contacts`, { params });
+        contactsGuard(res);
+        if (res.status === 403) throw new CliError(ExitCode.Auth, 'Your credential cannot read contacts (needs the customers.view permission).');
+        if (res.status >= 400) throw httpError('List contacts', res);
+        const page = normalizePage<ContactListPage['data'][number]>(res.data, 'contacts');
+        return { ...page, can_view_pii: !!(res.data as { can_view_pii?: boolean })?.can_view_pii };
+    }
+
+    /** One contact by public id. A merged contact's id answers with the survivor (`redirect_public_id`). */
+    async getContact(brandId: number, publicId: string): Promise<{ contact: ContactDetail; redirect_public_id?: string }> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/contacts/${encodeURIComponent(publicId)}`);
+        contactsGuard(res);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `No contact ${publicId} in this brand.`);
+        if (res.status === 403) throw new CliError(ExitCode.Auth, 'Your credential cannot read contacts (needs the customers.view permission).');
+        if (res.status >= 400) throw httpError('Get contact', res);
+        const body = (res.data ?? {}) as { contact?: ContactDetail; redirect_public_id?: string };
+        if (!body.contact) throw new CliError(ExitCode.Server, 'The server returned no contact.');
+        return body.redirect_public_id ? { contact: body.contact, redirect_public_id: body.redirect_public_id } : { contact: body.contact };
+    }
+
     async getSessionDetails(brandId: number, sessionId: string): Promise<SessionDetails> {
         const res = await this.raw('GET', `/api/brands/${brandId}/clicks/session/${encodeURIComponent(sessionId)}`);
         if (res.status === 403) throw new CliError(ExitCode.Auth, 'Your credential cannot read this session (tracking module or permission).');
@@ -1981,6 +2010,13 @@ function unwrapTag(data: unknown): BrandTag {
  * surfacing that as a server error keeps "the query broke" from reading as
  * "there were no orders".
  */
+/** A brand still on the old Customers report answers every contacts route with 404 `contacts_not_enabled`. */
+function contactsGuard(res: AxiosResponse): void {
+    if (res.status === 404 && (res.data as { error?: string } | undefined)?.error === 'contacts_not_enabled') {
+        throw new CliError(ExitCode.NotFound, 'Contacts are not enabled for this brand yet (it still uses the old Customers report).');
+    }
+}
+
 function normalizePage<T>(data: unknown, what: string): Paginated<T> {
     const body = (data ?? {}) as Partial<Paginated<T>>;
     if (body.error && (!Array.isArray(body.data) || body.data.length === 0)) {

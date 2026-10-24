@@ -43,6 +43,7 @@ import { registerTagsCommand } from './commands/tags';
 import { registerShippingProfilesCommand } from './commands/shippingProfiles';
 import { registerFoldersCommand } from './commands/folders';
 import { registerOrdersCommand } from './commands/orders';
+import { registerContactsCommand } from './commands/contacts';
 import { registerSessionsCommand } from './commands/sessions';
 import { registerContextCommand } from './commands/context';
 import { registerImagesCommand } from './commands/images';
@@ -117,6 +118,7 @@ Designed for Claude Code, scripts, and humans equally:
     registerStatsCommand(program);
     registerSplitsCommand(program);
     registerOrdersCommand(program);
+    registerContactsCommand(program);
     registerSessionsCommand(program);
     registerCollectionsCommand(program);
     registerCrmCommand(program);

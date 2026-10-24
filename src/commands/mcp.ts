@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { EfRuntime, loadRuntime } from '../utils/store';
 import { resolveProduct } from './productCommands';
+import { mcpContactRow, stripDetailPii } from './contacts';
 import { BonusRule } from '../models/product';
 import { EditableBonus, buildRule, normalizeBonuses, parseBonusSpec, toBonusPayload } from '../utils/bonuses';
 
@@ -292,6 +293,58 @@ const TOOLS: ToolDefinition[] = [
                 bonus_rule: updated.bonus_rule !== undefined ? updated.bonus_rule : (payload.bonus_rule !== undefined ? payload.bonus_rule : product.bonus_rule ?? null),
                 warnings: warnings.length ? warnings : undefined,
             };
+        },
+    },
+    {
+        name: 'ef_search_contacts',
+        description:
+            'Search this brand\'s contacts (leads and buyers) by name or email (query) or phone number (phone); empty query lists the newest. Returns public_id, lifecycle, consent status, tags and order totals. '
+            + 'Names, emails and phones are left out unless include_pii is true (only when the user asked for them); even then they come back masked (p***@e***.com) unless the user holds contacts.view_pii.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'First name, last name or email to match. Optional.' },
+                phone: { type: 'string', description: 'Digits of a phone number to match. Optional.' },
+                lifecycle: { type: 'string', enum: ['all', 'customer', 'lead'], description: 'Default all.' },
+                limit: { type: 'number', description: 'Max contacts (1-50, default 20).' },
+                include_pii: { type: 'boolean', description: 'Return names, emails and phones. Default false; set it only when the user asked for them.' },
+            },
+            additionalProperties: false,
+        },
+        run: async (args, { api, rt }) => {
+            const limit = Math.max(1, Math.min(50, Number(args?.limit) || 20));
+            const params: Record<string, unknown> = { per_page: limit, page: 1 };
+            if (typeof args?.query === 'string' && args.query.trim()) params.q = args.query.trim();
+            const phone = typeof args?.phone === 'string' ? args.phone.replace(/\D+/g, '') : '';
+            if (phone) params.phone = phone;
+            if (['all', 'customer', 'lead'].includes(args?.lifecycle)) params.lifecycle = args.lifecycle;
+            const page = await api.listContacts(rt.config.brandId, params);
+            return {
+                total: page.total,
+                can_view_pii: page.can_view_pii,
+                contacts: page.data.map((r) => mcpContactRow(r, args?.include_pii === true)),
+            };
+        },
+    },
+    {
+        name: 'ef_get_contact',
+        description:
+            'Get one contact by public_id (from ef_search_contacts): lifecycle, consent statuses, tags and order totals; emails, phones, names, location and merges only with include_pii true (only when the user asked), and then masked unless the user holds contacts.view_pii.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                public_id: { type: 'string', description: 'The contact public_id (26 characters).' },
+                include_pii: { type: 'boolean', description: 'Return emails, phones, names, location and merges. Default false.' },
+            },
+            required: ['public_id'],
+            additionalProperties: false,
+        },
+        run: async (args, { api, rt }) => {
+            const publicId = String(args?.public_id ?? '');
+            if (!/^[0-9A-Za-z]{26}$/.test(publicId)) throw new Error('public_id must be the 26-character id from ef_search_contacts.');
+            const res = await api.getContact(rt.config.brandId, publicId);
+            if (args?.include_pii === true || !res?.contact) return res;
+            return { ...res, contact: stripDetailPii(res.contact) };
         },
     },
     {

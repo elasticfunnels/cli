@@ -17,6 +17,7 @@ export type { BrandEmail } from '../models/email';
 export type { CrmEntity, CrmPipeline, CrmStage, CrmField, CrmEntry } from '../models/crm';
 export type { Funnel, FunnelDetails, FunnelDomainAssignment, FunnelResolveResult, FunnelResolveTraceRow, FunnelResolveDestination } from '../models/funnel';
 export type { ConversionRow, ClickRow, Paginated, SessionDetails, SessionEvent } from '../models/order';
+export type { ContactRow, ContactListPage, ContactDetail } from '../models/contact';
 export type { BrandDomain, DomainDnsRecord, DomainValidationInstructions, DomainMoveChange, DomainMoveOptions, DomainMovePreview, DomainMoveResult } from '../models/domain';
 export type { BrandCollection, BrandCollectionField, CollectionFieldType } from '../models/collection';
 export type { BrandTag, TaggableKind } from '../models/tag';

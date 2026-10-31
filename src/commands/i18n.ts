@@ -5,6 +5,7 @@
 //   - linked pages: one page per language (own slug, HTML, SEO), linked to a source page;
 //   - dictionary pages: one page for all languages, its text in t('key') / data-ef-hl, served under
 //     /<prefix>/<slug> when the brand turns on prefix routing.
+import { ownLanguageHeadTags } from '../utils/languageHeadTags';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
@@ -257,6 +258,25 @@ async function localHashReader(rt: EfRuntime, kind: TranslatableKind, byId: Map<
     };
 }
 
+/** Pages with a language whose local file keeps its own hreflang / canonical / og:locale (EF steps back for those). */
+async function pagesWithOwnHeadTags(rt: EfRuntime, pages: Page[]): Promise<Array<{ slug: string; language: string; tags: string[] }>> {
+    const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);
+    const pathById = new Map<number, string>();
+    for (const e of Object.values(state.pages())) pathById.set(e.id, e.path);
+    const out: Array<{ slug: string; language: string; tags: string[] }> = [];
+    for (const p of pages) {
+        const language = (p as Partial<Page> & { language?: string | null }).language;
+        const rel = pathById.get(p.id);
+        if (!language || !rel) continue;
+        try {
+            const { body } = parseEfMeta(fs.readFileSync(safeJoinBrandRoot(rt.brandRoot, rel), 'utf8'));
+            const tags = ownLanguageHeadTags(body);
+            if (tags.length) out.push({ slug: String((p as Partial<Page>).slug ?? p.id), language, tags });
+        } catch { /* not pulled: nothing to check */ }
+    }
+    return out;
+}
+
 export function registerI18nCommand(program: Command): void {
     const cmd = program
         .command('i18n')
@@ -281,7 +301,7 @@ Docs: https://docs.elasticfunnels.io/pages/internationalization`);
         .option('--lang <codes>', 'Only these languages (comma list or repeat). Default: every brand language.', collectList)
         .option('--pages', 'Pages only.')
         .option('--components', 'Components only.')
-        .option('--strict', 'Also exit 1 when a translation is missing.')
+        .option('--strict', 'Also exit 1 when a translation is missing, or a page with a language keeps its own hreflang, canonical or og:locale.')
         .option('--json', 'Print the report as JSON.')
         .addHelpText('after', `
 A translation is stale when its source's text (SEO title, SEO description and
@@ -306,10 +326,12 @@ Exit codes: 0 nothing stale, 1 something stale (or missing with --strict).`)
             const wantComponents = opts.components || !opts.pages;
 
             const report: GroupReport[] = [];
+            let ownHeadTags: Array<{ slug: string; language: string; tags: string[] }> = [];
             if (wantPages) {
                 const pages = await api.listPages(brandId, 100000, { allTypes: true });
                 const byId = new Map<number, Page>(pages.map(p => [p.id, p]));
                 report.push(...buildReport('page', rowsFromPages(pages), targets, defaultLanguage, await localHashReader(rt, 'page', byId)));
+                ownHeadTags = await pagesWithOwnHeadTags(rt, pages);
             }
             if (wantComponents) {
                 const comps = await api.listComponents(brandId);
@@ -319,11 +341,14 @@ Exit codes: 0 nothing stale, 1 something stale (or missing with --strict).`)
             const stale = report.reduce((n, g) => n + g.stale.length, 0);
             const missing = report.reduce((n, g) => n + g.missing.length, 0);
             const staleAfterPush = report.reduce((n, g) => n + g.staleAfterPush.length, 0);
-            if (stale > 0 || (opts.strict && missing > 0)) process.exitCode = ExitCode.Error;
+            if (stale > 0 || (opts.strict && (missing > 0 || ownHeadTags.length > 0))) process.exitCode = ExitCode.Error;
 
             if (opts.json) {
-                log.json({ ok: stale === 0 && !(opts.strict && missing > 0), languages: targets, default_language: defaultLanguage, summary: { groups: report.length, stale, missing, stale_after_push: staleAfterPush }, groups: report });
+                log.json({ ok: stale === 0 && !(opts.strict && (missing > 0 || ownHeadTags.length > 0)), languages: targets, default_language: defaultLanguage, summary: { groups: report.length, stale, missing, stale_after_push: staleAfterPush, own_head_tags: ownHeadTags.length }, groups: report, own_head_tags: ownHeadTags });
                 return;
+            }
+            for (const o of ownHeadTags) {
+                log.warn(`pages/${o.slug} (${o.language}) has its own ${o.tags.join(', ')}: EF writes these for pages with a language and steps back when the page declares them. Remove them unless you mean to override.`);
             }
             if (report.length === 0) {
                 log.info('No translated pages or components yet. Start with "ef pages translate <slug> --lang <code>" or "ef pages settings <slug> --lang <code>".');

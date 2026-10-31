@@ -193,6 +193,10 @@ Examples:
                         log.info(`  ${tag} ${res.kind} ${res.rel}${rev}`);
                         if (res.note) log.detail(`        ${res.note}`);
                         if (res.previewUrl) log.detail(`        preview: ${res.previewUrl}`);
+                        if (cls.kind === 'page' || cls.kind === 'component') {
+                            const headWarning = await languageHeadTagsWarningForFile(abs);
+                            if (headWarning) log.warn(`  ${res.rel} ${headWarning}`);
+                        }
                         if (opts.verbose) {
                             log.detail(
                                 `[verbose]   server id ${res.serverId}  action ${res.action}`,
@@ -283,6 +287,19 @@ async function predictAction(
         return 'create';
     } catch {
         return 'skip';
+    }
+}
+
+/** Multilingual sites: warn when a page with a language keeps its own hreflang/canonical/og:locale. */
+async function languageHeadTagsWarningForFile(abs: string): Promise<string | null> {
+    try {
+        const { parseEfMeta } = await import('../sync/efMeta');
+        const { languageHeadTagsWarning } = await import('../utils/languageHeadTags');
+        const { meta, body } = parseEfMeta(await fs.promises.readFile(abs, 'utf8'));
+        const language = (meta as { language?: string | null } | null)?.language ?? null;
+        return languageHeadTagsWarning(language, body);
+    } catch {
+        return null;
     }
 }
 

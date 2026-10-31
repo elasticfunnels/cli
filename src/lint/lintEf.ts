@@ -13,6 +13,7 @@
 // Grammar sources of truth: elasticfunnels-docs backend/frontend template-engine
 // pages; Modules/TemplateEngine BackendTemplateSyntaxConverter + the frontend
 // engine JS. Never executes anything.
+import { languageHeadTagsWarning } from '../utils/languageHeadTags';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Parser, Token, tokenizer } from 'acorn';
@@ -188,6 +189,17 @@ const BACKEND_SCRIPT_RE = /<script\b[^>]*\bscope\s*=\s*["']backend["'][^>]*>([\s
 const BACKEND_COMMENT_RE = /\{\{--[\s\S]*?--\}\}/g;
 
 // ── Cross-cutting: efmeta ─────────────────────────────────────────────
+
+// Multilingual sites: a page with a language gets hreflang, canonical and og:locale from
+// EF; a hand-written one wins and EF leaves its own out, which is rarely what's meant.
+function checkLanguageHeadTags(content: string, issues: LintIssue[]): void {
+  const m = /\{\{--\s*efmeta:(\{.*?\})\s*--\}\}/.exec(content.split('\n')[0] ?? '');
+  if (!m) return;
+  let language: string | null = null;
+  try { language = (JSON.parse(m[1]) as { language?: string | null }).language ?? null; } catch { return; }
+  const warning = languageHeadTagsWarning(language, content.split('\n').slice(1).join('\n'));
+  if (warning) issues.push({ line: 1, severity: 'warning', message: `This page (language ${language}) ${warning}` });
+}
 
 function checkEfmeta(content: string, kind: EfKind, issues: LintIssue[]): void {
   const lines = content.split('\n');
@@ -982,6 +994,7 @@ export function lintEfContent(content: string, opts: LintOptions = {}): LintResu
   const kind = opts.kind ?? inferKind(opts.filePath);
 
   checkEfmeta(content, kind, issues);
+  if (kind === 'page') checkLanguageHeadTags(content, issues);
 
   if (kind === 'script') {
     // The whole file is JS. Strip the `// efmeta:` first line for accurate lines.

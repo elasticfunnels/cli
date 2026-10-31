@@ -245,6 +245,15 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef pages duplicate <slug>` | Duplicate a page. |
 | `ef pages settings <slug>` | Update page settings (slug, domain, folder, status, SEO) — flags and/or `--file`. Separate from editor HTML. `--sitemap`/`--no-sitemap` lists the page in the brand's `sitemap.xml` + `llms.txt`. `--checkout-page`/`--no-checkout-page` marks it as a checkout page (the brand must allow checkouts; a refusal exits 2 with the server's message), `--upsell-page`/`--no-upsell-page` as an upsell page. `--requires-login on\|off` makes it members-only and `--redirect-url <path\|none>` sets where a visitor without a customer session goes. |
 | `ef pages delete <slug>` | Delete a page. |
+| `ef pages translate <slug> --lang <code>` | Make a translation: clone the page's source into another language, linked to it, and pull it. Slug defaults to `<prefix>/<slug>` (`ro/about`; the index page becomes `ro/index`); `--slug`, `--title`, `--no-copy` (start empty), `--no-pull`. Exit 2 if that language already exists in the group or the slug is taken. |
+| `ef pages translations <slug>` | Every language version of the page (its translation group): id, language, slug, status, public URL, and whether each translation is **stale** (its source changed since). `--json`. |
+| `ef pages create <slug> --lang <code> [--translation-of <slug>]` | Create an empty page in a language, optionally linked to a source page (`--translation-of` needs `--lang`). |
+| `ef pages settings <slug> --lang <code\|none> --translation-of <slug\|none>` | Set or clear a page's language and its translation link. Also rewrites the local file's efmeta so the next push does not undo it. |
+| `ef components translate <code> --lang <code>` | Translation of a component (`--code`, `--name`, `--no-copy`, `--no-pull`). A page in that language includes it instead of the base component. `ef components translations <code>` lists the group. |
+| `ef i18n check` | Missing translations per group and stale ones, for pages and components (`--pages`, `--components`, `--lang ro,es`). Reads the source's local file too, so an unpushed source edit shows as "stale after push". **Exits 1** when anything is stale (`--strict`: also when a language is missing): use it as a publish gate. |
+| `ef i18n synced <slug>` | Mark a translation up to date with its source after you updated it (`--component` for a component code). |
+| `ef i18n settings` | Show or change the brand's multilingual settings: `--prefix-routing on\|off`, `--prompt off\|default\|custom`, `--x-default <code\|none>`. |
+| `ef translations pull` / `push` | The brand dictionary (`t('key')`, `data-ef-hl`) as `translations/<code>.json`, one file per language with its label, default flag, order and URL prefix. `push` creates or updates the language and sends only changed texts; `--prune` also deletes keys the file dropped; `--dry-run`. `ef push` never sends these files. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). Mints a `node_code` for any node missing one — the graph's durable identity, used by the split-test cookie, analytics grouping and funnel step URLs. Current servers mint these too; the CLI covers brands on an older release. Neither side ever rewrites an existing code, since a live test's recorded sessions are tied to it. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
 | `ef pages events validate <slug>` | Validate the events graph (local, or `--stored` for the server's). |
@@ -457,6 +466,43 @@ and `ef init --no-claude` now records the refusal (`aiGuidance: false` in
 > Claude Code enumerates `.claude/skills/` when a session starts. A skill that
 > arrives mid-session (from an `ef pull`, say) is on disk and readable, but will
 > not appear in the session's skill list until it restarts.
+
+## Multilingual sites
+
+A brand can serve a site in several languages in two ways, and use both:
+
+- **Linked pages.** One page per language, each with its own slug, HTML, SEO
+  fields, revisions and split tests, linked to a source page. Make one with
+  `ef pages translate about --lang ro`, translate `pages/ro/about.ef`, push it.
+- **Dictionary pages.** One page for all languages, with its words as keys in
+  the brand dictionary (`{{ t('hero.title') }}`, `data-ef-hl`). Edit them in
+  `translations/<code>.json` (`ef translations pull` / `push`). With
+  `ef i18n settings --prefix-routing on`, `/ro/about` serves `about` in Romanian.
+
+`ef pull` writes a page's (and component's) language and source into its efmeta:
+
+```
+{{-- efmeta:{"v":1,"type":"page","brandId":7,"id":42,"slug":"ro/about","path":"pages/ro/about.ef","language":"ro","translation_of":"about"} --}}
+```
+
+`translation_of` is the source page's slug (a component's code). `ef push`
+sends `language` and `translation_of` only when they differ from what the last
+pull wrote (kept in `.ef-state.json`), so pushing an old file never undoes a
+change made in the app. The usual way to change them is still
+`ef pages settings <slug> --lang ... --translation-of ...`.
+
+**Stale translations.** A translation records a hash of its source's text when
+it is made or marked up to date. The hash is
+`sha256(seo_title + "\n" + seo_description + "\n" + visibleText(html))`, where
+visibleText drops scripts, styles, comments and tags, decodes entities and
+collapses whitespace. The CLI (`src/utils/textHash.ts`) and the app compute it
+the same way; `test/fixtures/i18n-text-hash-vectors.json` holds the shared test
+vectors and `test/fixtures/i18n-text-hash-reference.php` the PHP reference.
+
+```bash
+ef i18n check --lang ro,es    # exit 1 when a translation is stale
+ef i18n synced ro/about       # after updating it
+```
 
 ## Tags (`ef tags`)
 

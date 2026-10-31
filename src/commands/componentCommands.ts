@@ -10,11 +10,14 @@ import { buildSyncContext, pullComponent, pushComponentFile } from '../sync/sync
 import { removeLocalEntity, resolveComponentByCodeOrName } from './shared';
 import { attachTags, collectTag, summarizeAttach, TagTarget } from './tags';
 import { relPathForComponent } from '../sync/paths';
+import { registerTranslationSubcommands } from './i18n';
 
 export function registerComponentsCommand(program: Command): void {
     const cmd = program
         .command('components')
-        .description('Component-specific actions: create, push, preview, delete.');
+        .description('Component-specific actions: create, push, preview, delete, translate, translations.');
+
+    registerTranslationSubcommands(cmd, 'component');
 
     cmd.command('preview <codeOrName>')
         .description('Print the preview URL for a component (draft revision when present).')

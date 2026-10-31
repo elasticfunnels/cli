@@ -671,6 +671,20 @@ export class ApiClient {
         return res.data as { success: boolean; revision_id?: number };
     }
 
+    /**
+     * Update a component's settings (name, code, language, translation link) via the resource route.
+     * The server requires `name`; callers fill it from the current component.
+     */
+    async updateComponentSettings(brandId: number, componentId: number, settings: Record<string, unknown>): Promise<Component> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/components/${componentId}`, { data: settings });
+        if (res.status === 422) throw validationError('Component settings', res);
+        if (res.status >= 400) throw httpError('Update component settings', res);
+        const body = res.data as { pageComponent?: Component; component?: Component } | Component;
+        if ('pageComponent' in body && body.pageComponent) return body.pageComponent;
+        if ('component' in body && body.component) return body.component;
+        return body as Component;
+    }
+
     async deleteComponent(brandId: number, componentId: number, opts?: { force?: boolean }): Promise<void> {
         const url = opts?.force
             ? `/api/brands/${brandId}/components/${componentId}?force=1`
@@ -2076,7 +2090,7 @@ function domainMoveError(label: string, res: AxiosResponse): CliError {
  * top-level `message` only repeats the first field error ("… (and 1 more
  * error)"), so it is used only when there are no field errors.
  */
-function validationError(label: string, res: AxiosResponse): CliError {
+export function validationError(label: string, res: AxiosResponse): CliError {
     const data = res.data as { message?: string; error?: string; errors?: Record<string, string[] | string> } | undefined;
     const fields = data?.errors && typeof data.errors === 'object'
         ? Object.entries(data.errors).map(([field, msgs]) => `${field}: ${(Array.isArray(msgs) ? msgs : [msgs]).join('; ')}`)

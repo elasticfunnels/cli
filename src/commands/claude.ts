@@ -142,6 +142,10 @@ not while resolving a merge. Only ever change the body **below** it.
   line if it begins with \`{{-- efmeta:\` or \`// efmeta:\`. Otherwise the copy
   inherits the original's identity and can overwrite the wrong server entity.
 - The \`{{-- --}}\` comment is stripped at render time and never reaches the browser.
+- It may also carry \`language\` and \`translation_of\` (multilingual sites). Read
+  them, never edit them: change a page's language or link with
+  \`ef pages settings <slug> --lang <code|none> --translation-of <slug|none>\`,
+  which updates the server and rewrites the line for you.
 
 ## Do not touch
 
@@ -591,6 +595,41 @@ ef pages create "shop/product/{code}"   # → /shop/product/blue-widget
   many URLs) — link them from a listing page you do publish.
 - Docs: https://docs.elasticfunnels.io/pages/wildcard-routes
 
+## Multilingual sites
+
+Two models; a brand can use both. Pick per page:
+
+- **Linked pages** (the default for anything with its own copy, layout or SEO):
+  one page per language, each its own row with its own slug, HTML, SEO fields,
+  revisions and split tests, linked to a **source** page. Make one with
+  \`ef pages translate <source-slug> --lang ro\` (clones the source, slug
+  \`ro/<slug>\` by default, pulls \`pages/ro/<slug>.ef\`), then translate the copy
+  and push it. Link two existing pages with
+  \`ef pages settings ro/despre --lang ro --translation-of about\`. One level only:
+  a translation's source is never itself a translation.
+- **Dictionary page**: one page for all languages; its words are keys,
+  \`{{ t('hero.title') }}\` or \`data-ef-hl="hero.title"\`, in the brand dictionary
+  (\`ef translations pull\` → \`translations/<code>.json\`, edit, \`ef translations push\`).
+  With \`ef i18n settings --prefix-routing on\`, \`/ro/about\` serves \`about\` in
+  Romanian. A missing key falls back to the default language's text.
+
+A page with a language renders in it, whatever the visitor's browser says, and
+gets \`<html lang>\`, hreflang alternates, a self canonical and sitemap
+alternates for every published member of its group. Never write hreflang tags
+by hand. Components follow the page: a page in \`ro\` uses the \`ro\` translation
+of an included component (\`ef components translate header --lang ro\`) and the
+base component when there is none. In shared navigation use
+\`{{ page_url('features') }}\` instead of a hard-coded path: it returns the URL of
+that page's translation in the current language.
+
+Before you publish translated work, run \`ef i18n check\`: it lists missing
+languages per group and **stale** translations (the source's text changed
+since). It exits 1 when anything is stale. After updating a stale translation,
+\`ef i18n synced <slug>\` marks it up to date. Do not auto-redirect visitors by
+language in a script: the brand's language prompt
+(\`ef i18n settings --prompt default|custom\`) suggests, it never redirects.
+Docs: https://docs.elasticfunnels.io/pages/internationalization
+
 ## Backend scripts
 
 Standalone scripts in \`elasticfunnels/scripts/*.js\` run **server-side** on page
@@ -730,6 +769,7 @@ init login auth reset whoami status list preview get pull push pages components
 products scripts assets variables diff ask claude codex mcp install-highlighter
 collections
 update config watch lint domains crm funnels tags splits orders sessions
+seo i18n translations
 \`\`\`
 
 Most-used, by task:
@@ -754,6 +794,11 @@ Most-used, by task:
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
+| Translate a page / component | \`ef pages translate <slug> --lang ro\` · \`ef components translate <code> --lang ro\` · \`ef pages translations <slug>\` |
+| Set or clear a page's language / translation link | \`ef pages settings <slug> --lang <code\\|none> --translation-of <slug\\|none>\` |
+| Missing or stale translations (publish gate) | \`ef i18n check [--lang ro,es]\` (exit 1 if stale) · \`ef i18n synced <slug>\` |
+| Brand dictionary (\`t()\` texts) | \`ef translations pull\` · edit \`translations/<code>.json\` · \`ef translations push\` |
+| Prefix routing, language prompt, x-default | \`ef i18n settings --prefix-routing on --prompt custom --x-default en\` |
 | Members-only page (Requires Login) | \`ef pages settings <slug> --requires-login on --redirect-url /account/login\` · \`--requires-login off\` |
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` · \`ef collections delete <code> --force\` (check no page, component or script names the code first) |
 | Shipping rates (a product with no profile ships free) | \`ef shipping-profiles list|get\` · \`ef shipping-profiles create "Single jar" --us 6.95 --intl 14.95\` · \`ef shipping-profiles assign <product-code> --profile <name|id>\` (\`--none\` to remove) · \`update <name> --us 5.95\` |

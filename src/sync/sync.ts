@@ -19,6 +19,11 @@ import { readSnapshot, writeSnapshot } from './baselineSnapshots';
 import { hasConflictMarkers, threeWayMerge } from './merge';
 import { log } from '../utils/log';
 import { formatLinkWarnings, PageLinkWarning } from './linkWarnings';
+import {
+    applyI18nToMeta, baselineOf, componentIndex, extraWithBaseline, I18nFields, i18nChanges, i18nFromEntity,
+    i18nFromMeta, i18nPayload, PageI18n, pageIndex, serverHasI18n, SlugIndex,
+} from './pageI18n';
+import { StateEntry } from './stateFile';
 
 const VERBOSE_BODY_FULL_MAX = 8000;
 const VERBOSE_BODY_HEAD = 1400;
@@ -82,7 +87,61 @@ export interface SyncContext {
      * must still persist whatever landed — see runFullSync.
      */
     aborted?: false | 'interrupt' | 'auth';
+    /** Lazily built slug/code indexes for `translation_of` (see pageI18n.ts). */
+    pageIdx?: SlugIndex;
+    componentIdx?: SlugIndex;
 }
+
+function slugIndexFor(ctx: SyncContext, kind: 'page' | 'component'): SlugIndex {
+    if (kind === 'page') return (ctx.pageIdx ??= pageIndex(ctx.api, ctx.rt.config.brandId));
+    return (ctx.componentIdx ??= componentIndex(ctx.api, ctx.rt.config.brandId));
+}
+
+/** The language fields a pull writes, or undefined when the server does not send them (older app). */
+async function i18nForPull(ctx: SyncContext, kind: 'page' | 'component', entity: I18nFields): Promise<PageI18n | undefined> {
+    if (!serverHasI18n(entity)) return undefined;
+    return await i18nFromEntity(entity, slugIndexFor(ctx, kind));
+}
+
+/**
+ * After a push: send `language` / `translation_of` when the file's efmeta changed them since the last pull.
+ * Returns the new baseline to store. A refused change never undoes the HTML push that already landed: it is
+ * reported, the baseline stays, and the command exits 2.
+ */
+async function pushI18nIfChanged(
+    ctx: SyncContext,
+    kind: 'page' | 'component',
+    id: number,
+    meta: EfMeta | null,
+    server: (I18nFields & { title?: string | null; name?: string | null }) | null,
+    prev: StateEntry | undefined,
+): Promise<{ baseline?: PageI18n; note?: string }> {
+    const local = i18nFromMeta(meta);
+    const idx = slugIndexFor(ctx, kind);
+    let baseline = baselineOf(prev);
+    if (!baseline && server && serverHasI18n(server)) baseline = await i18nFromEntity(server, idx);
+    if (!baseline) return {};
+    const changes = i18nChanges(local, baseline);
+    if (Object.keys(changes).length === 0) return { baseline };
+    try {
+        const payload = await i18nPayload(changes, idx);
+        if (kind === 'page') {
+            await ctx.api.updatePageSettings(ctx.rt.config.brandId, id, { title: server?.title ?? '', ...payload });
+        } else {
+            await ctx.api.updateComponentSettings(ctx.rt.config.brandId, id, { name: server?.name ?? '', ...payload });
+        }
+        const parts: string[] = [];
+        if ('language' in changes) parts.push(`language ${changes.language ?? 'none'}`);
+        if ('translation_of' in changes) parts.push(changes.translation_of ? `translation of ${changes.translation_of}` : 'no longer a translation');
+        return { baseline: local, note: `Set ${parts.join(', ')}.` };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`Language not changed for ${kind} #${id}: ${msg}`);
+        if (!process.exitCode) process.exitCode = ExitCode.Validation;
+        return { baseline, note: `Language not changed: ${msg}` };
+    }
+}
+
 
 /**
  * Pull a list of entities with bounded concurrency, tolerating per-item
@@ -227,7 +286,8 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
     const page = await ctx.api.getPageContent(ctx.rt.config.brandId, pageId);
     const rel = await nonCollidingRel(ctx, relPathForPage(page), page.id, 'page');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
-    const meta: EfMeta = {
+    const i18n = await i18nForPull(ctx, 'page', page);
+    const baseMeta: EfMeta = {
         v: 1,
         type: 'page',
         brandId: ctx.rt.config.brandId,
@@ -238,6 +298,7 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
         remoteUpdatedAt: page.updated_at ?? undefined,
         path: rel,
     };
+    const meta = i18n ? applyI18nToMeta(baseMeta, i18n) : baseMeta;
     const body = page.html ?? '';
     if (await wouldClobberLocalEdits(ctx, 'page', rel, body, opts.force)) {
         if (opts.merge) {
@@ -262,6 +323,7 @@ export async function pullPage(ctx: SyncContext, pageId: number, opts: { force?:
         updatedAt: page.updated_at ?? null,
         serverUpdatedAt: page.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
+        extra: extraWithBaseline(ctx.state.getByPath('page', rel)?.extra, i18n),
     });
     await writeSnapshot(ctx.rt.brandRoot, 'page', page.id, Buffer.from(body, 'utf8'));
     return { rel, absPath: abs, created: !existed };
@@ -282,7 +344,8 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
     const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, componentId);
     const rel = await nonCollidingRel(ctx, relPathForComponent(c), c.id, 'component');
     const abs = safeJoinBrandRoot(ctx.rt.brandRoot, rel);
-    const meta: EfMeta = {
+    const i18n = await i18nForPull(ctx, 'component', c);
+    const baseMeta: EfMeta = {
         v: 1,
         type: 'component',
         brandId: ctx.rt.config.brandId,
@@ -293,6 +356,7 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
         remoteUpdatedAt: c.updated_at ?? undefined,
         path: rel,
     };
+    const meta = i18n ? applyI18nToMeta(baseMeta, i18n) : baseMeta;
     const body = c.html ?? '';
     if (await wouldClobberLocalEdits(ctx, 'component', rel, body, opts.force)) {
         if (opts.merge) {
@@ -317,6 +381,7 @@ export async function pullComponent(ctx: SyncContext, componentId: number, opts:
         updatedAt: c.updated_at ?? null,
         serverUpdatedAt: c.updated_at ?? null,
         contentHash: sha256(Buffer.from(body, 'utf8')),
+        extra: extraWithBaseline(ctx.state.getByPath('component', rel)?.extra, i18n),
     });
     await writeSnapshot(ctx.rt.brandRoot, 'component', c.id, Buffer.from(body, 'utf8'));
     return { rel, absPath: abs, created: !existed };
@@ -588,14 +653,14 @@ async function fetchCanonicalBody(
     ctx: SyncContext,
     type: 'page' | 'component',
     id: number,
-): Promise<{ body: string; revisionId: number | null; updatedAt: string | null; status?: string | null } | null> {
+): Promise<{ body: string; revisionId: number | null; updatedAt: string | null; status?: string | null; entity: I18nFields & { title?: string | null; name?: string | null } } | null> {
     try {
         if (type === 'page') {
             const p = await ctx.api.getPageContent(ctx.rt.config.brandId, id);
-            return { body: p.html ?? '', revisionId: p.revision_id ?? null, updatedAt: p.updated_at ?? null, status: p.status ?? null };
+            return { body: p.html ?? '', revisionId: p.revision_id ?? null, updatedAt: p.updated_at ?? null, status: p.status ?? null, entity: p };
         }
         const c = await ctx.api.getComponentContent(ctx.rt.config.brandId, id);
-        return { body: c.html ?? c.code ?? '', revisionId: c.revision_id ?? null, updatedAt: c.updated_at ?? null };
+        return { body: c.html ?? c.code ?? '', revisionId: c.revision_id ?? null, updatedAt: c.updated_at ?? null, entity: c };
     } catch {
         return null;
     }
@@ -871,6 +936,8 @@ export async function pushPageFile(
         } else {
             delete newMeta.revisionId;
         }
+        const prevEntry = ctx.state.getByPath('page', rel);
+        const lang = await pushI18nIfChanged(ctx, 'page', meta.id, meta, canonical?.entity ?? null, prevEntry);
         await writeFileAtomic(abs, withEfMeta(newMeta, finalBody));
         ctx.state.setEntry('page', {
             path: rel,
@@ -880,6 +947,7 @@ export async function pushPageFile(
             updatedAt: new Date().toISOString(),
             serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
             contentHash: sha256(Buffer.from(finalBody, 'utf8')),
+            extra: extraWithBaseline(prevEntry?.extra, lang.baseline),
         });
         await writeSnapshot(ctx.rt.brandRoot, 'page', meta.id, Buffer.from(finalBody, 'utf8'));
         return {
@@ -891,7 +959,7 @@ export async function pushPageFile(
             // An offline page 404s publicly and its preview link answers 400,
             // so printing one only sends the reader to an error page.
             previewUrl: isOfflineStatus(canonical?.status) ? null : (res.preview_url ?? null),
-            note: isOfflineStatus(canonical?.status) ? offlinePageNote(meta.slug ?? rel) : undefined,
+            note: [isOfflineStatus(canonical?.status) ? offlinePageNote(meta.slug ?? rel) : null, lang.note ?? null].filter(Boolean).join(' ') || undefined,
             apiResponse: shrinkPushApiBody(res),
         };
     }
@@ -913,11 +981,17 @@ export async function pushPageFile(
     reportCollectionsCreated(res.collections_created, rel, body);
     reportTrackingCodeInPage(res.tracking_code_in_page, rel);
     reportLinkWarnings(res.link_warnings, rel);
-    const newMeta: EfMeta = {
+    // A copied file whose efmeta carries a language (say, pages/ro/about.ef made from pages/about.ef with
+    // "language":"ro") gives the new page that language and link. Applied against an empty baseline.
+    const copiedI18n = i18nFromMeta(meta);
+    const createLang = (copiedI18n.language || copiedI18n.translation_of)
+        ? await pushI18nIfChanged(ctx, 'page', created.id, meta, { ...created, language: null, translation_source_id: null }, undefined)
+        : {};
+    const newMeta: EfMeta = applyI18nToMeta({
         v: 1, type: 'page', brandId: ctx.rt.config.brandId, id: created.id,
         slug: created.slug ?? slug, name: created.title ?? title,
         path: rel,
-    };
+    }, createLang.baseline ?? { language: null, translation_of: null });
     // Same canonical read-back the update path does. A brand-new page is the
     // most likely one to contain a `COLLECTION_CODE` placeholder, and skipping
     // this left the real code on the server while the local file — the thing an
@@ -941,6 +1015,7 @@ export async function pushPageFile(
         updatedAt: new Date().toISOString(),
         serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
         contentHash: sha256(Buffer.from(finalBody, 'utf8')),
+        extra: extraWithBaseline(undefined, createLang.baseline),
     });
     await writeSnapshot(ctx.rt.brandRoot, 'page', created.id, Buffer.from(finalBody, 'utf8'));
     return {
@@ -950,9 +1025,9 @@ export async function pushPageFile(
         serverId: created.id,
         revisionId: res.revision_id ?? null,
         previewUrl: res.preview_url ?? null,
-        note: isCopy && meta?.id
+        note: (isCopy && meta?.id
             ? `Copy of page #${meta.id} (efmeta issued for ${meta.path}); created NEW page #${created.id} (slug "${slug}") so the original is untouched.`
-            : `Allocated new page id ${created.id} for slug "${slug}".`,
+            : `Allocated new page id ${created.id} for slug "${slug}".`) + (createLang.note ? ` ${createLang.note}` : ''),
         apiResponse: {
             page: shrinkPushApiBody(created) ?? {},
             editor: shrinkPushApiBody(res) ?? {},
@@ -1001,6 +1076,8 @@ export async function pushComponentFile(
         } else {
             delete newMeta.revisionId;
         }
+        const prevEntry = ctx.state.getByPath('component', rel);
+        const lang = await pushI18nIfChanged(ctx, 'component', meta.id, meta, canonical?.entity ?? null, prevEntry);
         await writeFileAtomic(abs, withEfMeta(newMeta, finalBody));
         ctx.state.setEntry('component', {
             path: rel,
@@ -1010,6 +1087,7 @@ export async function pushComponentFile(
             updatedAt: new Date().toISOString(),
             serverUpdatedAt: canonical?.updatedAt ?? new Date().toISOString(),
             contentHash: sha256(Buffer.from(finalBody, 'utf8')),
+            extra: extraWithBaseline(prevEntry?.extra, lang.baseline),
         });
         await writeSnapshot(ctx.rt.brandRoot, 'component', meta.id, Buffer.from(finalBody, 'utf8'));
         return {
@@ -1018,6 +1096,7 @@ export async function pushComponentFile(
             action: 'updated',
             serverId: meta.id,
             revisionId: canonRev,
+            note: lang.note,
             apiResponse: shrinkPushApiBody(res),
         };
     }

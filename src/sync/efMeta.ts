@@ -23,6 +23,13 @@ export interface EfMeta {
      * of trampling the original.
      */
     path?: string;
+    /**
+     * Multilingual sites: the page's language code ("ro", "pt-br"). Written by
+     * pull; edit it and push to change the page's language ("" or absent = none).
+     */
+    language?: string;
+    /** Slug of the page this one translates. Written by pull; edit and push to link or unlink. */
+    translation_of?: string;
 }
 
 const TEMPLATE_PREFIX = '{{-- efmeta:';
@@ -45,6 +52,8 @@ function stableEfMeta(meta: EfMeta): Record<string, unknown> {
     if (meta.templateSlug != null) out.templateSlug = meta.templateSlug;
     if (meta.templateId != null) out.templateId = meta.templateId;
     if (meta.pageSlug != null) out.pageSlug = meta.pageSlug;
+    if (meta.language != null && meta.language !== '') out.language = meta.language;
+    if (meta.translation_of != null && meta.translation_of !== '') out.translation_of = meta.translation_of;
     return out;
 }
 

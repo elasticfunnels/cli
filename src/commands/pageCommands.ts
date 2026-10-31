@@ -19,6 +19,8 @@ import { printPagesList } from './list';
 import { registerPageGetCommand, resolveAnyPageId } from './pageGet';
 import { resolveDomain, statusLabel as domainStatusLabel } from './domains';
 import { attachTags, collectTag, summarizeAttach, TagTarget } from './tags';
+import { registerTranslationSubcommands } from './i18n';
+import { applyI18nToMeta, baselineOf, extraWithBaseline, PageI18n, pageIndex, parseLangFlag, parseTranslationOfFlag } from '../sync/pageI18n';
 
 /**
  * When a page's slug changes on the server, move its local `.ef` file to match
@@ -84,9 +86,10 @@ async function resolvePageForSettings(api: ApiClient, brandId: number, slugOrId:
 export function registerPagesCommand(program: Command): void {
     const cmd = program
         .command('pages')
-        .description('Page-specific actions: list, get, create, publish, preview, duplicate, delete, events.');
+        .description('Page-specific actions: list, get, create, publish, preview, duplicate, delete, events, translate, translations.');
 
     registerPageEventsCommand(cmd);
+    registerTranslationSubcommands(cmd, 'page');
 
     cmd.command('list')
         .alias('ls')
@@ -109,6 +112,8 @@ export function registerPagesCommand(program: Command): void {
         .option('--folder <folder>', 'Folder to drop the page into: id, name or path ("Kits/My kit"). See "ef folders".')
         .option('--folder-id <id>', 'Numeric folder id to drop the page into.', (v) => parseInt(v, 10))
         .option('--tag <name>', 'Tag the new page (repeatable). Creates the tag if it does not exist.', collectTag)
+        .option('--lang <code>', 'Language of the page ("ro", "pt-br"); must be a brand language.')
+        .option('--translation-of <slug>', 'Link it as a translation of this page (needs --lang). To clone a page instead, use "ef pages translate".')
         .option('--no-pull', 'Skip pulling the new page to disk after creating.')
         .option('--json', 'Print result as JSON.')
         .addHelpText('after', `
@@ -117,16 +122,40 @@ later ("ef list pages --tag <name>"):
 
   $ ef pages create black-friday/landing --tag black-friday --tag q4
 
-See "ef tags --help" for colours and for tagging pages that already exist.`)
-        .action(async (slug: string, opts: { title?: string; folder?: string; folderId?: number; tag?: string[]; pull?: boolean; json?: boolean }) => {
+See "ef tags --help" for colours and for tagging pages that already exist.
+
+A page in another language, linked to its source (hreflang, sitemap and the
+language switcher then connect the two):
+
+  $ ef pages create ro/despre --lang ro --translation-of about
+
+"ef pages translate about --lang ro" does the same and copies the content.`)
+        .action(async (slug: string, opts: { title?: string; folder?: string; folderId?: number; tag?: string[]; lang?: string; translationOf?: string; pull?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const title = opts.title ?? humanize(slug);
+            const language = opts.lang !== undefined ? parseLangFlag(opts.lang) : null;
+            const translationOf = opts.translationOf !== undefined ? parseTranslationOfFlag(opts.translationOf) : null;
+            if (translationOf && !language) {
+                throw new CliError(ExitCode.Validation, '--translation-of needs --lang: a translation has to say which language it is in.');
+            }
             let folderId = opts.folderId;
             if (opts.folder !== undefined) {
                 folderId = (await resolveFolderId(api, rt.config.brandId, opts.folder)).id ?? undefined;
             }
-            const created = await api.createPage(rt.config.brandId, title, slug, folderId);
+            // Resolve the source before creating, so a typo fails without leaving a page behind.
+            const sourceId = translationOf ? await pageIndex(api, rt.config.brandId).idOf(translationOf) : null;
+            let created = await api.createPage(rt.config.brandId, title, slug, folderId);
+            if (language) {
+                created = {
+                    ...created,
+                    ...(await api.updatePageSettings(rt.config.brandId, created.id, {
+                        title: created.title ?? title,
+                        language,
+                        ...(sourceId != null ? { translation_source_id: sourceId } : {}),
+                    })),
+                };
+            }
             if (opts.pull !== false) {
                 const ctx = await buildSyncContext(rt);
                 await pullPage(ctx, created.id);
@@ -139,6 +168,7 @@ See "ef tags --help" for colours and for tagging pages that already exist.`)
 
             if (opts.json) { log.json({ ok: true, page: created, ...(tagged ? { tags: tagged } : {}) }); return; }
             log.success(`Created page #${created.id} "${created.slug ?? slug}" (${created.title ?? title}).`);
+            if (language) log.detail(`  Language ${language}${translationOf ? `, a translation of ${translationOf}` : ''}.`);
             if (tagged) log.success(summarizeAttach(tagged, target));
         });
 
@@ -185,6 +215,15 @@ Only a checkout page can be a funnel's checkout: after marking it, run
 "ef funnels settings <funnel> --checkout-page order-form". A brand without
 checkouts enabled is refused with exit code 2 and the server's message.
 
+  # Multilingual: set the page's language, link it as a translation, or undo either
+  $ ef pages settings ro/despre --lang ro --translation-of about
+  $ ef pages settings ro/despre --translation-of none
+  $ ef pages settings about --lang none
+
+A page with a language renders in it (<html lang>, t() texts, hreflang). The
+source is the page the others translate; a translation's source is never
+itself a translation. "ef pages translations <slug>" lists the group.
+
 Run "ef domains list" to see the brand's domains and their status. A domain has
 to be validated before it actually serves traffic — "ef domains records <domain>"
 prints the DNS records, "ef domains validate <domain>" triggers the check.`)
@@ -210,6 +249,8 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--no-upsell-page', 'Unmark it as an upsell page.')
         .option('--requires-login <on|off>', 'Members-only page (Requires Login): on | off.')
         .option('--redirect-url <path>', 'Where a visitor without a customer session is sent ("/account/login"); "none" clears it.')
+        .option('--lang <code|none>', 'The page\'s language ("ro", "pt-br"); "none" clears it.')
+        .option('--translation-of <slug|none>', 'Link the page as a translation of this source page; "none" unlinks it.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
@@ -217,6 +258,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
             seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
             requiresLogin?: string; redirectUrl?: string; file?: string; json?: boolean;
+            lang?: string; translationOf?: string;
         }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
@@ -265,6 +307,12 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.checkoutPage !== undefined) flags.is_checkout_page = opts.checkoutPage;
             if (opts.upsellPage !== undefined) flags.is_upsell_page = opts.upsellPage;
             Object.assign(flags, loginSettingFlags(opts.requiresLogin, opts.redirectUrl));
+            if (opts.lang !== undefined) flags.language = parseLangFlag(opts.lang);
+            let translationOfLabel: string | null | undefined;
+            if (opts.translationOf !== undefined) {
+                translationOfLabel = parseTranslationOfFlag(opts.translationOf);
+                flags.translation_source_id = translationOfLabel ? await pageIndex(api, rt.config.brandId).idOf(translationOfLabel) : null;
+            }
 
             const payload: Record<string, unknown> = { ...base, ...flags };
             if (Object.keys(payload).length === 0) {
@@ -278,6 +326,13 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             // A slug change moves the page's URL — keep the local .ef file in sync
             // so disk, efmeta and state match the new slug.
             const renamed = await renameLocalPageFile(rt, page.id, relPathForPage(page), relPathForPage(updated), updated);
+            // The language lives in the local file's efmeta too; rewrite it so the next push does not undo this.
+            if (flags.language !== undefined || flags.translation_source_id !== undefined) {
+                await writeLocalI18n(rt, page.id, relPathForPage(updated), {
+                    language: flags.language !== undefined ? (flags.language as string | null) : undefined,
+                    translation_of: translationOfLabel,
+                });
+            }
 
             if (opts.json) {
                 log.json({
@@ -314,6 +369,8 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
                     ? `  Requires Login: on. Visitors without a customer session go to ${target ? String(target) : 'the 404 page (no Redirect URL set)'}.`
                     : '  Requires Login: off. Anyone can open the page.');
             }
+            if (flags.language !== undefined) log.detail(flags.language ? `  Language → ${String(flags.language)}` : '  Language cleared.');
+            if (translationOfLabel !== undefined) log.detail(translationOfLabel ? `  Translation of ${translationOfLabel}.` : '  No longer a translation.');
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });
 
@@ -384,6 +441,30 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.json) { log.json({ ok: true, deleted: { id: page.id, slug: page.slug }, localFileRemoved: fileRemoved }); return; }
             log.success(`Deleted page #${page.id}.${fileRemoved ? ` Removed ${rel}.` : ''}`);
         });
+}
+
+/**
+ * After `ef pages settings --lang/--translation-of`: write the new values into the local file's efmeta and
+ * the state baseline, so disk matches the server and `ef push` has nothing language-related to send.
+ * `undefined` keeps a field as it is.
+ */
+async function writeLocalI18n(rt: EfRuntime, pageId: number, rel: string, change: { language?: string | null; translation_of?: string | null }): Promise<void> {
+    const abs = safeJoinBrandRoot(rt.brandRoot, rel);
+    if (!(await fileExists(abs))) return;
+    const { meta, body } = parseEfMeta(await fs.promises.readFile(abs, 'utf8'));
+    if (!meta || meta.id !== pageId) return;
+    const state = await SyncStateFile.load(rt.brandRoot, rt.config.brandId);
+    const entry = state.getByPath('page', rel);
+    const before: PageI18n = baselineOf(entry) ?? { language: meta.language ?? null, translation_of: meta.translation_of ?? null };
+    const after: PageI18n = {
+        language: change.language !== undefined ? change.language : before.language,
+        translation_of: change.translation_of !== undefined ? change.translation_of : before.translation_of,
+    };
+    await writeFileAtomic(abs, withEfMeta(applyI18nToMeta(meta, after), body));
+    if (entry) {
+        state.setEntry('page', { ...entry, extra: extraWithBaseline(entry.extra, after) });
+        await state.save();
+    }
 }
 
 /**

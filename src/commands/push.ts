@@ -36,8 +36,18 @@ interface PushOpts {
 const PROJECT_NOTES_FILES = new Set(['split-tests.md']);
 
 function isProjectNotesFile(brandRoot: string, abs: string): boolean {
+    if (isDictionaryFile(brandRoot, abs)) {
+        dictionarySkipped = true;
+        return true;
+    }
     return path.dirname(abs) === brandRoot && PROJECT_NOTES_FILES.has(path.basename(abs));
 }
+
+/** translations/<code>.json is the brand dictionary: `ef translations push` sends it, not `ef push`. */
+function isDictionaryFile(brandRoot: string, abs: string): boolean {
+    return path.dirname(abs) === path.join(brandRoot, 'translations') && abs.endsWith('.json');
+}
+let dictionarySkipped = false;
 
 export function registerPushCommand(program: Command): void {
     program
@@ -233,6 +243,7 @@ Examples:
                 return;
             }
             log.success(`Pushed ${results.length} file${results.length === 1 ? '' : 's'}.`);
+            if (dictionarySkipped) log.detail('translations/*.json are the brand dictionary: send them with "ef translations push".');
             if (conflicts > 0) {
                 process.exitCode = ExitCode.Conflict;
                 log.warn(`${conflicts} file${conflicts === 1 ? '' : 's'} had a conflict and ${conflicts === 1 ? 'was' : 'were'} NOT pushed (see above). Exit ${ExitCode.Conflict}.`);

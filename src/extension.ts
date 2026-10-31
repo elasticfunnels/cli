@@ -31,6 +31,7 @@ import { registerCollectionsCommand } from './commands/collections';
 import { augmentAuthError } from './utils/credential';
 import { registerConfigCommand } from './commands/config';
 import { registerSeoCommand } from './commands/seo';
+import { registerI18nCommand, registerTranslationsCommand } from './commands/i18n';
 import { registerStatsCommand } from './commands/stats';
 import { registerSplitsCommand } from './commands/splits';
 import { registerWatchCommand } from './commands/watch';
@@ -79,7 +80,12 @@ Designed for Claude Code, scripts, and humans equally:
   • All commands accept --json for machine-readable output.
   • Exit codes are stable: 0=ok 2=usage 3=auth 4=conflict 5=network 6=server
     7=notfound 130=interrupted.
-  • No global state. cd into a different project, get a different brand.`)
+  • No global state. cd into a different project, get a different brand.
+
+Multilingual sites: one page per language linked as translations
+("ef pages translate <slug> --lang ro"), or one page whose texts live in the
+brand dictionary ("ef translations pull"). "ef i18n --help" explains both;
+"ef i18n check" lists missing and stale translations.`)
         .version(getVersion(), '-v, --version', 'Print the CLI version.')
         .helpOption('-h, --help', 'Show help for a command.')
         .showHelpAfterError('(use "ef <cmd> --help" for command details)');
@@ -115,6 +121,8 @@ Designed for Claude Code, scripts, and humans equally:
     registerLintCommand(program);
     registerDomainsCommand(program);
     registerSeoCommand(program);
+    registerI18nCommand(program);
+    registerTranslationsCommand(program);
     registerStatsCommand(program);
     registerSplitsCommand(program);
     registerOrdersCommand(program);

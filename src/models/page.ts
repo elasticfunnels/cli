@@ -16,6 +16,19 @@ export interface Page {
     redirect_url?: string | null;
     updated_at?: string | null;
     created_at?: string | null;
+    seo_title?: string | null;
+    seo_description?: string | null;
+    page_type?: string | null;
+    /** Multilingual sites: the page's language (normalized code, "pt-br"); null = not set. */
+    language?: string | null;
+    /** The page this one translates; null on the source page and on pages outside a group. */
+    translation_source_id?: number | null;
+    /** translation_source_id ?? id, computed by the server. */
+    translation_group_id?: number | null;
+    /** True when the source changed since this translation was made or marked synced; null on a source. */
+    translation_stale?: boolean | null;
+    /** Hash of the source's text when this translation was made or last marked synced. */
+    translation_source_hash?: string | null;
 }
 
 export interface PageUpdateResponse {

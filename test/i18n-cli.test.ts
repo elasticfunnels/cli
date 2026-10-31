@@ -52,6 +52,20 @@ test('buildReport: missing, stale, stale after push; a source without a language
     assert.deepEqual(report[0].languages.map(l => l.language).sort(), ['en', 'es', 'ro']);
 });
 
+test('buildReport: a tagged page with no translation is skipped unless includeUntranslated (partly translated sites)', () => {
+    const rows = [
+        { id: 10, ref: 'features', language: 'en', sourceId: null, stale: null, sourceHash: null },
+        { id: 11, ref: 'faq', language: 'en', sourceId: null, stale: null, sourceHash: null },
+        { id: 12, ref: 'ro/faq', language: 'ro', sourceId: 11, stale: false, sourceHash: null },
+    ];
+    const report = buildReport('page', rows, ['en', 'ro', 'es'], 'en', () => null);
+    assert.deepEqual(report.map(g => g.source.ref), ['faq'], 'features has no translation, so it is not a gap');
+    assert.deepEqual(report[0].missing, ['es']);
+    const all = buildReport('page', rows, ['en', 'ro', 'es'], 'en', () => null, { includeUntranslated: true });
+    assert.deepEqual(all.map(g => g.source.ref), ['faq', 'features']);
+    assert.deepEqual(all[1].missing, ['ro', 'es']);
+});
+
 test('dictionary file: round trip and validation', () => {
     const file = dictionaryFileFor({ id: 3, code: 'ro', label: 'Română', is_default: false, sort_order: 1, url_prefix: null },
         [{ key: 'b', value: 'B' }, { key: 'a', value: null }]);

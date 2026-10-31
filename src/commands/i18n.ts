@@ -198,6 +198,7 @@ export function buildReport(
     targetLanguages: string[],
     defaultLanguage: string | null,
     localSourceHash: (id: number) => string | null,
+    opts: { includeUntranslated?: boolean } = {},
 ): GroupReport[] {
     const groups = new Map<number, Row[]>();
     for (const r of rows) {
@@ -211,6 +212,9 @@ export function buildReport(
         const translations = members.filter(m => m.sourceId != null);
         if (!source) continue;
         if (translations.length === 0 && !source.language) continue;
+        // A tagged page with no translation at all is a page you chose not to translate (a
+        // partly translated site), not a gap: it counts only with --untranslated.
+        if (translations.length === 0 && !opts.includeUntranslated) continue;
         const langs = new Map<string, Row>();
         const srcLang = source.language ?? defaultLanguage;
         if (srcLang) langs.set(srcLang, source);
@@ -301,6 +305,7 @@ Docs: https://docs.elasticfunnels.io/pages/internationalization`);
         .option('--lang <codes>', 'Only these languages (comma list or repeat). Default: every brand language.', collectList)
         .option('--pages', 'Pages only.')
         .option('--components', 'Components only.')
+        .option('--untranslated', 'Also list pages and components with a language but no translation yet (missing every other language).')
         .option('--strict', 'Also exit 1 when a translation is missing, or a page with a language keeps its own hreflang, canonical or og:locale.')
         .option('--json', 'Print the report as JSON.')
         .addHelpText('after', `
@@ -313,7 +318,7 @@ Use it as a publish gate:
   $ ef i18n check --lang ro,es && ef push --all
 
 Exit codes: 0 nothing stale, 1 something stale (or missing with --strict).`)
-        .action(async (opts: { lang?: string[]; pages?: boolean; components?: boolean; strict?: boolean; json?: boolean }) => {
+        .action(async (opts: { lang?: string[]; pages?: boolean; components?: boolean; strict?: boolean; untranslated?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = apiFor(rt);
             const brandId = rt.config.brandId;
@@ -330,13 +335,13 @@ Exit codes: 0 nothing stale, 1 something stale (or missing with --strict).`)
             if (wantPages) {
                 const pages = await api.listPages(brandId, 100000, { allTypes: true });
                 const byId = new Map<number, Page>(pages.map(p => [p.id, p]));
-                report.push(...buildReport('page', rowsFromPages(pages), targets, defaultLanguage, await localHashReader(rt, 'page', byId)));
+                report.push(...buildReport('page', rowsFromPages(pages), targets, defaultLanguage, await localHashReader(rt, 'page', byId), { includeUntranslated: opts.untranslated }));
                 ownHeadTags = await pagesWithOwnHeadTags(rt, pages);
             }
             if (wantComponents) {
                 const comps = await api.listComponents(brandId);
                 const byId = new Map<number, Component>(comps.map(x => [x.id, x]));
-                report.push(...buildReport('component', rowsFromComponents(comps), targets, defaultLanguage, await localHashReader(rt, 'component', byId)));
+                report.push(...buildReport('component', rowsFromComponents(comps), targets, defaultLanguage, await localHashReader(rt, 'component', byId), { includeUntranslated: opts.untranslated }));
             }
             const stale = report.reduce((n, g) => n + g.stale.length, 0);
             const missing = report.reduce((n, g) => n + g.missing.length, 0);

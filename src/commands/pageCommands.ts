@@ -7,7 +7,7 @@ import { Page, TAGGABLE } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
-import { fetchPagePreviewBundle, printPreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug } from './shared';
+import { fetchPagePreviewBundle, printPreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug, parseAffiliateFlag } from './shared';
 import { isOfflineStatus, offlinePageNote } from '../sync/sync';
 import { relPathForPage, safeJoinBrandRoot } from '../sync/paths';
 import { EfMeta, parseEfMeta, withEfMeta } from '../sync/efMeta';
@@ -249,6 +249,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--no-upsell-page', 'Unmark it as an upsell page.')
         .option('--requires-login <on|off>', 'Members-only page (Requires Login): on | off.')
         .option('--redirect-url <path>', 'Where a visitor without a customer session is sent ("/account/login"); "none" clears it.')
+        .option('--affiliate <id|none>', 'Credit every visitor of this page to this affiliate (numeric id), overriding ?aff_id=; "none" clears it. Own-checkout domains only.')
         .option('--lang <code|none>', 'The page\'s language ("ro", "pt-br"); "none" clears it.')
         .option('--translation-of <slug|none>', 'Link the page as a translation of this source page; "none" unlinks it.')
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
@@ -258,7 +259,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             status?: string; isIndex?: boolean; homepage?: boolean; seoTitle?: string; seoDescription?: string;
             seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
             requiresLogin?: string; redirectUrl?: string; file?: string; json?: boolean;
-            lang?: string; translationOf?: string;
+            lang?: string; translationOf?: string; affiliate?: string;
         }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
@@ -307,6 +308,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.checkoutPage !== undefined) flags.is_checkout_page = opts.checkoutPage;
             if (opts.upsellPage !== undefined) flags.is_upsell_page = opts.upsellPage;
             Object.assign(flags, loginSettingFlags(opts.requiresLogin, opts.redirectUrl));
+            if (opts.affiliate !== undefined) flags.affiliate_id = parseAffiliateFlag(opts.affiliate) ?? '';
             if (opts.lang !== undefined) flags.language = parseLangFlag(opts.lang);
             let translationOfLabel: string | null | undefined;
             if (opts.translationOf !== undefined) {
@@ -411,15 +413,23 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         });
 
     cmd.command('duplicate <slug>')
-        .description('Duplicate a page on the server.')
+        .alias('clone')
+        .description('Copy a page on the server. The copy keeps the domain, gets a new slug, and is not in any funnel.')
+        .option('--title <title>', 'Title of the copy (default: "<title> (Copy)").')
+        .option('--slug <slug>', 'Slug of the copy (default: made from the title). Must be free on the page\'s domain.')
+        .option('--with-variants', 'Copy the page\'s versions (split-test variants) too.')
+        .option('--with-events', 'Copy the page events (Drawflow) too.')
         .option('--json', 'Print result as JSON.')
-        .action(async (slug: string, opts: { json?: boolean }) => {
+        .action(async (slug: string, opts: { title?: string; slug?: string; withVariants?: boolean; withEvents?: boolean; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
-            const original = await resolvePageBySlug(api, rt.config.brandId, slug);
-            const dup = await api.duplicatePage(rt.config.brandId, original.id);
+            // Any page type (editor, builder, legacy): the server clones them all.
+            const original = await resolvePageForSettings(api, rt.config.brandId, slug);
+            const dup = await api.duplicatePage(rt.config.brandId, original.id, {
+                title: opts.title, slug: opts.slug, withVariants: opts.withVariants, withEvents: opts.withEvents,
+            });
             if (opts.json) { log.json({ ok: true, page: dup }); return; }
-            log.success(`Duplicated page "${original.slug}" → #${dup.id} (${dup.slug ?? '?'}).`);
+            log.success(`Duplicated page "${original.slug}" → #${dup.id} (${dup.slug ?? '?'}). Run "ef pull page ${dup.slug ?? dup.id}" to get it locally.`);
         });
 
     cmd.command('delete <slug>')

@@ -142,3 +142,11 @@ export async function resolveComponentByCodeOrName(
     if (!found) throw new CliError(ExitCode.NotFound, `Component "${codeOrName}" not found.`);
     return await api.getComponentContent(brandId, found.id);
 }
+
+/** "--affiliate 412" -> 412, "none" -> null (clears). */
+export function parseAffiliateFlag(v: string): number | null {
+    const t = v.trim();
+    if (/^(none|null|-)$/i.test(t)) return null;
+    if (!/^\d+$/.test(t) || Number(t) <= 0) throw new CliError(ExitCode.Validation, `--affiliate takes a numeric affiliate id or "none", got "${v}".`);
+    return Number(t);
+}

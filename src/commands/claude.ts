@@ -807,6 +807,8 @@ Most-used, by task:
 | Email / SMS campaigns | \`ef campaigns email\\|sms create\\|set\\|audience-preview\\|test\\|schedule\\|launch\\|stats\` — launch and schedule print the audience size and need \`--yes\`; never pass it without the user's go (use the \`ef-campaigns\` skill) |
 | Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
 | Split tests / funnel graphs | \`ef pages events …\` · \`ef funnels …\` (use the \`ef-page-events\` skill) |
+| Add or remove one entry page of a funnel; tie a page to a partner (affiliate) | \`ef funnels pages add <funnel> <page> [--affiliate <id>]\` · \`ef funnels pages list\\|remove\` · \`ef pages settings <slug> --affiliate <id\\|none>\`; never rewrite the funnel graph for this |
+| Copy a page (a partner's version of a sales page) | \`ef pages duplicate <slug> --slug <new> [--with-events]\` |
 | Which funnel a URL runs, and why (wrong funnel, override check, before traffic) | \`ef funnels which <url> [--param aff=123] [--country GB]\`, read only (use the \`ef-funnel-which\` skill) |
 | Why did we run this test? | \`elasticfunnels/split-tests.md\` — the project's own record of hypothesis, control arm and outcome. Append to it after creating a test. |
 | How is it performing? | \`ef stats\` · \`ef stats by <field>\` · \`ef stats split <id>\` (use the \`ef-stats\` skill) |

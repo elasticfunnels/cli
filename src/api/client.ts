@@ -128,6 +128,9 @@ export interface ApiAuth {
     runnerId?: string;
 }
 
+export interface FunnelEntryPage { id: number; slug: string | null; title: string | null; status: string | null; affiliate_id: number | null }
+export interface FunnelEntryPagesResult { changed: boolean; entry_pages: FunnelEntryPage[] }
+
 export class ApiClient {
     private http: AxiosInstance;
     constructor(public readonly apiUrl: string, public readonly apiKey: string, auth?: ApiAuth) {
@@ -268,16 +271,29 @@ export class ApiClient {
         return ('page' in body && body.page ? body.page : body) as Page;
     }
 
-    async duplicatePage(brandId: number, pageId: number): Promise<Page> {
-        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/duplicate`);
-        if (res.status === 404) {
-            // Fallback: not all backends expose a duplicate endpoint; mimic via
-            // get + create. Caller can wrap if needed. We surface a clear error.
-            throw new CliError(ExitCode.NotFound, `Duplicate endpoint not available for page #${pageId} on this server.`);
+    /**
+     * Copy a page on the server (POST pages/{id}/clone, PagesController::clonePage).
+     * The server answers `{ page_id, slug }`, not a page; a page variant is
+     * refused with 400 (clone the main page instead). `slug` must be free on
+     * the page's domain (422 otherwise).
+     */
+    async duplicatePage(brandId: number, pageId: number, opts: { title?: string; slug?: string; withVariants?: boolean; withEvents?: boolean } = {}): Promise<{ id: number; slug: string | null }> {
+        const data: Record<string, unknown> = {};
+        if (opts.title) data.title = opts.title;
+        if (opts.slug) data.slug = opts.slug;
+        if (opts.withVariants) data.clone_variants = true;
+        if (opts.withEvents) data.clone_with_page_events = true;
+        const res = await this.raw('POST', `/api/brands/${brandId}/pages/${pageId}/clone`, { data });
+        if (res.status === 422) throw validationError('Duplicate page', res);
+        if (res.status === 400) {
+            const msg = (res.data as { error?: string } | undefined)?.error ?? 'The server refused to copy this page.';
+            throw new CliError(ExitCode.Validation, msg);
         }
         if (res.status >= 400) throw httpError('Duplicate page', res);
-        const body = res.data as { page?: Page } | Page;
-        return ('page' in body && body.page ? body.page : body) as Page;
+        const body = (res.data ?? {}) as { page_id?: number; slug?: string | null; id?: number; page?: { id?: number; slug?: string | null } };
+        const id = body.page_id ?? body.page?.id ?? body.id;
+        if (typeof id !== 'number') throw new CliError(ExitCode.Server, 'Duplicate page: the server did not return the new page id.');
+        return { id, slug: body.slug ?? body.page?.slug ?? null };
     }
 
     async deletePage(brandId: number, pageId: number): Promise<void> {
@@ -505,6 +521,40 @@ export class ApiClient {
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `Funnel #${id} not found in this brand.`);
         if (res.status >= 400) throw httpError('Get funnel', res);
         return res.data as FunnelDetails;
+    }
+
+    /** A funnel's entry pages (GET funnels/{id}/entry-pages, FunnelEntryPagesController). */
+    async listFunnelEntryPages(brandId: number, funnelId: number): Promise<FunnelEntryPage[]> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/funnels/${funnelId}/entry-pages`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Funnel #${funnelId} not found in this brand.`);
+        if (res.status >= 400) throw httpError('List entry pages', res);
+        return ((res.data as { entry_pages?: FunnelEntryPage[] })?.entry_pages ?? []);
+    }
+
+    /**
+     * Add one entry page (POST funnels/{id}/entry-pages). Changes only the funnel's
+     * entry group, trigger pages and page rule; adding a page already there changes
+     * nothing (`changed: false`). `affiliateId` (null clears) also ties the page and
+     * its versions to that affiliate. 422 for a checkout page, a version, a foreign
+     * page/affiliate, or a funnel that does not start with one page group.
+     */
+    async addFunnelEntryPage(brandId: number, funnelId: number, pageId: number, affiliateId?: number | null): Promise<FunnelEntryPagesResult> {
+        const data: Record<string, unknown> = { page_id: pageId };
+        if (affiliateId !== undefined) data.affiliate_id = affiliateId;
+        const res = await this.raw('POST', `/api/brands/${brandId}/funnels/${funnelId}/entry-pages`, { data });
+        if (res.status === 422) throw validationError('Add entry page', res);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Funnel #${funnelId} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Add entry page', res);
+        return res.data as FunnelEntryPagesResult;
+    }
+
+    /** Remove one entry page (DELETE funnels/{id}/entry-pages/{page}); the last one cannot be removed (422). */
+    async removeFunnelEntryPage(brandId: number, funnelId: number, pageId: number): Promise<FunnelEntryPagesResult> {
+        const res = await this.raw('DELETE', `/api/brands/${brandId}/funnels/${funnelId}/entry-pages/${pageId}`);
+        if (res.status === 422) throw validationError('Remove entry page', res);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Funnel #${funnelId} not found in this brand.`);
+        if (res.status >= 400) throw httpError('Remove entry page', res);
+        return res.data as FunnelEntryPagesResult;
     }
 
     /**

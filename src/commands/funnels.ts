@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
-import { ApiClient } from '../api/client';
+import { ApiClient, FunnelEntryPage } from '../api/client';
 import { Funnel, FunnelDetails } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { c, log } from '../utils/log';
@@ -14,6 +14,7 @@ import { unifiedDiff } from '../sync/merge';
 import { safeJoinBrandRoot } from '../sync/paths';
 import { formatRelative, renderTable } from '../utils/format';
 import { resolveAnyPageId } from './pageGet';
+import { parseAffiliateFlag } from './shared';
 import { buildWhichUrl, normaliseCountry, normaliseRegion, renderWhich, unresolvedMessage } from './funnelWhich';
 
 /** Starter graph written when a funnel has no builder graph yet. */
@@ -188,7 +189,7 @@ async function ctx(): Promise<{ rt: EfRuntime; api: ApiClient; brandId: number }
 export function registerFunnelsCommand(program: Command): void {
     const cmd = program
         .command('funnels')
-        .description('Funnels: list, get, which (which funnel a URL runs), settings (checkout page), pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
+        .description('Funnels: list, get, which (which funnel a URL runs), settings (checkout page), pages (entry pages), pull/push the builder graph (funnels/<code>.flow.json), diff, create, delete.');
 
     cmd.command('list')
         .alias('ls')
@@ -245,6 +246,75 @@ Examples:
             ];
             const w = Math.max(...rows.map(([k]) => k.length));
             for (const [k, v] of rows) process.stdout.write(`${c.bold(k.padEnd(w))}  ${safeCell(v)}\n`);
+        });
+
+    // Entry pages (T1105-2 API): add or remove one page without resending the
+    // whole funnel. Safer than "ef funnels push" for this, which rewrites the graph.
+    const entry = cmd.command('pages')
+        .description('A funnel\'s entry pages: list, add, remove one page. Optionally ties the page to an affiliate.')
+        .addHelpText('after', `
+Examples:
+  $ ef funnels pages list nmn-main
+  $ ef funnels pages add nmn-main nmn-agency-a --affiliate 412
+  $ ef funnels pages remove nmn-main nmn-agency-a
+
+The funnel must start with one page group (the usual shape). Checkout pages and
+page versions are refused: set the checkout with "ef funnels settings
+--checkout-page", and versions follow their main page. Adding a page that is
+already there changes nothing. The last entry page cannot be removed.
+
+--affiliate <id> credits every visitor of that page (and its versions) to that
+affiliate, overriding ?aff_id= in the link; "none" clears it. Only on domains
+that use the brand's own checkout.`);
+
+    const printEntry = (rows: FunnelEntryPage[]): void => {
+        log.raw(renderTable({
+            head: ['#', 'slug', 'title', 'status', 'affiliate'],
+            rows: rows.map((p) => [String(p.id), p.slug ?? '', p.title ?? '', p.status ?? '', p.affiliate_id ? `#${p.affiliate_id}` : '']),
+        }) + '\n');
+    };
+
+    entry.command('list <funnel>')
+        .alias('ls')
+        .description('List the funnel\'s entry pages.')
+        .option('--json', 'Print as JSON.')
+        .action(async (codeOrId: string, opts: { json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+            const rows = await api.listFunnelEntryPages(brandId, funnel.id);
+            if (opts.json) { log.json({ ok: true, funnel_id: funnel.id, entry_pages: rows }); return; }
+            printEntry(rows);
+            log.detail(`${rows.length} entry page${rows.length === 1 ? '' : 's'}.`);
+        });
+
+    entry.command('add <funnel> <page>')
+        .description('Add a page (slug or id) to the funnel\'s entry pages.')
+        .option('--affiliate <id|none>', 'Tie the page to this affiliate (numeric id); "none" clears it.')
+        .option('--json', 'Print as JSON.')
+        .action(async (codeOrId: string, pageRef: string, opts: { affiliate?: string; json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+            const { id: pageId } = await resolveAnyPageId(api, brandId, pageRef);
+            const affiliateId = opts.affiliate === undefined ? undefined : parseAffiliateFlag(opts.affiliate);
+            const result = await api.addFunnelEntryPage(brandId, funnel.id, pageId, affiliateId);
+            if (opts.json) { log.json({ ok: true, funnel_id: funnel.id, ...result }); return; }
+            log.success(result.changed ? `Added page #${pageId} to funnel #${funnel.id}.` : `Page #${pageId} was already an entry page of funnel #${funnel.id}; nothing changed.`);
+            if (affiliateId !== undefined) log.detail(affiliateId === null ? 'Page affiliate cleared.' : `Page affiliate set to #${affiliateId}.`);
+            printEntry(result.entry_pages);
+        });
+
+    entry.command('remove <funnel> <page>')
+        .alias('rm')
+        .description('Remove a page (slug or id) from the funnel\'s entry pages. The page itself is kept.')
+        .option('--json', 'Print as JSON.')
+        .action(async (codeOrId: string, pageRef: string, opts: { json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const funnel = await resolveFunnel(api, brandId, codeOrId);
+            const { id: pageId } = await resolveAnyPageId(api, brandId, pageRef);
+            const result = await api.removeFunnelEntryPage(brandId, funnel.id, pageId);
+            if (opts.json) { log.json({ ok: true, funnel_id: funnel.id, ...result }); return; }
+            log.success(result.changed ? `Removed page #${pageId} from funnel #${funnel.id}.` : `Page #${pageId} was not an entry page of funnel #${funnel.id}; nothing changed.`);
+            printEntry(result.entry_pages);
         });
 
     cmd.command('which <url>')

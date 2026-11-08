@@ -354,6 +354,7 @@ test('guidance carries the general page-building rules', () => {
     // Popups: page events open platform popups, clicks use data-ef-popup, <dialog> only for page state.
     assert.ok(s.includes('ef pages events') && s.includes('exit_popup') && s.includes('Never hand-written JS'), 'page-event popups go through the events graph');
     assert.ok(s.includes('data-ef-popup="<popup name>"') && s.includes('data-ef-popup="#x"'), 'click popups use data-ef-popup');
+    assert.ok(s.includes('exit-intent:show_popup:#x') && s.includes('ef.exitIntent.on(') && s.includes('ef.exitIntent.configure('), 'code-driven exit intent uses the shared detector');
     assert.match(s, /by NAME \(ids change when a kit installs\)/);
     assert.match(s, /POST endpoint pages/);
     // Layout + CSS.

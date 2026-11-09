@@ -82,13 +82,14 @@ entries), "ef domains validate", then attach pages as above.`);
             const rows = await api.listDomains(rt.config.brandId);
             if (opts.json) { log.json(rows); return; }
             log.raw(renderTable({
-                head: ['#', 'domain', 'type', 'status', 'ssl', 'updated'],
+                head: ['#', 'domain', 'type', 'status', 'ssl', 'language', 'updated'],
                 rows: rows.map((d) => [
                     String(d.id),
                     d.domain ?? '',
                     d.dedicated_domain ? 'dedicated' : 'subdomain',
                     statusLabel(d.status),
                     d.ssl_ready ? 'ready' : (d.ssl_status ?? '-'),
+                    d.language || '-',
                     formatRelative(d.updated_at),
                 ]),
             }) + '\n');
@@ -231,6 +232,59 @@ domain either way. You need domains.update in both brands.
             } else {
                 log.success(`Move of ${c.bold(safeText(domain.domain))} to brand #${target.id} queued. Pages move in the background.`);
                 log.detail('When it is done the domain leaves this brand\'s "ef domains list".');
+            }
+        });
+
+    cmd.command('language <domain> [code]')
+        .alias('lang')
+        .description('Show, set or clear the language a domain serves ("none" clears). For fully translated sites built from linked pages.')
+        .option('--json', 'Print as JSON.')
+        .addHelpText('after', `
+A domain bound to a language serves every linked page in that language at the
+ORIGINAL page's slug, with no language prefix:
+
+  $ ef domains language fallback72.ro ro       bind
+  $ ef domains language fallback72.ro          show
+  $ ef domains language fallback72.ro none     clear
+
+With fallback72.ro bound to "ro":
+  fallback72.ro/book       serves ro/book (the Romanian translation of "book")
+  fallback72.ro/ro/book    301 -> fallback72.ro/book
+  fallback72.ro/about      302 -> the main domain's /about when "about" has no
+                           Romanian translation (no copy of it is served on .ro)
+  fallback72.ro/checkout   a page with no translations is served as is, in Romanian
+
+Canonical, hreflang, sitemap.xml and page_url() name each language's domain.
+Languages with no domain of their own keep /<lang>/<slug> on the main domain
+(the default language's domain, else the brand's other custom domain).
+
+Rules: the code must be one of the brand's languages (see "ef translations pull");
+one domain per language (its www. twin counts as the same domain); only a
+domain that serves pages. It only reroutes when the brand has linked pages
+("ef pages translate", "ef pages create --lang --translation-of"); a brand
+whose pages are not linked translations sees no change. Changes reach every
+server within 5 minutes.`)
+        .action(async (domainRef: string, code: string | undefined, opts: { json?: boolean }) => {
+            const rt = await loadRuntime();
+            const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
+            const domain = await resolveDomain(api, rt.config.brandId, domainRef);
+            if (code === undefined) {
+                if (opts.json) { log.json({ id: domain.id, domain: domain.domain, language: domain.language ?? null }); return; }
+                log.info(domain.language
+                    ? `${c.bold(safeText(domain.domain))} serves ${c.bold(domain.language)}.`
+                    : `${c.bold(safeText(domain.domain))} has no language: it serves pages at their own slugs.`);
+                return;
+            }
+            const raw = code.trim().toLowerCase();
+            const language = raw === '' || raw === 'none' || raw === 'off' ? null : raw;
+            const saved = await api.setDomainLanguage(rt.config.brandId, domain.id, language);
+            const now = saved.language ?? language;
+            if (opts.json) { log.json({ ok: true, id: domain.id, domain: domain.domain, language: now ?? null }); return; }
+            if (now) {
+                log.success(`${c.bold(safeText(domain.domain))} now serves ${c.bold(now)}: each linked page answers at its original's slug in ${now}.`);
+                log.detail('Live on every server within 5 minutes. Check a page with "curl -sI https://' + safeText(domain.domain) + '/<slug>".');
+            } else {
+                log.success(`${c.bold(safeText(domain.domain))} has no language now.`);
             }
         });
 

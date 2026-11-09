@@ -254,6 +254,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef i18n check` | Missing translations per group and stale ones, for pages and components (`--pages`, `--components`, `--lang ro,es`). Reads the source's local file too, so an unpushed source edit shows as "stale after push". **Exits 1** when anything is stale (`--strict`: also when a language is missing): use it as a publish gate. |
 | `ef i18n synced <slug>` | Mark a translation up to date with its source after you updated it (`--component` for a component code). |
 | `ef i18n settings` | Show or change the brand's multilingual settings: `--prefix-routing on\|off`, `--prompt off\|default\|custom`, `--x-default <code\|none>`. |
+| `ef domains language <domain> [code\|none]` | Show, bind or clear the language a domain serves. On a bound domain each linked page answers at its source's slug in that language (`example.ro/book` serves `ro/book`); canonical, hreflang, sitemap and `page_url()` name each language's domain. Only for brands with linked pages. |
 | `ef translations pull` / `push` | The brand dictionary (`t('key')`, `data-ef-hl`) as `translations/<code>.json`, one file per language with its label, default flag, order and URL prefix. `push` creates or updates the language and sends only changed texts; `--prune` also deletes keys the file dropped; `--dry-run`. `ef push` never sends these files. |
 | `ef pages events pull [slug]` | Pull a page's events graph → `pages/<slug>.events.json` (nested slugs preserved). `--all` for every page that has events. Not pulled by `ef pull` unless `--events`. |
 | `ef pages events push <slug>` | Push `pages/<slug>.events.json` (validates first; `--strict` blocks on errors). Mints a `node_code` for any node missing one — the graph's durable identity, used by the split-test cookie, analytics grouping and funnel step URLs. Current servers mint these too; the CLI covers brands on an older release. Neither side ever rewrites an existing code, since a live test's recorded sessions are tied to it. **Refuses (exit 4)** if the server changed since you pulled, or if you never pulled a page that already has events (always-pull-first); `--force` overwrites. No auto-merge (structured JSON). |
@@ -480,6 +481,15 @@ A brand can serve a site in several languages in two ways, and use both:
   the brand dictionary (`{{ t('hero.title') }}`, `data-ef-hl`). Edit them in
   `translations/<code>.json` (`ef translations pull` / `push`). With
   `ef i18n settings --prefix-routing on`, `/ro/about` serves `about` in Romanian.
+
+**A domain per language.** For a fully translated site, bind a domain to each
+language: `ef domains language example.ro ro`. On example.ro every linked page
+answers at its source's slug in Romanian (`/book` serves `ro/book`, `/ro/book`
+301s to `/book`); a page with no Romanian translation 302s to the main domain's
+copy; a page with no translations at all is served as is, in Romanian.
+Languages without a domain keep `/<lang>/<slug>` on the main domain (the default
+language's domain, else the brand's other custom domain). One domain per
+language; a brand whose pages are not linked translations sees no change.
 
 `ef pull` writes a page's (and component's) language and source into its efmeta:
 

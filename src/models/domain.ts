@@ -9,6 +9,8 @@
 export interface BrandDomain {
     id: number;
     domain: string;
+    /** A domain per language: the brand language this domain serves (null = none). */
+    language?: string | null;
     /** true for a customer-owned dedicated domain; false for a platform subdomain. */
     dedicated_domain?: boolean | number;
     subdomain?: string | null;

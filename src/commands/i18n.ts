@@ -404,7 +404,11 @@ The prompt suggests a visitor's language when the page exists in it. It never
 redirects on its own, never shows to bots, and asks once per visitor. With
 "custom", put your own markup on the page (data-ef-lang-modal) or drive it
 from window.ef.i18n. Language prefixes are set per language ("url_prefix" in
-translations/<code>.json).`)
+translations/<code>.json).
+
+A domain per language (fully translated sites): bind a domain to a language
+and it serves each linked page in that language at the original's slug:
+  $ ef domains language example.ro ro          (see "ef domains language --help")`)
         .action(async (opts: { prefixRouting?: string; prompt?: string; xDefault?: string; json?: boolean }) => {
             const rt = await loadRuntime();
             const api = apiFor(rt);

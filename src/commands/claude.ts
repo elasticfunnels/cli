@@ -629,6 +629,17 @@ base component when there is none. In shared navigation use
 \`{{ page_url('features') }}\` instead of a hard-coded path: it returns the URL of
 that page's translation in the current language.
 
+**A domain per language** (fully translated sites built from linked pages only):
+\`ef domains language example.ro ro\` binds a domain to a language. On it every
+linked page answers at its **source's** slug in that language (example.ro/book
+serves \`ro/book\`; \`/ro/book\` there 301s to \`/book\`), and a page with no
+translation in that language 302s to the main domain's copy. Canonical,
+hreflang, sitemap and \`page_url()\` then name each language's domain; languages
+with no domain keep \`/<lang>/<slug>\` on the main domain. Keep source and
+translation slugs aligned (\`ro/<source slug>\`) and link nav with \`page_url()\`,
+never \`/ro/...\` by hand. A brand whose pages are not linked translations sees no
+change from a bound domain. \`ef domains language <domain> none\` unbinds.
+
 Before you publish translated work, run \`ef i18n check\`: it lists missing
 languages per group and **stale** translations (the source's text changed
 since). It exits 1 when anything is stale. After updating a stale translation,
@@ -806,6 +817,7 @@ Most-used, by task:
 | Missing or stale translations (publish gate) | \`ef i18n check [--lang ro,es]\` (exit 1 if stale) · \`ef i18n synced <slug>\` |
 | Brand dictionary (\`t()\` texts) | \`ef translations pull\` · edit \`translations/<code>.json\` · \`ef translations push\` |
 | Prefix routing, language prompt, x-default | \`ef i18n settings --prefix-routing on --prompt custom --x-default en\` |
+| A domain per language (example.ro serves the ro pages at the source slugs) | \`ef domains language example.ro ro\` · \`ef domains language example.ro\` (show) · \`... none\` (clear) |
 | Members-only page (Requires Login) | \`ef pages settings <slug> --requires-login on --redirect-url /account/login\` · \`--requires-login off\` |
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` · \`ef collections delete <code> --force\` (check no page, component or script names the code first) |
 | Shipping rates (a product with no profile ships free) | \`ef shipping-profiles list|get\` · \`ef shipping-profiles create "Single jar" --us 6.95 --intl 14.95\` · \`ef shipping-profiles assign <product-code> --profile <name|id>\` (\`--none\` to remove) · \`update <name> --us 5.95\` |

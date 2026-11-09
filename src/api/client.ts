@@ -1557,6 +1557,18 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Validate domain', res);
     }
 
+    /**
+     * Bind a domain to one of the brand's languages, or unbind it (null). On a
+     * bound domain each linked page answers at its original's slug in that
+     * language (example.ro/book serves `ro/book`).
+     */
+    async setDomainLanguage(brandId: number, domainId: number, language: string | null): Promise<BrandDomain> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}/domains/${domainId}`, { data: { language } });
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);
+        if (res.status >= 400) throw httpError('Set domain language', res);
+        return res.data as BrandDomain;
+    }
+
     async deleteDomain(brandId: number, domainId: number): Promise<void> {
         const res = await this.raw('DELETE', `/api/brands/${brandId}/domains/${domainId}`);
         if (res.status === 404) throw new CliError(ExitCode.NotFound, `Domain #${domainId} not found.`);

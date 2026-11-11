@@ -125,3 +125,22 @@ test('entries --all with a cursor stops on an empty page after an exactly full o
     assert.equal((JSON.parse(r.stdout) as unknown[]).length, 200);
     assert.equal(m.queries.length, 3, 'page 1, after=100, after=200 (empty)');
 }));
+
+test('entry ids that start with "-" are ids, not options; "--typo" is still refused', async () => {
+    const seen: string[] = [];
+    const server = http.createServer((req, res) => { seen.push(`${req.method} ${req.url}`); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ entry: { id: '-Xq3', title: 't' } })); });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const root = await setup(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    try {
+        const g = await runEf(root, ['crm', 'entries', 'get', '-Xq3']);
+        assert.equal(g.code, 0, g.stderr);
+        assert.ok(seen.includes('GET /api/brands/7/crm/entries/-Xq3'));
+        const d = await runEf(root, ['crm', 'entries', 'delete', '-Xq3', '--force', '--json']);
+        assert.equal(d.code, 0, d.stderr);
+        assert.ok(seen.includes('DELETE /api/brands/7/crm/entries/-Xq3'));
+        const t = await runEf(root, ['crm', 'entries', 'delete', '--frce']);
+        assert.notEqual(t.code, 0);
+        assert.match(t.stderr, /Unknown option "--frce"/);
+        assert.ok(!seen.some((x) => x.includes('--frce')));
+    } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
+});

@@ -39,6 +39,12 @@ async function resolveEntityId(api: ApiClient, brandId: number, ref: string): Pr
     return hit.id;
 }
 
+/** An entry id from argv. Ids may start with one '-', so those commands allow unknown options; a '--word' is still a mistyped flag. */
+function entryId(raw: string): string {
+    if (raw.startsWith('--')) throw new CliError(ExitCode.Validation, `Unknown option "${raw}". (Entry ids never start with "--".)`);
+    return raw;
+}
+
 /** Parse a --values JSON object flag. */
 function parseValues(raw: string | undefined): Record<string, unknown> | undefined {
     if (raw == null) return undefined;
@@ -303,10 +309,11 @@ export function registerCrmCommand(program: Command): void {
         });
 
     entries.command('get <entry>')
+        .allowUnknownOption() // ES ids may start with '-' (e.g. -Xq3…); entryId() still refuses '--typo'
         .description('Print one entry (by ES id) as JSON.')
         .action(async (entry: string) => {
             const { api, brandId } = await ctx();
-            log.json(await api.getCrmEntry(brandId, entry));
+            log.json(await api.getCrmEntry(brandId, entryId(entry)));
         });
 
     addInputOptions(entries.command('create <entity>')
@@ -332,6 +339,7 @@ export function registerCrmCommand(program: Command): void {
         });
 
     addInputOptions(entries.command('update <entry>')
+        .allowUnknownOption() // ES ids may start with '-' (e.g. -Xq3…); entryId() still refuses '--typo'
         .description('Update an entry (by ES id). values are merged into the existing ones.'))
         .option('--title <title>', 'New title.')
         .option('--stage <id>', 'Move to stage id.', (v) => parseInt(v, 10))
@@ -344,28 +352,31 @@ export function registerCrmCommand(program: Command): void {
             });
             if (Object.keys(payload).length === 0) throw new CliError(ExitCode.Validation, 'Nothing to update — pass --title, --stage, --values, or a JSON payload.');
             const { api, brandId } = await ctx();
-            const updated = await api.updateCrmEntry(brandId, entry, payload);
+            const updated = await api.updateCrmEntry(brandId, entryId(entry), payload);
             if (opts.json) { log.json({ ok: true, entry: updated }); return; }
             log.success(`Updated CRM entry ${entry}.`);
         });
 
     entries.command('move <entry>')
+        .allowUnknownOption() // ES ids may start with '-' (e.g. -Xq3…); entryId() still refuses '--typo'
         .description('Move an entry to a stage.')
         .requiredOption('--stage <id>', 'Target stage id.', (v) => parseInt(v, 10))
         .option('--json', 'Print result as JSON.')
         .action(async (entry: string, opts: { stage: number; json?: boolean }) => {
             const { api, brandId } = await ctx();
-            const updated = await api.moveCrmEntry(brandId, entry, opts.stage);
+            const updated = await api.moveCrmEntry(brandId, entryId(entry), opts.stage);
             if (opts.json) { log.json({ ok: true, entry: updated }); return; }
             log.success(`Moved CRM entry ${entry} to stage #${opts.stage}.`);
         });
 
     entries.command('delete <entry>')
+        .allowUnknownOption() // ES ids may start with '-' (e.g. -Xq3…); entryId() still refuses '--typo'
         .description('Delete an entry by ES id.')
         .option('--force', 'Skip confirmation.')
         .option('--json', 'Print result as JSON.')
         .action(async (entry: string, opts: { force?: boolean; json?: boolean }) => {
             const { api, brandId } = await ctx();
+            entryId(entry);
             await confirmOrThrow(opts.force, `Delete CRM entry ${entry}?`);
             await api.deleteCrmEntry(brandId, entry);
             if (opts.json) { log.json({ ok: true, deleted: entry }); return; }

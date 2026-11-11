@@ -821,7 +821,7 @@ Most-used, by task:
 | Members-only page (Requires Login) | \`ef pages settings <slug> --requires-login on --redirect-url /account/login\` · \`--requires-login off\` |
 | Lead forms / form stores | \`ef collections list\` · \`ef collections create <name> --field Email:email:required\` · \`ef collections entries <code>\` · \`ef collections delete <code> --force\` (check no page, component or script names the code first) |
 | Shipping rates (a product with no profile ships free) | \`ef shipping-profiles list|get\` · \`ef shipping-profiles create "Single jar" --us 6.95 --intl 14.95\` · \`ef shipping-profiles assign <product-code> --profile <name|id>\` (\`--none\` to remove) · \`update <name> --us 5.95\` |
-| CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` |
+| CRM data | \`ef crm entities\\|pipelines\\|stages\\|fields\\|entries\` · import a contact list: \`ef crm import <entity> --file list.csv --preview\` (use the \`ef-crm\` skill) |
 | Audience segments (who bought, skipped an upsell, abandoned, refunded) | \`ef audiences validate --segql '…'\` · \`ef audiences count --segql '…'\` · \`ef audiences create --name … --segql '…'\` · \`ef audiences list\\|get\\|members\` (use the \`ef-segql\` skill) |
 | Email / SMS campaigns | \`ef campaigns email\\|sms create\\|set\\|audience-preview\\|test\\|schedule\\|launch\\|stats\` — launch and schedule print the audience size and need \`--yes\`; never pass it without the user's go (use the \`ef-campaigns\` skill) |
 | Free bonuses a buyer picks, "send to a friend" gifts | \`ef products bonuses <product> --add CODE:giftable\` · \`ef products bonus-rule <product> --pick 1 --gift on\` (use the \`ef-bonuses-gifts\` skill) |
@@ -916,6 +916,9 @@ Most-used, by task:
   take an id **or slug**. Entries are Elasticsearch docs (string ids); \`values\` is a flat map.
   Complex payloads: \`--input-json '{…}'\` / \`--input-file <path|->\` (flags override the JSON);
   \`--generate-skeleton\` prints an example payload.
+- \`ef crm import <entity> --file contacts.csv --preview\` then the same without \`--preview\` plus
+  \`--yes\` (after the user agrees): uploads a CSV/XLSX list, creates a field per new column, imports
+  the rows. Use the **\`ef-crm\` skill** for building a CRM, importing contacts and sending to them.
 - **Page events + funnel graphs** — Drawflow JSON graphs (split tests, redirects, tags, popups):
   - **To AUTHOR or edit a graph from a request** ("load the white page unless \`?test=1\`",
     "split test this component", "redirect affiliate traffic"), use the **\`ef-page-events\` skill**

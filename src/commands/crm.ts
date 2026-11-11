@@ -1,10 +1,14 @@
 import { Command } from 'commander';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ApiClient } from '../api/client';
 import { CrmEntity } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { formatRelative, renderTable } from '../utils/format';
+import { IMPORT_MAX_CHUNK, ImportPreview, importRows, previewImport } from '../api/crmImportApi';
+import { buildImportPlan, ImportPlan } from '../models/crmImportPlan';
 import { addInputOptions, JsonInputOpts, loadInputBase, maybeGenerateSkeleton, mergeDefined } from '../utils/jsonInput';
 
 // ── Skeletons for --generate-skeleton ─────────────────────────────────
@@ -361,6 +365,149 @@ export function registerCrmCommand(program: Command): void {
             if (opts.json) { log.json({ ok: true, deleted: entry }); return; }
             log.success(`Deleted CRM entry ${entry}.`);
         });
+
+    registerImport(crm);
+}
+
+// ── import ────────────────────────────────────────────────────────────
+
+const collect = (v: string, prev: string[] = []): string[] => [...prev, v];
+
+interface ImportOpts {
+    file: string; preview?: boolean; map?: string[]; skip?: string[]; title?: string;
+    pipeline?: string; stage?: string; offset?: string; batch?: string; yes?: boolean; json?: boolean;
+}
+
+function registerImport(crm: Command): void {
+    crm.command('import <entity>')
+        .description('Import entries from a CSV, TSV or XLSX file (first row = headers, first sheet, 20 MB / 20,000 rows max). '
+            + 'Suggests a field per column, creates the new fields, then imports the rows in batches.')
+        .requiredOption('--file <path>', 'The .csv, .tsv, .txt or .xlsx file.')
+        .option('--preview', 'Show the column plan (field per column, samples) and stop. Writes nothing.')
+        .option('--map <Column=key>', 'Map a column (header or 0-based index) to a field key; a new key is created with the suggested type. Repeatable.', collect)
+        .option('--skip <column>', 'Leave a column out. Repeatable.', collect)
+        .option('--title <column>', 'Column used as each entry\'s title (default: the server\'s pick, usually a name or email).')
+        .option('--pipeline <id>', 'Pipeline id for the entries (default: the entity\'s default pipeline, when it has pipelines).')
+        .option('--stage <id>', 'Stage id (default: the first stage of that pipeline).')
+        .option('--offset <n>', 'Resume from this 0-based row (printed when a run stops early). Rows before it are not re-imported.', '0')
+        .option('--batch <n>', `Rows per request (1-${IMPORT_MAX_CHUNK}).`, String(IMPORT_MAX_CHUNK))
+        .option('-y, --yes', 'Import without the confirmation prompt (needed when not in a terminal).')
+        .option('--json', 'Print the plan (with --preview) or the result as JSON.')
+        .action(async (entity: string, opts: ImportOpts) => {
+            const offset0 = intOpt(opts.offset ?? '0', '--offset', 0);
+            const batch = intOpt(opts.batch ?? String(IMPORT_MAX_CHUNK), '--batch', 1, IMPORT_MAX_CHUNK);
+            const filePath = path.resolve(opts.file);
+            let bytes: Buffer;
+            try { bytes = await fs.promises.readFile(filePath); } catch { throw new CliError(ExitCode.NotFound, `Can't read ${opts.file}.`); }
+
+            const { api, brandId } = await ctx();
+            const entityId = await resolveEntityId(api, brandId, entity);
+            const [preview, existing] = await Promise.all([
+                previewImport(api, brandId, entityId, { name: path.basename(filePath), bytes }),
+                api.listCrmFields(brandId, entityId),
+            ]);
+            const existingKeys = new Set(existing.map((f) => String(f.key)));
+            const plan = buildImportPlan(preview, existingKeys, { map: opts.map, skip: opts.skip, title: opts.title });
+            const target = await importTarget(api, brandId, entityId, opts);
+
+            if (opts.preview) {
+                if (opts.json) { log.json({ file: preview.file_name, rows: preview.row_count, title_column: plan.titleColumn, pipeline_id: target.pipeline_id ?? null, stage_id: target.stage_id ?? null, columns: plan.columns, create: plan.create, mapping: plan.mapping }); return; }
+                printPlan(preview, plan, target);
+                log.detail('Preview only: nothing was written. Drop --preview to import (add --map / --skip to change the plan).');
+                return;
+            }
+            if (offset0 >= preview.row_count) throw new CliError(ExitCode.Validation, `--offset ${offset0} is past the last row (${preview.row_count} rows).`);
+
+            if (!opts.json) printPlan(preview, plan, target);
+            if (!opts.yes) {
+                if (!process.stdin.isTTY) throw new CliError(ExitCode.Validation, 'Pass --yes to import without a terminal (run with --preview first to check the plan).');
+                const { confirm } = await import('../utils/prompt');
+                const n = preview.row_count - offset0;
+                const extra = plan.create.length ? ` and create ${plan.create.length} field${plan.create.length > 1 ? 's' : ''}` : '';
+                if (!(await confirm(`Import ${n} row${n > 1 ? 's' : ''}${extra}?`, false))) throw new CliError(ExitCode.Validation, 'Aborted.');
+            }
+
+            const created: string[] = [];
+            for (const f of plan.create) {
+                const payload: Record<string, unknown> = { label: f.label, key: f.key, type: f.type };
+                if (f.options && f.options.length) payload.options = f.options;
+                await api.createCrmField(brandId, entityId, payload);
+                created.push(f.key);
+                if (!opts.json) log.info(`Created field ${f.key} (${f.type}).`);
+            }
+
+            const totals = { imported: 0, skipped: 0, failed: 0 };
+            const errors: Array<{ row: number; message: string }> = [];
+            let offset = offset0;
+            for (;;) {
+                let r;
+                try {
+                    r = await importRows(api, brandId, entityId, {
+                        file_hash: preview.file_hash, mapping: plan.mapping, title_column: plan.titleColumn,
+                        ...target, offset, limit: batch,
+                    });
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    throw new CliError(err instanceof CliError ? err.code : ExitCode.Error,
+                        `${msg}\nImported ${totals.imported} so far. Rows before ${offset} are in; resume with: ef crm import ${entity} --file ${opts.file} --offset ${offset}${opts.map?.length ? ' (same --map/--skip)' : ''} --yes`);
+                }
+                totals.imported += r.imported; totals.skipped += r.skipped; totals.failed += r.failed;
+                errors.push(...r.errors);
+                if (!opts.json) log.detail(`rows ${offset + 1}-${Math.min(r.next_offset, r.total)} of ${r.total}: ${r.imported} imported, ${r.skipped} skipped, ${r.failed} failed`);
+                if (r.done || r.next_offset <= offset) break;
+                offset = r.next_offset;
+            }
+
+            const result = { ok: totals.failed === 0, entity_id: entityId, file: preview.file_name, rows: preview.row_count, offset: offset0, ...totals, fields_created: created, errors };
+            if (opts.json) { log.json(result); return; }
+            log.success(`Imported ${totals.imported} entr${totals.imported === 1 ? 'y' : 'ies'} into ${entity} (${totals.skipped} skipped, ${totals.failed} failed).`);
+            for (const e of errors.slice(0, 20)) log.warn(`row ${e.row}: ${e.message}`);
+            if (errors.length > 20) log.detail(`…and ${errors.length - 20} more row errors (use --json for all).`);
+        });
+}
+
+function intOpt(raw: string, flag: string, min: number, max?: number): number {
+    if (!/^\d+$/.test(raw)) throw new CliError(ExitCode.Validation, `${flag} must be a whole number, got "${raw}".`);
+    const v = parseInt(raw, 10);
+    if (v < min || (max != null && v > max)) throw new CliError(ExitCode.Validation, `${flag} must be ${max != null ? `between ${min} and ${max}` : `at least ${min}`}.`);
+    return v;
+}
+
+/** Pipeline + stage: flags, else the default pipeline's first stage when the entity has pipelines. */
+async function importTarget(api: ApiClient, brandId: number, entityId: number, opts: ImportOpts): Promise<{ pipeline_id?: number; stage_id?: number }> {
+    const out: { pipeline_id?: number; stage_id?: number } = {};
+    if (opts.pipeline != null) out.pipeline_id = numeric(opts.pipeline, 'pipeline');
+    if (opts.stage != null) out.stage_id = numeric(opts.stage, 'stage');
+    if (out.pipeline_id != null && out.stage_id != null) return out;
+    const pipelines = await api.listCrmPipelines(brandId, entityId);
+    if (!pipelines.length) {
+        if (out.pipeline_id != null || out.stage_id != null) throw new CliError(ExitCode.Validation, 'This entity has no pipelines: drop --pipeline/--stage.');
+        return out;
+    }
+    const pipe = out.pipeline_id != null ? pipelines.find((p) => p.id === out.pipeline_id) : (pipelines.find((p) => p.is_default) ?? pipelines[0]);
+    if (!pipe) throw new CliError(ExitCode.NotFound, `Pipeline #${out.pipeline_id} is not on this entity. Run "ef crm pipelines <entity>".`);
+    out.pipeline_id = pipe.id;
+    if (out.stage_id == null) {
+        const stages = (pipe.stages && pipe.stages.length ? pipe.stages : await api.listCrmStages(brandId, pipe.id))
+            .slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        if (!stages.length) throw new CliError(ExitCode.Validation, `Pipeline #${pipe.id} has no stages. Add one with "ef crm stages create ${pipe.id}" or pass --stage.`);
+        out.stage_id = stages[0].id;
+    }
+    return out;
+}
+
+function printPlan(preview: ImportPreview, plan: ImportPlan, target: { pipeline_id?: number; stage_id?: number }): void {
+    log.info(`${preview.file_name}: ${preview.row_count} row${preview.row_count === 1 ? '' : 's'}, ${preview.columns.length} columns.`);
+    log.raw(renderTable({
+        head: ['#', 'column', 'action', 'field', 'type', 'samples'],
+        rows: plan.columns.map((c) => [
+            String(c.index), c.header, c.action, c.key ?? '', c.field?.type ?? (c.action === 'existing' ? '(existing)' : ''),
+            c.samples.join(' | ').slice(0, 50),
+        ]),
+    }) + '\n');
+    const title = plan.titleColumn != null ? (preview.columns.find((c) => c.index === plan.titleColumn)?.header ?? String(plan.titleColumn)) : 'first mapped value';
+    const where = target.pipeline_id != null ? `; pipeline #${target.pipeline_id}, stage #${target.stage_id}` : '';
+    log.detail(`Title from: ${title}${where}. New fields: ${plan.create.length ? plan.create.map((f) => `${f.key} (${f.type})`).join(', ') : 'none'}.`);
 }
 
 /** Load runtime + api once per action. */

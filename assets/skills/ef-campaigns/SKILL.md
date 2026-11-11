@@ -41,8 +41,9 @@ ef campaigns email stats 17                           # sent, delivered, opens, 
 - Audiences: `--audience <segment id>`, `--all-customers`, `--emails a@x.com,b@y.com` or
   `--emails-file list.txt`, `--crm-entity <id>`. Live (real-time) segments cannot be used.
 - `ef campaigns email get <id>` lists what blocks sending in `problems`: `no_audience`, `no_content`,
-  `no_subject`, `no_from_email`, `no_marketing_address` (the brand's postal address for the footer, set in
-  Settings), variant problems.
+  `no_subject`, `no_from_email`, variant problems. `no_marketing_address` (the brand's postal address for
+  the footer, set in Settings) is a warning only: the campaign still sends and the footer leaves the address
+  out. Anti-spam laws such as CAN-SPAM ask for one, so mention it to the user, but don't treat it as a blocker.
 - Launch refuses until a test was sent (`--skip-test` overrides; only with the user's say-so), and a
   schedule must be more than a minute ahead. Test sends are limited to 10 an hour.
 - `unschedule` puts a scheduled campaign back to draft; `cancel` stops one that is scheduled or sending.

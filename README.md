@@ -351,6 +351,7 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef lint [paths…]` | Statically validate `.ef` pages/components/scripts (template + script syntax). Exits non-zero on errors; `--strict` fails on warnings, `--json` for machine output. |
 | `ef crm entities` / `pipelines <entity>` / `stages <pipeline>` / `fields <entity>` / `entries <entity>` | List CRM objects. `entities`/`pipelines`/`fields`/`entries` accept an entity **id or slug**. |
 | `ef crm entities create` · `pipelines create <entity>` · `stages create <pipeline>` · `fields create <entity>` · `entries create <entity>` | Create CRM objects. Common fields via flags, or the whole payload via `--input-json`/`--input-file` (flags override). `--generate-skeleton` prints an example payload. |
+| `ef crm import <entity> --file contacts.csv [--preview] [--map Column=key] [--skip Column] [--title Column] [--yes]` | Import entries from a .csv, .tsv or .xlsx file (headers in the first row, first sheet, 20 MB and 20,000 rows max). Suggests a field per column, creates the new fields, then imports in batches of up to 250. `--preview` shows the plan and writes nothing; a run that stops prints the `--offset` to resume from. |
 | `ef crm entries update <entry>` / `move <entry> --stage <id>` / `delete <entry>` | Update an entry (`values` merge), move it to a stage, or delete it. Entries are Elasticsearch docs (string ids). |
 
 ### JSON input for complex commands

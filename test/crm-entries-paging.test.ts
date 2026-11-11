@@ -24,7 +24,8 @@ function startMock(opts: { total?: number; cursor?: boolean } = {}): Promise<{ u
                 if (opts.cursor && u.searchParams.has('after')) {
                     const from = parseInt(u.searchParams.get('after')!, 10);
                     const data = all.slice(from, from + per);
-                    return json({ data, total, next_after: from + per < total ? String(from + per) : null });
+                    // Like the app: page/last_page in a cursor reply still describe page 1, and total is capped at 10k.
+                    return json({ data, total: Math.min(total, 10_000), current_page: 1, last_page: Math.ceil(Math.min(total, 10_000) / per), next_after: data.length === per ? String(from + per) : null });
                 }
                 const page = parseInt(u.searchParams.get('page') || '1', 10);
                 const data = all.slice((page - 1) * per, page * per);
@@ -108,4 +109,19 @@ test('entries --all without a cursor stops at the 10k window with a warning', ()
     assert.equal((JSON.parse(r.stdout) as unknown[]).length, 10_000);
     assert.equal(m.queries.length, 100);
     assert.match(r.stderr, /can't page past 10,000/);
+}));
+
+test('entries --all with a cursor goes past 10k and does not warn', () => withMock({ total: 10_250, cursor: true }, async (root) => {
+    const r = await runEf(root, ['crm', 'entries', 'leads', '--all', '--json']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal((JSON.parse(r.stdout) as unknown[]).length, 10_250);
+    assert.doesNotMatch(r.stderr, /can't page past/);
+    const t = await runEf(root, ['crm', 'entries', 'leads', '--all']);
+    assert.match(t.stderr, /rows 1-10250 of 10250 entries/, 'total never below what was fetched');
+}));
+
+test('entries --all with a cursor stops on an empty page after an exactly full one', () => withMock({ total: 200, cursor: true }, async (root, m) => {
+    const r = await runEf(root, ['crm', 'entries', 'leads', '--all', '--json']);
+    assert.equal((JSON.parse(r.stdout) as unknown[]).length, 200);
+    assert.equal(m.queries.length, 3, 'page 1, after=100, after=200 (empty)');
 }));

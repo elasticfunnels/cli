@@ -390,12 +390,13 @@ async function fetchEntries(api: ApiClient, brandId: number, entityId: number, f
         if (after != null) params.after = after; else params.page = page;
         const r = await api.listCrmEntriesPage(brandId, entityId, params);
         rows.push(...r.rows);
-        total = r.total;
-        const hasNext = r.nextAfter != null ? true : r.page < r.lastPage;
+        total = Math.max(r.total, (startPage - 1) * ENTRIES_PAGE + rows.length); // ES caps the count at 10k unless asked
+        // In cursor mode only next_after counts (page/last_page describe page 1 there).
+        const hasNext = r.nextAfter != null || (after == null && r.page < r.lastPage);
         if (rows.length >= limit) { more = rows.length > limit || (hasNext && r.rows.length > 0); break; }
         if (!r.rows.length || !hasNext) { more = false; break; }
         if (r.nextAfter != null) after = r.nextAfter;
-        else if (page * ENTRIES_PAGE >= ES_WINDOW) {
+        else if (after == null && page * ENTRIES_PAGE >= ES_WINDOW) {
             log.warn(`Stopped at row ${rows.length}: the server can't page past ${ES_WINDOW.toLocaleString('en-US')} rows yet. Narrow it with --stage, --pipeline or --q.`);
             more = true; break;
         }

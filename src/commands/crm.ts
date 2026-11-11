@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../api/client';
-import { CrmEntity } from '../api/types';
+import { CrmEntity, CrmEntry } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
@@ -276,9 +276,14 @@ export function registerCrmCommand(program: Command): void {
         .option('--field-key <key>', 'Filter by a field key (with --field-value).')
         .option('--field-value <val>', 'Value for --field-key.')
         .option('--q <text>', 'Free-text search.')
-        .option('--limit <n>', 'Max rows (per_page).', (v) => parseInt(v, 10))
-        .option('--json', 'Print as JSON.')
-        .action(async (entity: string, opts: { pipeline?: string; stage?: string; fieldKey?: string; fieldValue?: string; q?: string; limit?: number; json?: boolean }) => {
+        .option('--limit <n>', 'Stop after this many rows (pages through as needed). Default: one page of 100.')
+        .option('--page <n>', 'Start at this page (1-based, 100 rows per page).')
+        .option('--all', 'Every entry: walk all pages.')
+        .option('--json', 'Print as JSON (an array of entries).')
+        .action(async (entity: string, opts: { pipeline?: string; stage?: string; fieldKey?: string; fieldValue?: string; q?: string; limit?: string; page?: string; all?: boolean; json?: boolean }) => {
+            if (opts.all && opts.limit != null) throw new CliError(ExitCode.Validation, 'Use --all or --limit, not both.');
+            const limit = opts.limit != null ? intOpt(opts.limit, '--limit', 1) : (opts.all ? Infinity : ENTRIES_PAGE);
+            const startPage = opts.page != null ? intOpt(opts.page, '--page', 1) : 1;
             const { api, brandId } = await ctx();
             const filters: Record<string, string | number> = {};
             if (opts.pipeline) filters.pipeline_id = opts.pipeline;
@@ -286,14 +291,15 @@ export function registerCrmCommand(program: Command): void {
             if (opts.fieldKey) filters.field_key = opts.fieldKey;
             if (opts.fieldValue) filters.field_value = opts.fieldValue;
             if (opts.q) filters.q = opts.q;
-            if (opts.limit) filters.per_page = opts.limit;
-            const rows = await api.listCrmEntries(brandId, await resolveEntityId(api, brandId, entity), filters);
-            if (opts.json) { log.json(rows); return; }
+            const res = await fetchEntries(api, brandId, await resolveEntityId(api, brandId, entity), filters, startPage, limit, !opts.json);
+            if (opts.json) { log.json(res.rows); return; }
             log.raw(renderTable({
                 head: ['id', 'title', 'pipeline', 'stage', 'updated'],
-                rows: rows.map((e) => [String(e.id), e.title ?? '', String(e.pipeline_id ?? ''), String(e.stage_id ?? ''), formatRelative(e.updated_at)]),
+                rows: res.rows.map((e) => [String(e.id), e.title ?? '', String(e.pipeline_id ?? ''), String(e.stage_id ?? ''), formatRelative(e.updated_at)]),
             }) + '\n');
-            log.detail(`${rows.length} entries`);
+            const first = (startPage - 1) * ENTRIES_PAGE + 1;
+            const range = res.rows.length ? `rows ${first}-${first + res.rows.length - 1} of ${res.total}` : `0 of ${res.total}`;
+            log.detail(res.more ? `${range}. More: --page ${res.nextPage}, or --all for every entry.` : `${range} entries`);
         });
 
     entries.command('get <entry>')
@@ -367,6 +373,39 @@ export function registerCrmCommand(program: Command): void {
         });
 
     registerImport(crm);
+}
+
+// ── entries paging ────────────────────────────────────────────────────
+
+const ENTRIES_PAGE = 100;            // the server's per_page cap
+const ES_WINDOW = 10_000;            // page * per_page past this needs the cursor
+
+/** Walk pages from `startPage` until `limit` rows or the last page. Uses the `after` cursor when the server offers one. */
+async function fetchEntries(api: ApiClient, brandId: number, entityId: number, filters: Record<string, string | number>,
+    startPage: number, limit: number, progress: boolean): Promise<{ rows: CrmEntry[]; total: number; more: boolean; nextPage: number }> {
+    const rows: CrmEntry[] = [];
+    let page = startPage; let after: string | null = null; let total = 0; let more = false;
+    for (;;) {
+        const params: Record<string, string | number> = { ...filters, per_page: ENTRIES_PAGE };
+        if (after != null) params.after = after; else params.page = page;
+        const r = await api.listCrmEntriesPage(brandId, entityId, params);
+        rows.push(...r.rows);
+        total = r.total;
+        const hasNext = r.nextAfter != null ? true : r.page < r.lastPage;
+        if (rows.length >= limit) { more = rows.length > limit || (hasNext && r.rows.length > 0); break; }
+        if (!r.rows.length || !hasNext) { more = false; break; }
+        if (r.nextAfter != null) after = r.nextAfter;
+        else if (page * ENTRIES_PAGE >= ES_WINDOW) {
+            log.warn(`Stopped at row ${rows.length}: the server can't page past ${ES_WINDOW.toLocaleString('en-US')} rows yet. Narrow it with --stage, --pipeline or --q.`);
+            more = true; break;
+        }
+        page++;
+        if (progress && limit === Infinity && page % 10 === 0) log.detail(`…${rows.length} of ${total}`);
+    }
+    const kept = rows.slice(0, limit);
+    // The page holding the first row not shown (rows before it on that page repeat when --limit cut mid-page).
+    const nextPage = Math.floor(((startPage - 1) * ENTRIES_PAGE + kept.length) / ENTRIES_PAGE) + 1;
+    return { rows: kept, total, more, nextPage };
 }
 
 // ── import ────────────────────────────────────────────────────────────

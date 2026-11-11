@@ -98,6 +98,8 @@ export interface BulkUploadResult {
 }
 
 /** Laravel index endpoints return either a bare array or a paginated { data: [...] }. */
+export interface CrmEntryPage { rows: CrmEntry[]; page: number; lastPage: number; total: number; nextAfter: string | null }
+
 function crmList<T>(data: unknown): T[] {
     if (Array.isArray(data)) return data as T[];
     const d = (data as { data?: unknown } | null)?.data;
@@ -1446,11 +1448,24 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Delete CRM field', res);
     }
 
-    async listCrmEntries(brandId: number, entityId: number, filters: Record<string, string | number> = {}): Promise<CrmEntry[]> {
-        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}/entries`, { params: filters });
-        if (res.status === 403 || res.status === 404) return [];
+    /**
+     * One page of entries. The server pages with `page` (1-based) + `per_page` (max 100) and replies
+     * `{data, current_page, last_page, per_page, total}`; a `next_after` cursor (deep paging past
+     * Elasticsearch's 10k window, app T1111-3) is passed through when the server sends one.
+     */
+    async listCrmEntriesPage(brandId: number, entityId: number, params: Record<string, string | number> = {}): Promise<CrmEntryPage> {
+        const res = await this.raw('GET', `/api/brands/${brandId}/crm/entities/${entityId}/entries`, { params });
+        if (res.status === 403 || res.status === 404) return { rows: [], page: 1, lastPage: 1, total: 0, nextAfter: null };
         if (res.status >= 400) throw httpError('List CRM entries', res);
-        return crmList<CrmEntry>(res.data);
+        const rows = crmList<CrmEntry>(res.data);
+        const d = (Array.isArray(res.data) ? {} : (res.data ?? {})) as Record<string, unknown>;
+        const num = (v: unknown, dflt: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : dflt));
+        const page = num(d.current_page, Number(params.page ?? 1));
+        const next = d.next_after;
+        return {
+            rows, page, lastPage: num(d.last_page, page), total: num(d.total, rows.length),
+            nextAfter: typeof next === 'string' || typeof next === 'number' ? String(next) : null,
+        };
     }
 
     async getCrmEntry(brandId: number, entryId: string): Promise<CrmEntry> {

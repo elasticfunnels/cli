@@ -51,7 +51,7 @@ function n(v: unknown): string { return v == null ? '' : String(v); }
 interface EmailFieldOpts {
     name?: string; subject?: string; previewText?: string; fromName?: string; fromEmail?: string; replyTo?: string;
     sender?: string; integration?: string;
-    audience?: string; allCustomers?: boolean; emails?: string; emailsFile?: string; crmEntity?: string;
+    audience?: string; allCustomers?: boolean; emails?: string; emailsFile?: string; crmEntity?: string; crmFilter?: string[];
     htmlFile?: string; cssFile?: string;
 }
 
@@ -69,9 +69,23 @@ function emailFieldOptions(cmd: Command): Command {
         .option('--all-customers', 'Send to every customer with an email.')
         .option('--emails <list>', 'Send to a manual list: comma-separated addresses.')
         .option('--emails-file <path>', 'Send to a manual list: one address per line.')
-        .option('--crm-entity <id>', 'Send to the records of a CRM collection.')
+        .option('--crm-entity <id>', 'Send to the records of a CRM collection (one email per address; the oldest entry wins).')
+        .option('--crm-filter <key=value>', 'With --crm-entity: only entries whose field matches (tags=herpafend; a tag list matches any of its items). Repeatable, all must match, max 10.', (v: string, prev: string[] = []) => [...prev, v])
         .option('--html-file <path>', 'Email body HTML (replaces the content).')
         .option('--css-file <path>', 'CSS to go with --html-file.');
+}
+
+/** "key=value" pairs → the app's audience_config.filters (app 0a2d21983). */
+export function crmFilters(pairs: string[]): Array<{ field_key: string; field_value: string }> {
+    if (pairs.length > 10) throw new CliError(ExitCode.Validation, 'At most 10 --crm-filter values.');
+    return pairs.map((p) => {
+        const eq = p.indexOf('=');
+        const key = eq > 0 ? p.slice(0, eq).trim() : '';
+        const value = eq > 0 ? p.slice(eq + 1).trim() : '';
+        if (!/^[a-zA-Z0-9_.-]+$/.test(key) || !value) throw new CliError(ExitCode.Validation, `--crm-filter takes field_key=value, got "${p}".`);
+        if (value.length > 255) throw new CliError(ExitCode.Validation, `--crm-filter value for "${key}" is over 255 characters.`);
+        return { field_key: key, field_value: value };
+    });
 }
 
 async function emailAudience(opts: EmailFieldOpts): Promise<Record<string, unknown> | undefined> {
@@ -79,7 +93,12 @@ async function emailAudience(opts: EmailFieldOpts): Promise<Record<string, unkno
     if (picked.length > 1) throw new CliError(ExitCode.Validation, 'Pick one audience: --audience, --all-customers, --emails, --emails-file or --crm-entity.');
     if (opts.audience != null) return { audience_type: 'analytics_segment', audience_config: { segment_id: numericId(opts.audience) } };
     if (opts.allCustomers) return { audience_type: 'all_customers', audience_config: null };
-    if (opts.crmEntity != null) return { audience_type: 'crm_collection', audience_config: { crm_entity_id: numericId(opts.crmEntity, 'CRM entity') } };
+    if (opts.crmFilter?.length && opts.crmEntity == null) throw new CliError(ExitCode.Validation, '--crm-filter needs --crm-entity <id>.');
+    if (opts.crmEntity != null) {
+        const config: Record<string, unknown> = { crm_entity_id: numericId(opts.crmEntity, 'CRM entity') };
+        if (opts.crmFilter?.length) config.filters = crmFilters(opts.crmFilter);
+        return { audience_type: 'crm_collection', audience_config: config };
+    }
     if (opts.emails != null || opts.emailsFile != null) {
         const raw = opts.emails ?? await readText(opts.emailsFile!);
         const list = raw.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);

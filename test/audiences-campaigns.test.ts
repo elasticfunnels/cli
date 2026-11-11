@@ -259,3 +259,20 @@ test('ef-segql and ef-campaigns skills ship with short descriptions', async () =
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });
+
+test('email create --crm-entity --crm-filter sends audience_config.filters; filter without entity is refused', async () => {
+    const mock = await startMock();
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['campaigns', 'email', 'create', '--name', 'Herpafend affs', '--crm-entity', '11988', '--crm-filter', 'tags=herpafend', '--crm-filter', 'merchant=BuyGoods', '--json']);
+        assert.equal(r.code, 0, r.stderr);
+        const created = hits(mock, 'POST', /\/email-campaigns$/)[0].body;
+        assert.equal(created.audience_type, 'crm_collection');
+        assert.deepEqual(created.audience_config, { crm_entity_id: 11988, filters: [{ field_key: 'tags', field_value: 'herpafend' }, { field_key: 'merchant', field_value: 'BuyGoods' }] });
+        const bad = await runEf(root, ['campaigns', 'email', 'create', '--name', 'x', '--crm-filter', 'tags=a']);
+        assert.notEqual(bad.code, 0);
+        assert.match(bad.stderr, /--crm-filter needs --crm-entity/);
+        const malformed = await runEf(root, ['campaigns', 'email', 'create', '--name', 'x', '--crm-entity', '1', '--crm-filter', 'tags']);
+        assert.match(malformed.stderr, /field_key=value/);
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});

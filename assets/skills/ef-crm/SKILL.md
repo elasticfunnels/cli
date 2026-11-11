@@ -78,5 +78,6 @@ ef campaigns email test <campaignId>                    # one test to the user's
 - Suppressed addresses (bounces, complaints, unsubscribes) and recorded opt-outs are always excluded. Having
   no consent record counts as opted in, so remind the user to import only people who agreed to hear from
   them.
-- To send to part of the list, or to people who also bought, build a saved audience instead (`ef-segql`
-  skill) and use `--audience <id>`.
+- To send to part of the list: `--crm-filter key=value` with `--crm-entity` (e.g. `--crm-filter tags=vip`).
+  To combine with purchases, build a saved audience instead (`ef-segql` skill) and use `--audience <id>`.
+- Per-entry values in the email: `{{ entry.<field key> }}` (see the `ef-campaigns` skill).

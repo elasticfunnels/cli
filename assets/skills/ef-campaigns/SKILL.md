@@ -39,7 +39,13 @@ ef campaigns email stats 17                           # sent, delivered, opens, 
 ```
 
 - Audiences: `--audience <segment id>`, `--all-customers`, `--emails a@x.com,b@y.com` or
-  `--emails-file list.txt`, `--crm-entity <id>`. Live (real-time) segments cannot be used.
+  `--emails-file list.txt`, `--crm-entity <id>` (add `--crm-filter key=value`, repeatable, to send to only
+  the matching entries; a tag list matches any of its items). Live (real-time) segments cannot be used.
+- Merge tags: `{{ customer.first_name }}`, `{{ customer.name }}`, `{{ customer.email }}` everywhere. With a
+  CRM audience also `{{ entry.<field key> }}`, `{{ entry.id }}`, `{{ entry.title }}` (lists render "a, b"),
+  e.g. `https://brand.com/?aff_id={{ entry.affiliate_id }}`. One email per address: when several entries
+  share an email, the OLDEST matching entry fills `entry.*`, so filter to one entry per person when the link
+  differs per entry. `entry.*` is empty in test sends; check a real value with `ef crm entries`.
 - `ef campaigns email get <id>` lists what blocks sending in `problems`: `no_audience`, `no_content`,
   `no_subject`, `no_from_email`, variant problems. `no_marketing_address` (the brand's postal address for
   the footer, set in Settings) is a warning only: the campaign still sends and the footer leaves the address

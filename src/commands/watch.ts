@@ -97,7 +97,7 @@ export function registerWatchCommand(program: Command): void {
                     // Remember the post-push on-disk content so its change event is ignored.
                     try { lastWroteHash.set(rel, sha256(await fs.promises.readFile(abs))); } catch { /* tolerated */ }
                     if (opts.json) {
-                        log.json({ event: 'pushed', rel, kind: res.kind, action: res.action, serverId: res.serverId, draft });
+                        log.json({ event: 'pushed', rel, kind: res.kind, action: res.action, serverId: res.serverId, draft, ...(res.linkWarnings ? { linkWarnings: res.linkWarnings } : {}) });
                     } else {
                         const verb = draft ? c.yellow('draft') : c.green(res.action === 'created' ? 'published (new)' : 'published');
                         log.info(`  ${verb} ${res.rel}`);

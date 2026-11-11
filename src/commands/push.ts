@@ -13,6 +13,7 @@ import {
     pushScriptFile,
     PushResult,
 } from '../sync/sync';
+import { linkErrorSummary } from '../sync/linkWarnings';
 import { resolveSyncPathInput } from '../utils/syncPathResolve';
 
 interface PushOpts {
@@ -23,6 +24,7 @@ interface PushOpts {
     json?: boolean;
     dryRun?: boolean;
     verbose?: boolean;
+    failOnLinkError?: boolean;
 }
 
 /**
@@ -61,13 +63,20 @@ Examples:
   ef push pages/login.ef pages/signup.ef        # push multiple
   ef push pages/login.ef --force                # ignore revision conflicts (overwrite)
   ef push pages/login.ef --draft                # save a draft instead of publishing (publish is the default)
-  ef push pages/login.ef --verbose              # explain draft vs live + each file`)
+  ef push pages/login.ef --verbose              # explain draft vs live + each file
+  ef push pages/sales.ef --json                 # "linkErrors" counts links that lose sales
+
+Link errors: the server checks each saved page's buy links. An error (a link
+that loses sales or upsells) prints under "LINK ERRORS" and is counted in
+--json as "linkErrors"; the exit code stays 0 unless --fail-on-link-error
+is passed, which exits ${ExitCode.LinkError}. The page is saved either way.`)
         .option('--all', 'Push every file under the brand root.')
         .option('--force', 'Skip optimistic concurrency. Use only when you mean to overwrite the server.')
         .option('--draft', 'Push as draft (overrides config "saveMode": "direct").')
         .option('--direct', 'Push as published / direct (overrides config "saveMode": "draft").')
         .option('--dry-run', 'Print what would be pushed without sending anything to the server.')
         .option('--json', 'Print results as JSON.')
+        .option('--fail-on-link-error', `Exit ${ExitCode.LinkError} when a pushed page has a link error (a link that loses sales). The push itself still saves.`)
         .option('-v, --verbose', 'Log API target, effective draft vs direct (publish) mode, and per-file paths.')
         .action(async (targets: string[], opts: PushOpts) => {
             if (opts.draft && opts.direct) {
@@ -228,12 +237,19 @@ Examples:
             }
             await ctx.state.save();
 
+            const linkErrors = results.reduce((n, r) => n + (r.linkWarnings ?? []).filter((w) => w.level === 'error').length, 0);
+            const linkHints = results.reduce((n, r) => n + (r.linkWarnings ?? []).filter((w) => w.level !== 'error').length, 0);
+            const linkErrorFiles = results.filter((r) => (r.linkWarnings ?? []).some((w) => w.level === 'error')).length;
+            const failOnLinks = !!opts.failOnLinkError && linkErrors > 0;
+
             if (opts.json) {
                 const pushed = opts.verbose
                     ? results
                     : results.map(({ apiResponse: _omit, ...r }) => r);
                 if (conflicts > 0) process.exitCode = ExitCode.Conflict;
-                const base: Record<string, unknown> = { ok: conflicts === 0, draft, conflicts, pushed };
+                else if (failOnLinks) process.exitCode = ExitCode.LinkError;
+                // `ok` keeps its old meaning (no conflicts); link problems are counted beside it.
+                const base: Record<string, unknown> = { ok: conflicts === 0, draft, conflicts, linkErrors, linkHints, pushed };
                 if (opts.verbose) {
                     base.debug = {
                         apiUrl: rt.config.apiUrl,
@@ -251,7 +267,11 @@ Examples:
             if (conflicts > 0) {
                 process.exitCode = ExitCode.Conflict;
                 log.warn(`${conflicts} file${conflicts === 1 ? '' : 's'} had a conflict and ${conflicts === 1 ? 'was' : 'were'} NOT pushed (see above). Exit ${ExitCode.Conflict}.`);
+            } else if (failOnLinks) {
+                process.exitCode = ExitCode.LinkError;
             }
+            for (const line of linkErrorSummary(linkErrors, linkErrorFiles)) log.error(line);
+            if (failOnLinks && conflicts === 0) log.detail(`Exit ${ExitCode.LinkError} (--fail-on-link-error).`);
 
             // Draft saves a revision but doesn't update the live page — make that
             // unmissable so a push isn't mistaken for a publish. Only warn when a

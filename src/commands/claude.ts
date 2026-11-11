@@ -1008,7 +1008,29 @@ is itself refused on push); \`ef push <path> --force\` overwrites the server any
 \`ef pull\` also keeps a file you've edited locally and warns (\`--force\` to take the
 server's, \`--merge\` to merge). Overwritten files are copied to \`.ef-history/\` first.
 
-Exit codes: 0 ok · 2 usage · 3 auth · 4 conflict · 5 network · 6 server · 7 not found.`;
+### Link warnings: stop and tell the user
+
+After a page saves, \`ef push\` (and \`ef watch\`) prints what the server found in its
+buy links. **On any link warning, stop and tell the user before you publish
+anything else.** Say in plain words what it costs:
+
+- **\`LINK ERRORS\`** (\`--json\`: \`linkErrors\` > 0, \`level: "error"\` in each
+  \`pushed[].linkWarnings\`): buyers on that link are lost to ElasticFunnels. No
+  order, no funnel upsell, no affiliate credit. Sales or upsells are lost
+  until it is fixed.
+- **A pasted merchant link** (a ClickBank, BuyGoods, JVZoo, Digistore24 checkout URL
+  in the page, a hint or an error): the funnel's next step, the price and the
+  affiliate tracking do not come from ElasticFunnels.
+
+Then offer the fix: replace the pasted link with a \`[BUY=CODE]\` tag (or
+\`[UPSELL=CODE]\` on an upsell page) for the matching product (\`ef products list\`).
+Never publish past an error without the user's OK: if the push was a draft,
+leave it a draft; if it was live, say it is live with the error and ask before
+pushing more pages. When a page you are about to publish has pasted merchant
+links, push it with \`--draft\` first and read the warnings. \`--fail-on-link-error\`
+makes the push exit 8 when there is an error (the page is still saved).
+
+Exit codes: 0 ok · 2 usage · 3 auth · 4 conflict · 5 network · 6 server · 7 not found · 8 link error (only with \`--fail-on-link-error\`).`;
 
 /** The marked, ready-to-embed guidance block, stamped with this CLI's version. */
 export function renderClaudeSection(): string {

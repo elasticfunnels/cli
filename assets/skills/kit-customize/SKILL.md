@@ -122,6 +122,9 @@ For each page in `kit.json` (pull it first: `ef pull pages/<slug>.ef`):
   (runner: `generate_kit_image`). Each image costs credits; the job has a credit cap. Stop
   generating when the cap is near and list the remaining slots as missing.
 - Run `ef lint` (runner: `lint_ef`) after each page and fix what it reports.
+- Never paste a merchant checkout URL (ClickBank, BuyGoods, JVZoo, Digistore24) into a page: use
+  `[BUY=CODE]` / `[UPSELL=CODE]`. If `ef push` prints `LINK ERRORS`, stop, list them for the owner
+  (sales or upsells are lost until fixed) and leave the page a draft.
 - The kit's demo text also lives in shared components, not only in pages: the header, footer,
   theme, guarantee seals, package cards, the sign-in box, the upsell top bar. Rewrite the components
   under `components/` the kit pages use (`ef pull components/<name>.ef`, push with `--draft`).

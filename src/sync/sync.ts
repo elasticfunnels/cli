@@ -18,7 +18,7 @@ import { assetEditorPayloadToBuffer, needsLocalAssetFallback } from '../api/type
 import { readSnapshot, writeSnapshot } from './baselineSnapshots';
 import { hasConflictMarkers, threeWayMerge } from './merge';
 import { log } from '../utils/log';
-import { formatLinkWarnings, PageLinkWarning } from './linkWarnings';
+import { LinkWarningReport, linkWarningBlock, linkWarningReports, PageLinkWarning } from './linkWarnings';
 import {
     applyI18nToMeta, baselineOf, componentIndex, extraWithBaseline, I18nFields, i18nChanges, i18nFromEntity,
     i18nFromMeta, i18nPayload, PageI18n, pageIndex, serverHasI18n, SlugIndex,
@@ -560,6 +560,8 @@ export interface PushResult {
     revisionId?: number | null;
     previewUrl?: string | null;
     note?: string | null;
+    /** Link warnings the server returned for this page, errors first. Only set when there are some. */
+    linkWarnings?: LinkWarningReport[];
     /** Sanitized JSON body from the last API call (for `ef push --verbose`). */
     apiResponse?: Record<string, unknown>;
 }
@@ -624,11 +626,13 @@ function reportTrackingCodeInPage(found: string[] | undefined, rel: string): voi
 }
 
 /** Link warnings the page list shows for this page (wrong merchant account, unmapped product, pasted buy link). */
-function reportLinkWarnings(warnings: PageLinkWarning[] | undefined, rel: string): void {
-    for (const { level, line } of formatLinkWarnings(warnings, rel)) {
+function reportLinkWarnings(warnings: PageLinkWarning[] | undefined, rel: string): LinkWarningReport[] {
+    for (const { level, line } of linkWarningBlock(warnings, rel)) {
         if (level === 'error') log.error(line);
-        else log.warn(line);
+        else if (level === 'hint') log.warn(line);
+        else log.info(line);
     }
+    return linkWarningReports(warnings);
 }
 
 /** Mirrors PageEditorController's own guard, so we can explain a skip it makes silently. */
@@ -924,7 +928,7 @@ export async function pushPageFile(
         });
         reportCollectionsCreated(res.collections_created, rel, body);
         reportTrackingCodeInPage(res.tracking_code_in_page, rel);
-        reportLinkWarnings(res.link_warnings, rel);
+        const linkWarnings = reportLinkWarnings(res.link_warnings, rel);
         const newMeta: EfMeta = { ...meta, path: rel };
         // Adopt the server's canonical version (inline-split-test ids, reindent,
         // auto-created collections) so the next push doesn't see a phantom diff.
@@ -960,6 +964,7 @@ export async function pushPageFile(
             // so printing one only sends the reader to an error page.
             previewUrl: isOfflineStatus(canonical?.status) ? null : (res.preview_url ?? null),
             note: [isOfflineStatus(canonical?.status) ? offlinePageNote(meta.slug ?? rel) : null, lang.note ?? null].filter(Boolean).join(' ') || undefined,
+            ...(linkWarnings.length ? { linkWarnings } : {}),
             apiResponse: shrinkPushApiBody(res),
         };
     }
@@ -980,7 +985,7 @@ export async function pushPageFile(
     });
     reportCollectionsCreated(res.collections_created, rel, body);
     reportTrackingCodeInPage(res.tracking_code_in_page, rel);
-    reportLinkWarnings(res.link_warnings, rel);
+    const linkWarnings = reportLinkWarnings(res.link_warnings, rel);
     // A copied file whose efmeta carries a language (say, pages/ro/about.ef made from pages/about.ef with
     // "language":"ro") gives the new page that language and link. Applied against an empty baseline.
     const copiedI18n = i18nFromMeta(meta);
@@ -1028,6 +1033,7 @@ export async function pushPageFile(
         note: (isCopy && meta?.id
             ? `Copy of page #${meta.id} (efmeta issued for ${meta.path}); created NEW page #${created.id} (slug "${slug}") so the original is untouched.`
             : `Allocated new page id ${created.id} for slug "${slug}".`) + (createLang.note ? ` ${createLang.note}` : ''),
+        ...(linkWarnings.length ? { linkWarnings } : {}),
         apiResponse: {
             page: shrinkPushApiBody(created) ?? {},
             editor: shrinkPushApiBody(res) ?? {},

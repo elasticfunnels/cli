@@ -21,7 +21,7 @@ interface Mock {
 }
 
 /** Minimal stand-in for the page editor API: enough for one page update push. */
-function startMock(): Promise<Mock> {
+function startMock(editorExtra: Record<string, unknown> = {}): Promise<Mock> {
     const editorPosts: Mock['editorPosts'] = [];
     return new Promise((resolve) => {
         const server = http.createServer((req, res) => {
@@ -32,7 +32,7 @@ function startMock(): Promise<Mock> {
                 if (req.method === 'POST' && /\/editor$/.test(url)) {
                     try { editorPosts.push(JSON.parse(raw || '{}')); } catch { editorPosts.push(null); }
                     res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ revision_id: 5 }));
+                    res.end(JSON.stringify({ revision_id: 5, ...editorExtra }));
                     return;
                 }
                 if (req.method === 'GET' && /\/editor/.test(url)) {
@@ -128,5 +128,58 @@ test('push --direct publishes and does NOT warn about drafts', async () => {
     } finally {
         await mock.close();
         await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+const LOST_SALES = { link_warnings: [
+    { level: 'hint', type: 'pasted_link', gateway: 'buygoods', count: 1 },
+    { level: 'error', type: 'pasted_link_lost_sales', gateway: 'clickbank', count: 1 },
+] };
+
+test('push prints link errors under a heading, counts them in --json, exits 0 by default', async () => {
+    const mock = await startMock(LOST_SALES);
+    const root = await tmpDir();
+    try {
+        await setupBrand(root, mock.url);
+        const human = await runEf(root, ['push', 'pages/home.ef', '--force']);
+        assert.equal(human.status, 0, human.stderr);
+        assert.match(human.stderr, /LINK ERRORS in pages\/home\.ef: sales or upsells are lost/);
+        assert.match(human.stderr, /ClickBank buy link pasted into the page skips the ElasticFunnels purchase step/);
+        assert.match(human.stderr, /Link hints for pages\/home\.ef:/);
+        assert.match(human.stderr, /AI agents: stop here and tell the user/);
+
+        const json = await runEf(root, ['push', 'pages/home.ef', '--force', '--json']);
+        assert.equal(json.status, 0, json.stderr);
+        const out = JSON.parse(json.stdout);
+        assert.equal(out.ok, true);
+        assert.equal(out.linkErrors, 1);
+        assert.equal(out.linkHints, 1);
+        assert.equal(out.pushed[0].linkWarnings[0].type, 'pasted_link_lost_sales');
+        assert.match(out.pushed[0].linkWarnings[0].message, /ClickBank/);
+    } finally {
+        await mock.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+    }
+});
+
+test('push --fail-on-link-error exits 8 on a link error, 0 without one', async () => {
+    const bad = await startMock(LOST_SALES);
+    const good = await startMock();
+    const root = await tmpDir();
+    const root2 = await tmpDir();
+    try {
+        await setupBrand(root, bad.url);
+        const res = await runEf(root, ['push', 'pages/home.ef', '--force', '--fail-on-link-error', '--json']);
+        assert.equal(res.status, 8, res.stderr);
+        assert.equal(JSON.parse(res.stdout).linkErrors, 1);
+        await setupBrand(root2, good.url);
+        const ok = await runEf(root2, ['push', 'pages/home.ef', '--force', '--fail-on-link-error']);
+        assert.equal(ok.status, 0, ok.stderr);
+        assert.doesNotMatch(ok.stderr, /LINK ERRORS/);
+    } finally {
+        await bad.close();
+        await good.close();
+        await fs.promises.rm(root, { recursive: true, force: true });
+        await fs.promises.rm(root2, { recursive: true, force: true });
     }
 });

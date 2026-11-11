@@ -66,6 +66,13 @@ Look at every image for:
 - the page ending where it should (a missing footer often means an unclosed tag)
 - prices, product names and the buy buttons
 
+Read the push output too. A `LINK ERRORS in <file>` block (`--json`:
+`linkErrors` > 0) means buyers on that link are lost: no order, no upsell, no
+affiliate credit. A pasted merchant link means the funnel next step, price and
+affiliate tracking do not come from ElasticFunnels. Stop and tell the user in
+those words, offer to swap the link for a `[BUY=CODE]` / `[UPSELL=CODE]` tag,
+and do not publish past an error without their OK.
+
 Fix what you find, push, shoot again. Report what you looked at (sizes, draft
 or live) and attach or name the image files.
 

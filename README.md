@@ -382,6 +382,7 @@ Stable so scripts can branch on them.
 | `5` | Network: DNS, timeout, connection refused |
 | `6` | Server: backend 5xx or unexpected response |
 | `7` | Not found: the file or entity you asked for doesn't exist |
+| `8` | Link error: `ef push --fail-on-link-error` saved a page whose buy link loses sales (only with that flag) |
 | `130` | Interrupted (Ctrl-C). Whatever had downloaded is saved and recorded — re-run to finish. |
 
 ## Guidance for AI tools
@@ -692,6 +693,25 @@ To make **draft** the default for a folder, set `"saveMode": "draft"` in
 `.ef/config.json` (or `ef init … --save-mode draft`). The effective mode and the
 live-vs-draft outcome are shown under `ef push … --verbose`, and `--json`
 includes a top-level `"draft"` boolean.
+
+## Link warnings (`ef push`)
+
+After each page saves, the server checks its buy links. Errors (a link that
+loses sales or upsells: wrong merchant account, unknown product code, a pasted
+link whose sales never reach ElasticFunnels) print under a `LINK ERRORS in
+<file>` heading; hints (a pasted buy link that would be better as a
+`[BUY=CODE]` tag) print under `Link hints for <file>`.
+
+`--json` adds top-level `"linkErrors"` and `"linkHints"` counts and a
+`"linkWarnings"` list on each pushed page (`level`, `type`, `gateway`,
+`message`, ...). `"ok"` still means only "no conflicts", and the exit code stays
+0, so existing scripts behave as before. Pass `--fail-on-link-error` to exit
+`8` when any pushed page has a link error (the page is saved either way).
+
+```bash
+ef push pages/sales.ef --json | jq '.linkErrors'
+ef push --all --fail-on-link-error || echo "fix the buy links"
+```
 
 ## JSON output for tooling
 

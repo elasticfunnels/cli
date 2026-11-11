@@ -422,3 +422,22 @@ test('installBundledSkills ships kit-customize: verbatim customer copy, drafts o
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
 });
+
+test('guidance makes an agent stop and tell the user on a link warning', async () => {
+    const s = renderClaudeSection();
+    const i = s.indexOf('### Link warnings: stop and tell the user');
+    assert.ok(i > 0, 'section present');
+    const section = s.slice(i, s.indexOf('Exit codes:', i));
+    assert.match(section, /stop and tell the user before you publish/);
+    assert.match(section, /Sales or upsells are lost/);
+    assert.match(section, /next step, the price and the\s+affiliate tracking do not come from ElasticFunnels/);
+    assert.match(section, /\[BUY=CODE\]/);
+    assert.match(section, /Never publish past an error without the user's OK/);
+    assert.match(section, /linkErrors/);
+    assert.doesNotMatch(section, /—/, 'no em dashes in the new copy');
+    assert.match(s, /8 link error/);
+    for (const skill of ['ef-page-check', 'kit-customize']) {
+        const md = await fs.promises.readFile(path.resolve(__dirname, '..', '..', 'assets', 'skills', skill, 'SKILL.md'), 'utf8');
+        assert.match(md, /LINK ERRORS/, `${skill} names the heading`);
+    }
+});

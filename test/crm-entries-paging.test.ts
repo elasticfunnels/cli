@@ -108,14 +108,14 @@ test('entries --all without a cursor stops at the 10k window with a warning', ()
     assert.equal(r.code, 0, r.stderr);
     assert.equal((JSON.parse(r.stdout) as unknown[]).length, 10_000);
     assert.equal(m.queries.length, 100);
-    assert.match(r.stderr, /can't page past 10,000/);
+    assert.match(r.stderr, /Stopped after page 100 \(10000 entries\): this server pages by number only up to row 10,000/);
 }));
 
 test('entries --all with a cursor goes past 10k and does not warn', () => withMock({ total: 10_250, cursor: true }, async (root) => {
     const r = await runEf(root, ['crm', 'entries', 'leads', '--all', '--json']);
     assert.equal(r.code, 0, r.stderr);
     assert.equal((JSON.parse(r.stdout) as unknown[]).length, 10_250);
-    assert.doesNotMatch(r.stderr, /can't page past/);
+    assert.doesNotMatch(r.stderr, /Stopped after page/);
     const t = await runEf(root, ['crm', 'entries', 'leads', '--all']);
     assert.match(t.stderr, /rows 1-10250 of 10250 entries/, 'total never below what was fetched');
 }));
@@ -142,5 +142,52 @@ test('entry ids that start with "-" are ids, not options; "--typo" is still refu
         assert.notEqual(t.code, 0);
         assert.match(t.stderr, /Unknown option "--frce"/);
         assert.ok(!seen.some((x) => x.includes('--frce')));
+    } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('entries --all keeps each id once when pages repeat rows', async () => {
+    const server = http.createServer((req, res) => {
+        const u = new URL(req.url || '/', 'http://x');
+        const page = parseInt(u.searchParams.get('page') || '1', 10);
+        // An unstable sort: page 2 repeats half of page 1.
+        const data = page === 1 ? Array.from({ length: 100 }, (_, i) => ({ id: `e${i}` })) : Array.from({ length: 100 }, (_, i) => ({ id: `e${i + 50}` }));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data, current_page: page, last_page: 2, total: 150 }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const root = await setup(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    try {
+        const r = await runEf(root, ['crm', 'entries', '5', '--all', '--json']);
+        assert.equal((JSON.parse(r.stdout) as unknown[]).length, 150);
+        assert.match(r.stderr, /Dropped 50 repeated rows/);
+    } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('entries purge: counts, refuses without --yes, deletes every matching id with --yes', async () => {
+    const deleted: string[] = []; const lists: URLSearchParams[] = [];
+    const server = http.createServer((req, res) => {
+        const u = new URL(req.url || '/', 'http://x');
+        const json = (p: unknown) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(p)); };
+        if (req.method === 'GET' && /\/crm\/entities$/.test(u.pathname)) return json([{ id: 5, slug: 'leads' }]);
+        if (req.method === 'GET') { lists.push(u.searchParams); return json({ data: Array.from({ length: 30 }, (_, i) => ({ id: i % 3 ? `e${i}` : `-x${i}` })), current_page: 1, last_page: 1, total: 30 }); }
+        if (req.method === 'DELETE') { deleted.push(decodeURIComponent(u.pathname.split('/').pop()!)); return json({ ok: true }); }
+        json({});
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const root = await setup(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    try {
+        const dry = await runEf(root, ['crm', 'entries', 'purge', 'leads', '--q', 'old', '--dry-run']);
+        assert.equal(dry.code, 0, dry.stderr);
+        assert.match(dry.stderr, /Would delete 30 entries of leads matching the filters/);
+        assert.equal(lists[0].get('q'), 'old');
+        const no = await runEf(root, ['crm', 'entries', 'purge', 'leads']);
+        assert.notEqual(no.code, 0);
+        assert.match(no.stderr, /--yes/);
+        assert.equal(deleted.length, 0);
+        const yes = await runEf(root, ['crm', 'entries', 'purge', 'leads', '--yes', '--json']);
+        assert.equal(yes.code, 0, yes.stderr);
+        assert.equal(JSON.parse(yes.stdout).deleted, 30);
+        assert.equal(new Set(deleted).size, 30);
+        assert.ok(deleted.includes('-x0'));
     } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
 });

@@ -174,3 +174,15 @@ test('import refuses .xls before uploading', async () => {
         assert.equal(mock.previewBodies.length, 0);
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });
+
+test('plan: --map Column=key:type sets the type of a new field; choice types get the column values', () => {
+    const p = buildImportPlan(preview(), new Set(['email']), { map: ['Plan=plan:text', 'Name=website:url', 'Email=contact_email:email'] });
+    const byKey = Object.fromEntries(p.create.map((f) => [f.key, f]));
+    assert.equal(byKey.plan.type, 'text');
+    assert.equal(byKey.plan.options, null, 'no options once it is not a choice type');
+    assert.equal(byKey.website.type, 'url');
+    const q = buildImportPlan(preview(), new Set(['email']), { map: ['Plan=plan:multiselect'] });
+    assert.deepEqual(q.create.find((f) => f.key === 'plan')?.options, [{ label: 'Pro', value: 'Pro' }, { label: 'Basic', value: 'Basic' }]);
+    assert.throws(() => buildImportPlan(preview(), new Set(['email']), { map: ['Plan=plan:money'] }), /Unknown type "money"/);
+    assert.throws(() => buildImportPlan(preview(), new Set(['email']), { map: ['Email=email:text'] }), /already exists/);
+});

@@ -18,6 +18,10 @@ is a plain table. Entity arguments take an id or a slug.
   create). Run it for real with `--yes` only after they agree.
 - Import is not idempotent: running it twice adds every row twice. If a run stopped, resume with the
   `--offset` it printed, never by starting again from 0.
+- Import does not merge: rows whose email already exists become second entries. Before re-importing a list,
+  either clear the object (below) or merge the file by email yourself first, and say which you did.
+- Deleting many entries: `ef crm entries purge <entity> [filters] --dry-run` first, show the user the count,
+  then the same with `--yes` only after they agree. It can't be undone.
 - Keep contact data out of chat and files unless the user asked for it. Show counts and the plan, not rows.
 - Sending to the list is a campaign: follow the `ef-campaigns` skill (test first, the user's go before
   `launch`/`schedule`).
@@ -47,8 +51,9 @@ ef crm import leads --file contacts.csv --yes          # create the new fields, 
   field with the suggested type: text, textarea, email, phone, url, number, date, datetime, boolean, select)
   or `skip` (an empty column).
 - Change the plan: `--map "E-mail Address=email"` (a column, by header or 0-based index, to a field key; a new
-  key is created with the suggested type), `--skip Notes` (repeatable), `--title "Full name"` (the column
-  used as each entry's title).
+  key is created with the suggested type), `--map "Website=website:url"` (also set the new field's type when
+  the suggestion is wrong, e.g. money as text, sales as number), `--skip Notes` (repeatable),
+  `--title "Full name"` (the column used as each entry's title). Check every suggested type in the preview.
 - Objects with pipelines: entries go to the default pipeline's first stage unless you pass `--pipeline` and
   `--stage`.
 - Rows go up in batches of up to 250 (`--batch`). The summary gives imported, skipped and failed counts and

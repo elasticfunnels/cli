@@ -383,6 +383,60 @@ export function registerCrmCommand(program: Command): void {
             log.success(`Deleted CRM entry ${entry}.`);
         });
 
+    entries.command('purge <entity>')
+        .description('Delete many entries of an entity: all of them, or those matching the filters. Prints the count first; deletes only with --yes.')
+        .option('--pipeline <id>', 'Only this pipeline.')
+        .option('--stage <id>', 'Only this stage.')
+        .option('--field-key <key>', 'Only entries where this field (with --field-value)…')
+        .option('--field-value <val>', '…has this value.')
+        .option('--q <text>', 'Only entries matching this search.')
+        .option('--dry-run', 'Count and list what would go; delete nothing.')
+        .option('--concurrency <n>', 'Parallel deletes (1-16).', '8')
+        .option('-y, --yes', 'Delete without the prompt (needed when not in a terminal).')
+        .option('--json', 'Print the result as JSON.')
+        .action(async (entity: string, opts: { pipeline?: string; stage?: string; fieldKey?: string; fieldValue?: string; q?: string; dryRun?: boolean; concurrency?: string; yes?: boolean; json?: boolean }) => {
+            const conc = intOpt(opts.concurrency ?? '8', '--concurrency', 1, 16);
+            if ((opts.fieldKey == null) !== (opts.fieldValue == null)) throw new CliError(ExitCode.Validation, '--field-key and --field-value go together.');
+            const { api, brandId } = await ctx();
+            const entityId = await resolveEntityId(api, brandId, entity);
+            const filters: Record<string, string | number> = {};
+            if (opts.pipeline) filters.pipeline_id = opts.pipeline;
+            if (opts.stage) filters.stage_id = opts.stage;
+            if (opts.fieldKey) filters.field_key = opts.fieldKey;
+            if (opts.fieldValue) filters.field_value = opts.fieldValue;
+            if (opts.q) filters.q = opts.q;
+            const filtered = Object.keys(filters).length > 0;
+            const { rows } = await fetchEntries(api, brandId, entityId, filters, 1, Infinity, !opts.json);
+            const ids = rows.map((e) => String(e.id));
+            const what = `${ids.length} entr${ids.length === 1 ? 'y' : 'ies'} of ${entity}${filtered ? ' matching the filters' : ' (all of them)'}`;
+            if (opts.dryRun || !ids.length) {
+                if (opts.json) { log.json({ ok: true, dry_run: !!opts.dryRun, count: ids.length, ids }); return; }
+                log.info(ids.length ? `Would delete ${what}.` : `Nothing to delete: 0 entries${filtered ? ' match the filters' : ''}.`);
+                return;
+            }
+            if (!opts.yes) {
+                if (!process.stdin.isTTY) throw new CliError(ExitCode.Validation, `This would delete ${what}. Pass --yes to go ahead (--dry-run to only count).`);
+                const { confirm } = await import('../utils/prompt');
+                if (!(await confirm(`Delete ${what}? This can't be undone.`, false))) throw new CliError(ExitCode.Validation, 'Aborted.');
+            }
+            let next = 0; let deleted = 0; const failed: Array<{ id: string; error: string }> = [];
+            const worker = async (): Promise<void> => {
+                while (next < ids.length) {
+                    const id = ids[next++];
+                    try { await api.deleteCrmEntry(brandId, id); deleted++; } catch (err) { failed.push({ id, error: err instanceof Error ? err.message : String(err) }); }
+                    if (!opts.json && (deleted + failed.length) % 250 === 0) log.detail(`…${deleted + failed.length} of ${ids.length}`);
+                }
+            };
+            await Promise.all(Array.from({ length: Math.min(conc, ids.length) }, worker));
+            if (opts.json) { log.json({ ok: failed.length === 0, deleted, failed }); }
+            else {
+                log.success(`Deleted ${deleted} of ${ids.length} entries.`);
+                for (const f of failed.slice(0, 10)) log.warn(`${f.id}: ${f.error}`);
+                if (failed.length > 10) log.detail(`…and ${failed.length - 10} more failures (use --json for all).`);
+            }
+            if (failed.length) throw new CliError(ExitCode.Error, `${failed.length} entr${failed.length === 1 ? 'y' : 'ies'} could not be deleted. Run the same command again to retry them.`);
+        });
+
     registerImport(crm);
 }
 
@@ -396,11 +450,13 @@ async function fetchEntries(api: ApiClient, brandId: number, entityId: number, f
     startPage: number, limit: number, progress: boolean): Promise<{ rows: CrmEntry[]; total: number; more: boolean; nextPage: number }> {
     const rows: CrmEntry[] = [];
     let page = startPage; let after: string | null = null; let total = 0; let more = false;
+    // Paging by page number can repeat rows when entries change mid-walk (or on an unstable sort); keep each id once.
+    const seen = new Set<string>(); let dupes = 0;
     for (;;) {
         const params: Record<string, string | number> = { ...filters, per_page: ENTRIES_PAGE };
         if (after != null) params.after = after; else params.page = page;
         const r = await api.listCrmEntriesPage(brandId, entityId, params);
-        rows.push(...r.rows);
+        for (const e of r.rows) { const id = String(e.id); if (!seen.has(id)) { seen.add(id); rows.push(e); } else dupes++; }
         total = Math.max(r.total, (startPage - 1) * ENTRIES_PAGE + rows.length); // ES caps the count at 10k unless asked
         // In cursor mode only next_after counts (page/last_page describe page 1 there).
         const hasNext = r.nextAfter != null || (after == null && r.page < r.lastPage);
@@ -408,12 +464,13 @@ async function fetchEntries(api: ApiClient, brandId: number, entityId: number, f
         if (!r.rows.length || !hasNext) { more = false; break; }
         if (r.nextAfter != null) after = r.nextAfter;
         else if (after == null && page * ENTRIES_PAGE >= ES_WINDOW) {
-            log.warn(`Stopped at row ${rows.length}: the server can't page past ${ES_WINDOW.toLocaleString('en-US')} rows yet. Narrow it with --stage, --pipeline or --q.`);
+            log.warn(`Stopped after page ${page} (${rows.length} entries): this server pages by number only up to row ${ES_WINDOW.toLocaleString('en-US')}. Narrow it with --stage, --pipeline or --q, or update the app.`);
             more = true; break;
         }
         page++;
         if (progress && limit === Infinity && page % 10 === 0) log.detail(`…${rows.length} of ${total}`);
     }
+    if (dupes) log.warn(`Dropped ${dupes} repeated row${dupes > 1 ? 's' : ''} (the same entry came back on two pages).`);
     const kept = rows.slice(0, limit);
     // The page holding the first row not shown (rows before it on that page repeat when --limit cut mid-page).
     const nextPage = Math.floor(((startPage - 1) * ENTRIES_PAGE + kept.length) / ENTRIES_PAGE) + 1;
@@ -435,7 +492,7 @@ function registerImport(crm: Command): void {
             + 'Suggests a field per column, creates the new fields, then imports the rows in batches.')
         .requiredOption('--file <path>', 'The .csv, .tsv, .txt or .xlsx file.')
         .option('--preview', 'Show the column plan (field per column, samples) and stop. Writes nothing.')
-        .option('--map <Column=key>', 'Map a column (header or 0-based index) to a field key; a new key is created with the suggested type. Repeatable.', collect)
+        .option('--map <Column=key>', 'Map a column (header or 0-based index) to a field key; a new key is created with the suggested type, or the one after ":" (Website=website:url). Repeatable.', collect)
         .option('--skip <column>', 'Leave a column out. Repeatable.', collect)
         .option('--title <column>', 'Column used as each entry\'s title (default: the server\'s pick, usually a name or email).')
         .option('--pipeline <id>', 'Pipeline id for the entries (default: the entity\'s default pipeline, when it has pipelines).')

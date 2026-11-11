@@ -25,7 +25,7 @@ export interface ImportPlan {
 }
 
 export interface PlanOverrides {
-    /** "Column=key" pairs: map a column to this field key (existing, or created with the suggested type). */
+    /** "Column=key" or "Column=key:type" pairs: map a column to this field key (existing, or created with the suggested or given type). */
     map?: string[];
     /** Columns to leave out. */
     skip?: string[];
@@ -34,6 +34,10 @@ export interface PlanOverrides {
 }
 
 const KEY_RE = /^[a-z][a-z0-9_]{0,127}$/;
+
+/** Field types an import can create (what the server's import coerces values into). */
+export const IMPORT_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'date', 'datetime', 'boolean', 'select', 'multiselect'];
+
 
 /** Find a column by its 0-based index or its header (case-insensitive). */
 export function findColumn(columns: ImportColumn[], ref: string): ImportColumn {
@@ -53,11 +57,20 @@ export function findColumn(columns: ImportColumn[], ref: string): ImportColumn {
 
 export function buildImportPlan(preview: ImportPreview, existingKeys: Set<string>, o: PlanOverrides = {}): ImportPlan {
     const mapTo = new Map<number, string>();
+    const typeOf = new Map<number, string>();
     for (const pair of o.map ?? []) {
         const eq = pair.lastIndexOf('=');
-        if (eq <= 0 || eq === pair.length - 1) throw new CliError(ExitCode.Validation, `--map takes "Column=field_key", got "${pair}".`);
+        if (eq <= 0 || eq === pair.length - 1) throw new CliError(ExitCode.Validation, `--map takes "Column=field_key" or "Column=field_key:type", got "${pair}".`);
         const col = findColumn(preview.columns, pair.slice(0, eq));
-        const key = pair.slice(eq + 1).trim();
+        let key = pair.slice(eq + 1).trim();
+        const colon = key.indexOf(':');
+        if (colon >= 0) {
+            const type = key.slice(colon + 1).trim().toLowerCase();
+            key = key.slice(0, colon).trim();
+            if (!IMPORT_TYPES.includes(type)) throw new CliError(ExitCode.Validation, `Unknown type "${type}" in --map "${pair}". Types: ${IMPORT_TYPES.join(', ')}.`);
+            if (existingKeys.has(key)) throw new CliError(ExitCode.Validation, `Field "${key}" already exists, so its type can't be set on import (--map "${pair}"). Drop ":${type}", or map to a new key.`);
+            typeOf.set(col.index, type);
+        }
         if (!KEY_RE.test(key)) throw new CliError(ExitCode.Validation, `Field key "${key}" must be lowercase letters, digits and _ and start with a letter.`);
         mapTo.set(col.index, key);
     }
@@ -72,7 +85,15 @@ export function buildImportPlan(preview: ImportPreview, existingKeys: Set<string
         const forced = mapTo.get(c.index);
         if (forced) {
             if (existingKeys.has(forced)) return { index: c.index, header: c.header, action: 'existing', key: forced, samples };
-            const field = { ...c.suggested, key: forced, label: c.suggested?.label || c.header };
+            const field: ImportSuggestion = { ...c.suggested, key: forced, label: c.suggested?.label || c.header };
+            const t = typeOf.get(c.index);
+            if (t && t !== field.type) {
+                field.type = t;
+                // Choice types list the column's distinct values; the server adds any it meets later.
+                field.options = (t === 'select' || t === 'multiselect')
+                    ? (c.choices ?? []).map((v) => ({ label: v, value: v }))
+                    : null;
+            }
             return { index: c.index, header: c.header, action: 'create', key: forced, field, samples };
         }
         if (c.action === 'skip') return { index: c.index, header: c.header, action: 'skip', key: null, samples };

@@ -7,7 +7,7 @@ import { CliError, ExitCode } from '../utils/exit';
 import { log } from '../utils/log';
 import { loadRuntime } from '../utils/store';
 import { formatRelative, renderTable } from '../utils/format';
-import { IMPORT_MAX_CHUNK, ImportPreview, importRows, previewImport } from '../api/crmImportApi';
+import { BULK_DELETE_MAX, bulkDeleteEntries, IMPORT_MAX_CHUNK, ImportPreview, importRows, previewImport } from '../api/crmImportApi';
 import { buildImportPlan, ImportPlan } from '../models/crmImportPlan';
 import { addInputOptions, JsonInputOpts, loadInputBase, maybeGenerateSkeleton, mergeDefined } from '../utils/jsonInput';
 
@@ -420,6 +420,15 @@ export function registerCrmCommand(program: Command): void {
                 if (!(await confirm(`Delete ${what}? This can't be undone.`, false))) throw new CliError(ExitCode.Validation, 'Aborted.');
             }
             let next = 0; let deleted = 0; const failed: Array<{ id: string; error: string }> = [];
+            // The bulk endpoint first (500 a call); servers without it get one call per entry.
+            let bulk = true;
+            while (bulk && next < ids.length) {
+                const chunk = ids.slice(next, next + BULK_DELETE_MAX);
+                const n = await bulkDeleteEntries(api, brandId, entityId, chunk);
+                if (n == null) { bulk = false; break; }
+                deleted += n; next += chunk.length;
+                if (!opts.json && ids.length > BULK_DELETE_MAX) log.detail(`…${next} of ${ids.length}`);
+            }
             const worker = async (): Promise<void> => {
                 while (next < ids.length) {
                     const id = ids[next++];
@@ -428,6 +437,8 @@ export function registerCrmCommand(program: Command): void {
                 }
             };
             await Promise.all(Array.from({ length: Math.min(conc, ids.length) }, worker));
+            const missed = ids.length - deleted - failed.length;
+            if (bulk && missed > 0 && !opts.json) log.detail(`${missed} were already gone or not in ${entity}.`);
             if (opts.json) { log.json({ ok: failed.length === 0, deleted, failed }); }
             else {
                 log.success(`Deleted ${deleted} of ${ids.length} entries.`);
@@ -482,7 +493,7 @@ async function fetchEntries(api: ApiClient, brandId: number, entityId: number, f
 const collect = (v: string, prev: string[] = []): string[] => [...prev, v];
 
 interface ImportOpts {
-    file: string; preview?: boolean; map?: string[]; skip?: string[]; title?: string;
+    file: string; preview?: boolean; map?: string[]; skip?: string[]; title?: string; upsertBy?: string;
     pipeline?: string; stage?: string; offset?: string; batch?: string; yes?: boolean; json?: boolean;
 }
 
@@ -494,6 +505,7 @@ function registerImport(crm: Command): void {
         .option('--preview', 'Show the column plan (field per column, samples) and stop. Writes nothing.')
         .option('--map <Column=key>', 'Map a column (header or 0-based index) to a field key; a new key is created with the suggested type, or the one after ":" (Website=website:url). Repeatable.', collect)
         .option('--skip <column>', 'Leave a column out. Repeatable.', collect)
+        .option('--upsert-by <key>', 'Merge on this field (e.g. email): a row whose value matches an entry updates it (filled cells overwrite, empty cells keep, tags are unioned) instead of adding a new one. Also merges repeats within the file.')
         .option('--title <column>', 'Column used as each entry\'s title (default: the server\'s pick, usually a name or email).')
         .option('--pipeline <id>', 'Pipeline id for the entries (default: the entity\'s default pipeline, when it has pipelines).')
         .option('--stage <id>', 'Stage id (default: the first stage of that pipeline).')
@@ -517,6 +529,7 @@ function registerImport(crm: Command): void {
             const existingKeys = new Set(existing.map((f) => String(f.key)));
             const plan = buildImportPlan(preview, existingKeys, { map: opts.map, skip: opts.skip, title: opts.title });
             const target = await importTarget(api, brandId, entityId, opts);
+            const upsertBy = opts.upsertBy != null ? upsertKey(preview, plan, opts.upsertBy) : undefined;
 
             if (opts.preview) {
                 if (opts.json) { log.json({ file: preview.file_name, rows: preview.row_count, title_column: plan.titleColumn, pipeline_id: target.pipeline_id ?? null, stage_id: target.stage_id ?? null, columns: plan.columns, create: plan.create, mapping: plan.mapping }); return; }
@@ -544,7 +557,13 @@ function registerImport(crm: Command): void {
                 if (!opts.json) log.info(`Created field ${f.key} (${f.type}).`);
             }
 
-            const totals = { imported: 0, skipped: 0, failed: 0 };
+            if (upsertBy) {
+                // An older server ignores upsert_by and would add duplicates: probe past the last row (writes nothing).
+                const probe = await importRows(api, brandId, entityId, { file_hash: preview.file_hash, mapping: plan.mapping, ...target, upsert_by: upsertBy, offset: preview.row_count, limit: 1 });
+                if (probe.updated == null) throw new CliError(ExitCode.Validation, 'This server can\'t merge on import yet (no upsert_by support). No rows were imported (new fields were created; a rerun reuses them). Drop --upsert-by, or wait for the app update.');
+                if (!opts.json) log.detail(`Merging on ${upsertBy}: rows that match an existing entry update it.`);
+            }
+            const totals = { imported: 0, updated: 0, skipped: 0, failed: 0 };
             const errors: Array<{ row: number; message: string }> = [];
             let offset = offset0;
             for (;;) {
@@ -552,26 +571,36 @@ function registerImport(crm: Command): void {
                 try {
                     r = await importRows(api, brandId, entityId, {
                         file_hash: preview.file_hash, mapping: plan.mapping, title_column: plan.titleColumn,
-                        ...target, offset, limit: batch,
+                        ...target, ...(upsertBy ? { upsert_by: upsertBy } : {}), offset, limit: batch,
                     });
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     throw new CliError(err instanceof CliError ? err.code : ExitCode.Error,
                         `${msg}\nImported ${totals.imported} so far. Rows before ${offset} are in; resume with: ef crm import ${entity} --file ${opts.file} --offset ${offset}${opts.map?.length ? ' (same --map/--skip)' : ''} --yes`);
                 }
-                totals.imported += r.imported; totals.skipped += r.skipped; totals.failed += r.failed;
+                totals.imported += r.imported; totals.updated += r.updated ?? 0; totals.skipped += r.skipped; totals.failed += r.failed;
                 errors.push(...r.errors);
-                if (!opts.json) log.detail(`rows ${offset + 1}-${Math.min(r.next_offset, r.total)} of ${r.total}: ${r.imported} imported, ${r.skipped} skipped, ${r.failed} failed`);
+                if (!opts.json) log.detail(`rows ${offset + 1}-${Math.min(r.next_offset, r.total)} of ${r.total}: ${r.imported} imported, ${upsertBy ? `${r.updated ?? 0} updated, ` : ''}${r.skipped} skipped, ${r.failed} failed`);
                 if (r.done || r.next_offset <= offset) break;
                 offset = r.next_offset;
             }
 
             const result = { ok: totals.failed === 0, entity_id: entityId, file: preview.file_name, rows: preview.row_count, offset: offset0, ...totals, fields_created: created, errors };
             if (opts.json) { log.json(result); return; }
-            log.success(`Imported ${totals.imported} entr${totals.imported === 1 ? 'y' : 'ies'} into ${entity} (${totals.skipped} skipped, ${totals.failed} failed).`);
+            log.success(`Imported ${totals.imported} entr${totals.imported === 1 ? 'y' : 'ies'} into ${entity}${upsertBy ? `, updated ${totals.updated}` : ''} (${totals.skipped} skipped, ${totals.failed} failed).`);
             for (const e of errors.slice(0, 20)) log.warn(`row ${e.row}: ${e.message}`);
             if (errors.length > 20) log.detail(`…and ${errors.length - 20} more row errors (use --json for all).`);
         });
+}
+
+/** --upsert-by takes a mapped field key, or a column header that maps to one. */
+function upsertKey(preview: ImportPreview, plan: ImportPlan, raw: string): string {
+    const keys = plan.mapping.map((m) => m.key);
+    if (keys.includes(raw)) return raw;
+    const col = preview.columns.find((c) => (c.header ?? '').trim().toLowerCase() === raw.trim().toLowerCase());
+    const viaCol = col ? plan.mapping.find((m) => m.index === col.index)?.key : undefined;
+    if (viaCol) return viaCol;
+    throw new CliError(ExitCode.Validation, `--upsert-by "${raw}" is not an imported field. Imported: ${keys.join(', ')}.`);
 }
 
 function intOpt(raw: string, flag: string, min: number, max?: number): number {

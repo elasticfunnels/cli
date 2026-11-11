@@ -18,8 +18,10 @@ is a plain table. Entity arguments take an id or a slug.
   create). Run it for real with `--yes` only after they agree.
 - Import is not idempotent: running it twice adds every row twice. If a run stopped, resume with the
   `--offset` it printed, never by starting again from 0.
-- Import does not merge: rows whose email already exists become second entries. Before re-importing a list,
-  either clear the object (below) or merge the file by email yourself first, and say which you did.
+- Re-importing or adding to a list: use `--upsert-by email`. A row whose email matches an entry updates it
+  (filled cells overwrite, empty cells keep the old value, tags are unioned), and repeats within the file
+  merge. Without it, every row becomes a new entry. If the CLI says the server can't merge yet, stop and
+  tell the user rather than importing duplicates.
 - Deleting many entries: `ef crm entries purge <entity> [filters] --dry-run` first, show the user the count,
   then the same with `--yes` only after they agree. It can't be undone.
 - Keep contact data out of chat and files unless the user asked for it. Show counts and the plan, not rows.

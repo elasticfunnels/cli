@@ -42,12 +42,16 @@ export interface ImportRowsBody {
     title_column?: number | null;
     pipeline_id?: number;
     stage_id?: number;
+    /** Field key to merge on (app c02a56e76): a match updates that entry instead of creating one. */
+    upsert_by?: string;
     offset: number;
     limit: number;
 }
 
 export interface ImportRowsResult {
     imported: number;
+    /** Entries merged into by upsert_by; null when the server didn't report it (no upsert support). */
+    updated: number | null;
     skipped: number;
     failed: number;
     errors: Array<{ row: number; message: string }>;
@@ -94,6 +98,7 @@ export async function importRows(api: ApiClient, brandId: number, entityId: numb
     const d = res.data as Partial<ImportRowsResult>;
     return {
         imported: Number(d.imported ?? 0),
+        updated: typeof d.updated === 'number' ? d.updated : null,
         skipped: Number(d.skipped ?? 0),
         failed: Number(d.failed ?? 0),
         errors: Array.isArray(d.errors) ? d.errors : [],
@@ -101,4 +106,13 @@ export async function importRows(api: ApiClient, brandId: number, entityId: numb
         total: Number(d.total ?? 0),
         done: d.done === true,
     };
+}
+
+/** Bulk delete (app c02a56e76): up to 500 ids per call. Returns null when this server has no such route. */
+export const BULK_DELETE_MAX = 500;
+export async function bulkDeleteEntries(api: ApiClient, brandId: number, entityId: number, ids: string[]): Promise<number | null> {
+    const res = await api.request('POST', `/api/brands/${brandId}/crm/entities/${entityId}/entries/bulk-delete`, { data: { ids } });
+    if (res.status === 404 || res.status === 405) return null;
+    if (res.status >= 400) throw httpError('Bulk delete CRM entries', res);
+    return Number((res.data as { deleted?: unknown })?.deleted ?? 0);
 }

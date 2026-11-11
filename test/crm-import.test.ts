@@ -53,7 +53,7 @@ test('plan: rejects two columns on one key, unknown columns and bad keys', () =>
 
 interface Mock { url: string; close: () => Promise<void>; previewBodies: string[]; fields: any[]; rows: any[] }
 
-function startMock(opts: { pipelines?: unknown[]; failAtOffset?: number } = {}): Promise<Mock> {
+function startMock(opts: { pipelines?: unknown[]; failAtOffset?: number; upsert?: boolean } = {}): Promise<Mock> {
     const previewBodies: string[] = []; const fields: any[] = []; const rows: any[] = [];
     return new Promise((resolve) => {
         const server = http.createServer((req, res) => {
@@ -73,7 +73,9 @@ function startMock(opts: { pipelines?: unknown[]; failAtOffset?: number } = {}):
                     const p = JSON.parse(b); rows.push(p);
                     if (opts.failAtOffset != null && p.offset === opts.failAtOffset) return json(500, { message: 'boom' });
                     const next = Math.min(p.offset + p.limit, 5);
-                    return json(200, { imported: next - p.offset, skipped: 0, failed: 0, errors: [], next_offset: next, total: 5, done: next >= 5 });
+                    const n = Math.max(0, next - p.offset);
+                    if (opts.upsert && p.upsert_by) return json(200, { imported: n ? 1 : 0, updated: n ? n - 1 : 0, skipped: 0, failed: 0, errors: [], next_offset: Math.max(next, p.offset), total: 5, done: p.offset + p.limit >= 5 });
+                    return json(200, { imported: n, skipped: 0, failed: 0, errors: [], next_offset: next, total: 5, done: next >= 5 });
                 }
                 json(404, { message: `no route ${m} ${url}` });
             });
@@ -185,4 +187,43 @@ test('plan: --map Column=key:type sets the type of a new field; choice types get
     assert.deepEqual(q.create.find((f) => f.key === 'plan')?.options, [{ label: 'Pro', value: 'Pro' }, { label: 'Basic', value: 'Basic' }]);
     assert.throws(() => buildImportPlan(preview(), new Set(['email']), { map: ['Plan=plan:money'] }), /Unknown type "money"/);
     assert.throws(() => buildImportPlan(preview(), new Set(['email']), { map: ['Email=email:text'] }), /already exists/);
+});
+
+test('import --upsert-by probes past the last row, then sends upsert_by and reports updated', async () => {
+    const mock = await startMock({ upsert: true });
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['crm', 'import', 'leads', '--file', 'contacts.csv', '--upsert-by', 'Email', '--batch', '2', '--yes', '--json']);
+        assert.equal(r.code, 0, `stderr=${r.stderr}`);
+        assert.equal(mock.rows[0].offset, 5, 'probe at row_count');
+        assert.equal(mock.rows[0].upsert_by, 'email', 'header resolved to the mapped key');
+        assert.ok(mock.rows.slice(1).every((x) => x.upsert_by === 'email'));
+        assert.deepEqual(mock.rows.slice(1).map((x) => x.offset), [0, 2, 4]);
+        const out = JSON.parse(r.stdout);
+        assert.equal(out.imported, 3); assert.equal(out.updated, 2);
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('import --upsert-by refuses on a server without upsert support and imports nothing', async () => {
+    const mock = await startMock();
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['crm', 'import', 'leads', '--file', 'contacts.csv', '--upsert-by', 'email', '--yes']);
+        assert.notEqual(r.code, 0);
+        assert.match(r.stderr, /can't merge on import yet/);
+        assert.equal(mock.rows.length, 1, 'only the probe');
+        assert.equal(mock.rows[0].offset, 5);
+        assert.deepEqual(mock.fields.map((f) => f.key), ['name', 'plan'], 'fields come first so the probe mapping is valid');
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('import --upsert-by an unmapped key is refused before any write', async () => {
+    const mock = await startMock({ upsert: true });
+    const root = await setupProject(mock.url);
+    try {
+        const r = await runEf(root, ['crm', 'import', 'leads', '--file', 'contacts.csv', '--upsert-by', 'phone', '--yes']);
+        assert.notEqual(r.code, 0);
+        assert.match(r.stderr, /not an imported field/);
+        assert.equal(mock.rows.length, 0);
+    } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
 });

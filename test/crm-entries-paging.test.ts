@@ -171,7 +171,7 @@ test('entries purge: counts, refuses without --yes, deletes every matching id wi
         if (req.method === 'GET' && /\/crm\/entities$/.test(u.pathname)) return json([{ id: 5, slug: 'leads' }]);
         if (req.method === 'GET') { lists.push(u.searchParams); return json({ data: Array.from({ length: 30 }, (_, i) => ({ id: i % 3 ? `e${i}` : `-x${i}` })), current_page: 1, last_page: 1, total: 30 }); }
         if (req.method === 'DELETE') { deleted.push(decodeURIComponent(u.pathname.split('/').pop()!)); return json({ ok: true }); }
-        json({});
+        res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"message":"route not found"}'); // no bulk route: an older server
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
     const root = await setup(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
@@ -189,5 +189,32 @@ test('entries purge: counts, refuses without --yes, deletes every matching id wi
         assert.equal(JSON.parse(yes.stdout).deleted, 30);
         assert.equal(new Set(deleted).size, 30);
         assert.ok(deleted.includes('-x0'));
+    } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('entries purge uses bulk-delete in chunks of 500 when the server has it', async () => {
+    const bulkCalls: string[][] = []; let singles = 0;
+    const server = http.createServer((req, res) => {
+        let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => {
+            const u = new URL(req.url || '/', 'http://x');
+            const json = (p: unknown) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(p)); };
+            if (req.method === 'GET') {
+                const page = parseInt(u.searchParams.get('page') || '1', 10);
+                const data = Array.from({ length: 100 }, (_, i) => ({ id: `e${(page - 1) * 100 + i}` })).filter((_, i) => (page - 1) * 100 + i < 1200);
+                return json({ data, current_page: page, last_page: 12, total: 1200 });
+            }
+            if (req.method === 'POST' && u.pathname.endsWith('/entries/bulk-delete')) { const ids = JSON.parse(b).ids as string[]; bulkCalls.push(ids); return json({ deleted: ids.length }); }
+            if (req.method === 'DELETE') { singles++; return json({}); }
+            json({});
+        });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const root = await setup(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    try {
+        const r = await runEf(root, ['crm', 'entries', 'purge', '5', '--yes', '--json']);
+        assert.equal(r.code, 0, r.stderr);
+        assert.equal(JSON.parse(r.stdout).deleted, 1200);
+        assert.deepEqual(bulkCalls.map((c) => c.length), [500, 500, 200]);
+        assert.equal(singles, 0);
     } finally { await new Promise<void>((r) => server.close(() => r())); await fs.promises.rm(root, { recursive: true, force: true }); }
 });

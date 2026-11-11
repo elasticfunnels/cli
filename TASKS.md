@@ -3,6 +3,7 @@
 The one list of work for this repo. Add before you start, tick only what is verified (test, live check), with the commit.
 
 ## Waiting on the owner
+- [ ] T1111-7 2026-11-11 Decide: re-enable `ef emails` (template pull/push, disabled since v0.5.0 in src/extension.ts:53-58 because email editing needed a raw code path, not just the GrapesJS builder)? Today email bodies go through `ef campaigns email --html-file`. Raised by the CRM tutorial session · session 7f94c26c
 - [ ] T1111-6 2026-11-11 Publish 0.28.6 to npm (`--crm-filter` T1111-5, first-name note in ef-campaigns; 0.28.5 was tagged but not published): tag v0.28.6 on origin/main; `npm whoami` first (the token in ~/.npmrc expired once today), then `npm run release:publish -- --otp=<code>` in ~/Work/elasticfunnels-cli · session 7f94c26c
 - [ ] 2026-10-22 Publish 0.23.0 to npm (replaces the 0.22.1 item: 0.23.0 includes the 10-20 security fixes and `ef domains move`): tag v0.23.0 (1b608e1) is on origin/main; run `npm run release:publish -- --otp=<code>` in ~/Work/elasticfunnels-cli on main (needs the npm OTP; an agent session is not allowed to publish). Then bump the runner's @elasticfunnels/cli to ^0.23.0 and redeploy it. · session 46f555cd (0.22.1 item from 2026-10-21) Also waiting on a release: `ef context flag` / `ef context checks` (fb09f0c, after the v0.23.0 tag) ship in the next version, not in 0.23.0; tag a new version from main to include them. Also `ef push` link warnings (2026-10-22, session fffbb5ed). The runner does not need them (it posts the check itself). · session 26bf2dbf
 

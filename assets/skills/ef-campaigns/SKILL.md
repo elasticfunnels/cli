@@ -41,7 +41,10 @@ ef campaigns email stats 17                           # sent, delivered, opens, 
 - Audiences: `--audience <segment id>`, `--all-customers`, `--emails a@x.com,b@y.com` or
   `--emails-file list.txt`, `--crm-entity <id>` (add `--crm-filter key=value`, repeatable, to send to only
   the matching entries; a tag list matches any of its items). Live (real-time) segments cannot be used.
-- Merge tags: `{{ customer.first_name }}`, `{{ customer.name }}`, `{{ customer.email }}` everywhere. With a
+- Merge tags: `{{ customer.first_name }}`, `{{ customer.name }}`, `{{ customer.email }}` everywhere. They fill
+  for every audience, CRM lists included: there the first name comes from a `first_name` field, else from
+  `name` / `full_name` (today that is the WHOLE name, so "Hi {{ customer.first_name }}" reads "Hi Ann Lee";
+  import a separate first-name column, or use `{{ customer.name }}`). With a
   CRM audience also `{{ entry.<field key> }}`, `{{ entry.id }}`, `{{ entry.title }}` (lists render "a, b"),
   e.g. `https://brand.com/?aff_id={{ entry.affiliate_id }}`. One email per address: when several entries
   share an email, the OLDEST matching entry fills `entry.*`, so filter to one entry per person when the link

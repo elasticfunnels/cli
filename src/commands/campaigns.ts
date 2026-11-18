@@ -55,6 +55,102 @@ interface EmailFieldOpts {
     htmlFile?: string; cssFile?: string;
 }
 
+// ── Sending pace (app T1117-1) ──────────────────────────────────────────
+// A campaign's pacing rules; the strictest wins. Each flag takes "off" to clear just that rule; --no-pacing
+// clears them all (full speed). The server validates and cleans the result.
+
+export interface PacingOpts {
+    perHour?: string; spreadHours?: string; sendDays?: string; sendHours?: string; timezone?: string;
+    dailyCap?: string; dailyGrowth?: string; pacing?: boolean;
+}
+
+export type Pacing = {
+    per_hour: number | null; spread_hours: number | null; days: number[] | string | null; start_time: string | null; end_time: string | null;
+    timezone: string | null; daily_cap: number | null; daily_growth_pct: number | null;
+};
+
+const PACING_EMPTY: Pacing = { per_hour: null, spread_hours: null, days: null, start_time: null, end_time: null, timezone: null, daily_cap: null, daily_growth_pct: null };
+
+export function pacingOptions(cmd: Command): Command {
+    return cmd
+        .option('--per-hour <n>', 'Send at most n emails an hour, spread evenly ("off" to clear).')
+        .option('--spread-hours <n>', 'Spread the whole send over n sending hours ("off" to clear).')
+        .option('--send-days <days>', 'Only send on these days: mon-fri, sat,sun or 1-5 (1 = Monday; "off" = every day).')
+        .option('--send-hours <from-to>', 'Only send between these times, e.g. 09:00-17:00; 22:00-06:00 runs overnight ("off" = any time).')
+        .option('--timezone <tz>', 'Timezone for days and hours, e.g. America/New_York ("off" = the brand timezone).')
+        .option('--daily-cap <n>', 'Send at most n emails a day ("off" to clear).')
+        .option('--daily-growth <pct>', 'Raise the daily cap by pct% each day, for domain warm-up (needs --daily-cap; "off" to clear).')
+        .option('--no-pacing', 'Clear every pacing rule: send as fast as the sending account allows.');
+}
+
+function off(v: string): boolean { return /^(off|none|no|0)$/i.test(v.trim()); }
+
+function posInt(v: string, flag: string, max: number): number | null {
+    if (off(v)) return null;
+    const x = Number(v);
+    if (!Number.isInteger(x) || x < 1 || x > max) throw new CliError(ExitCode.Validation, `${flag} takes a whole number from 1 to ${max} (or "off"), got "${v}".`);
+    return x;
+}
+
+/**
+ * The pacing to send for these flags, merged over the campaign's current rules: undefined when no pacing flag
+ * was given, null to clear everything.
+ */
+export function pacingFromOpts(opts: PacingOpts, current?: Partial<Pacing> | null): Pacing | null | undefined {
+    const given = ['perHour', 'spreadHours', 'sendDays', 'sendHours', 'timezone', 'dailyCap', 'dailyGrowth'].filter((k) => (opts as any)[k] != null);
+    if (opts.pacing === false) {
+        if (given.length) throw new CliError(ExitCode.Validation, '--no-pacing clears every rule; drop the other pacing flags.');
+        return null;
+    }
+    if (!given.length) return undefined;
+    const p: Pacing = { ...PACING_EMPTY, ...(current ?? {}) };
+    if (opts.perHour != null) p.per_hour = posInt(opts.perHour, '--per-hour', 1_000_000);
+    if (opts.spreadHours != null) p.spread_hours = posInt(opts.spreadHours, '--spread-hours', 720);
+    if (opts.dailyCap != null) p.daily_cap = posInt(opts.dailyCap, '--daily-cap', 10_000_000);
+    if (opts.dailyGrowth != null) p.daily_growth_pct = posInt(opts.dailyGrowth, '--daily-growth', 1000);
+    if (opts.sendDays != null) p.days = off(opts.sendDays) ? null : opts.sendDays.trim();
+    if (opts.timezone != null) p.timezone = off(opts.timezone) ? null : opts.timezone.trim();
+    if (opts.sendHours != null) {
+        if (off(opts.sendHours)) {
+            p.start_time = p.end_time = null;
+        } else {
+            const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(opts.sendHours.trim());
+            if (!m) throw new CliError(ExitCode.Validation, `--send-hours takes HH:MM-HH:MM, e.g. 09:00-17:00 (got "${opts.sendHours}").`);
+            p.start_time = m[1].padStart(5, '0');
+            p.end_time = m[2].padStart(5, '0');
+        }
+    }
+    if (p.daily_growth_pct && !p.daily_cap) throw new CliError(ExitCode.Validation, '--daily-growth needs a daily cap (--daily-cap <n>).');
+    // A timezone alone is not a rule: with nothing else set the campaign runs at full speed.
+    return Object.entries(p).some(([k, v]) => k !== 'timezone' && v != null) ? p : null;
+}
+
+const DAY = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/** One line for a campaign's pacing rules. */
+export function describePacing(p: Partial<Pacing> | null | undefined): string {
+    if (!p) return 'full speed (no pacing rules)';
+    const parts: string[] = [];
+    if (p.per_hour) parts.push(`up to ${p.per_hour}/hour`);
+    if (p.spread_hours) parts.push(`spread over ${p.spread_hours} sending hours`);
+    if (Array.isArray(p.days) && p.days.length) parts.push(`on ${p.days.map((d) => DAY[d] ?? d).join(', ')}`);
+    if (p.start_time && p.end_time) parts.push(`between ${p.start_time} and ${p.end_time}`);
+    if (p.daily_cap) parts.push(`max ${p.daily_cap}/day${p.daily_growth_pct ? `, +${p.daily_growth_pct}% a day` : ''}`);
+    if (p.timezone) parts.push(`(${p.timezone})`);
+    return parts.join('; ') || 'full speed (no pacing rules)';
+}
+
+/** Where a paced campaign stands, from the server's pacing_status. */
+export function describePacingStatus(s: any): string {
+    if (!s) return '';
+    const when = s.next_open_at ? ` until ${s.next_open_at}` : '';
+    if (s.state === 'outside_window') return s.next_open_at ? `waiting: outside the sending days/hours${when}` : 'waiting: the sending days/hours never open';
+    if (s.state === 'daily_cap_reached') return `waiting: today's cap of ${s.daily_cap} reached${when}`;
+    const rate = s.per_hour ? ` at ~${s.per_hour}/hour` : '';
+    const eta = s.estimated_done_at ? `, last ones around ${s.estimated_done_at}` : '';
+    return `sending${rate}; ${s.waiting ?? 0} waiting their turn${eta}`;
+}
+
 function emailFieldOptions(cmd: Command): Command {
     return cmd
         .option('--name <name>', 'Internal campaign name.')
@@ -174,14 +270,16 @@ function registerEmail(parent: Command): void {
             log.json(await emailCampaigns.get(api, brandId, numericId(id, 'campaign')));
         });
 
-    emailFieldOptions(em.command('create'))
-        .description('Create a draft email campaign.')
+    pacingOptions(emailFieldOptions(em.command('create')))
+        .description('Create a draft email campaign. Without pacing flags it starts with the brand default pace.')
         .option('--content <source>', 'Starting content: default | blank | template | campaign.', 'default')
         .option('--content-id <id>', 'Template or campaign id for --content template|campaign.')
         .option('--json', 'Print the campaign as JSON.')
-        .action(async (opts: EmailFieldOpts & { content: string; contentId?: string; json?: boolean }) => {
+        .action(async (opts: EmailFieldOpts & PacingOpts & { content: string; contentId?: string; json?: boolean }) => {
             const { api, brandId } = await ctx();
             const data = await emailFields(opts);
+            const pacing = pacingFromOpts(opts);
+            if (pacing !== undefined) data.pacing = pacing;
             data.content_source = opts.content;
             if (opts.contentId != null) data.content_source_id = numericId(opts.contentId, 'content source');
             const res: any = await emailCampaigns.create(api, brandId, data);
@@ -192,15 +290,19 @@ function registerEmail(parent: Command): void {
             printProblems(campaign.problems);
         });
 
-    const setCmd = (name: string, desc: string) => emailFieldOptions(em.command(`${name} <id>`))
+    const setCmd = (name: string, desc: string) => pacingOptions(emailFieldOptions(em.command(`${name} <id>`)))
         .description(desc)
         .option('--content <source>', 'Reset content from: default | blank | template | campaign.')
         .option('--content-id <id>', 'Template or campaign id for --content.')
         .option('--json', 'Print the campaign as JSON.')
-        .action(async (id: string, opts: EmailFieldOpts & { content?: string; contentId?: string; json?: boolean }) => {
+        .action(async (id: string, opts: EmailFieldOpts & PacingOpts & { content?: string; contentId?: string; json?: boolean }) => {
             const { api, brandId } = await ctx();
             const cid = numericId(id, 'campaign');
             const data = await emailFields(opts);
+            if (pacingFromOpts(opts) !== undefined) {
+                const current: any = await emailCampaigns.get(api, brandId, cid);
+                data.pacing = pacingFromOpts(opts, current?.pacing);
+            }
             let campaign: any = Object.keys(data).length ? (await emailCampaigns.update(api, brandId, cid, data)) : null;
             if (opts.content != null) {
                 const body: Record<string, unknown> = { source: opts.content };
@@ -210,15 +312,45 @@ function registerEmail(parent: Command): void {
             campaign = await emailCampaigns.get(api, brandId, cid);
             const wroteHtml = await saveHtml(api, brandId, campaign, opts);
             if (!Object.keys(data).length && opts.content == null && !wroteHtml) {
-                throw new CliError(ExitCode.Validation, 'Nothing to change: pass a field such as --subject, --audience or --html-file.');
+                throw new CliError(ExitCode.Validation, 'Nothing to change: pass a field such as --subject, --audience, --per-hour or --html-file.');
             }
             if (wroteHtml) campaign = await emailCampaigns.get(api, brandId, cid);
             if (opts.json) { log.json(campaign); return; }
             log.success(`Updated email campaign #${cid}.`);
             printProblems(campaign.problems);
         });
-    setCmd('set', 'Change subject, sender, audience or content of a draft.');
+    setCmd('set', 'Change subject, sender, audience, pace or content of a draft (pace of a sending campaign: ef campaigns email pace).');
     setCmd('audience', 'Set who receives a draft (--audience <segment id>, --all-customers, --emails, --crm-entity).');
+
+    pacingOptions(em.command('pace <id>'))
+        .description('Show or change how fast a campaign sends. Works on drafts, scheduled and sending campaigns; without flags it prints the rules and where the send stands.')
+        .option('--json', 'Print the campaign\'s pacing and pacing_status as JSON.')
+        .action(async (id: string, opts: PacingOpts & { json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const cid = numericId(id, 'campaign');
+            let c: any = await emailCampaigns.get(api, brandId, cid);
+            const next = pacingFromOpts(opts, c.pacing);
+            if (next !== undefined) c = await emailCampaigns.pacing(api, brandId, cid, next);
+            if (opts.json) { log.json({ id: cid, status: c.status, pacing: c.pacing ?? null, pacing_status: c.pacing_status ?? null }); return; }
+            if (next !== undefined) log.success(`Campaign #${cid} pace: ${describePacing(c.pacing)}.`);
+            else log.info(`#${cid} [${n(c.status)}] pace: ${describePacing(c.pacing)}`);
+            const st = describePacingStatus(c.pacing_status);
+            if (st) log.detail(st);
+        });
+
+    pacingOptions(em.command('pace-default'))
+        .description('Show or change the brand\'s default pace, which new campaigns start with.')
+        .option('--json', 'Print the default as JSON.')
+        .action(async (opts: PacingOpts & { json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const s: any = await emailCampaigns.settings(api, brandId);
+            let pacing = s.default_pacing ?? null;
+            const next = pacingFromOpts(opts, pacing);
+            if (next !== undefined) pacing = ((await emailCampaigns.updateSettings(api, brandId, { default_pacing: next })) as any).default_pacing ?? null;
+            if (opts.json) { log.json({ default_pacing: pacing }); return; }
+            if (next !== undefined) log.success(`Default pace for new campaigns: ${describePacing(pacing)}.`);
+            else log.info(`Default pace for new campaigns: ${describePacing(pacing)}${s.timezone ? ` (brand timezone ${s.timezone})` : ''}`);
+        });
 
     em.command('audience-preview <id>').alias('count')
         .description('How many people the campaign would reach now, after suppressions and consent (sample masked without contacts.view_pii).')
@@ -303,6 +435,7 @@ function registerEmail(parent: Command): void {
             const [c, report]: any[] = await Promise.all([emailCampaigns.get(api, brandId, cid), emailCampaigns.report(api, brandId, cid)]);
             if (opts.json) { log.json({ campaign: c, report }); return; }
             log.info(`#${cid} ${n(c.name)} [${n(c.status)}]`);
+            if (c.pacing) log.detail(`pace: ${describePacing(c.pacing)}${c.pacing_status ? ` · ${describePacingStatus(c.pacing_status)}` : ''}`);
             log.raw(renderTable({
                 head: ['recipients', 'sent', 'delivered', 'failed', 'bounced', 'opened', 'clicked', 'unsub', 'complaints'],
                 rows: [[n(c.recipients_total), n(c.sent_count), n(c.delivered_count), n(c.failed_count), n(c.bounced_count),

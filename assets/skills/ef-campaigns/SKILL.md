@@ -36,6 +36,7 @@ ef campaigns email test 17 --to me@acme.com           # required before launch
 ef campaigns email schedule 17 --at 2026-11-03T15:00:00Z   # prints the count, needs --yes
 ef campaigns email launch 17                          # send now, prints the count, needs --yes
 ef campaigns email stats 17                           # sent, delivered, opens, clicks, bounces, unsubscribes
+ef campaigns email pace 17 --per-hour 500             # send slowly (see below)
 ```
 
 - Audiences: `--audience <segment id>`, `--all-customers`, `--emails a@x.com,b@y.com` or
@@ -57,6 +58,25 @@ ef campaigns email stats 17                           # sent, delivered, opens, 
   schedule must be more than a minute ahead. Test sends are limited to 10 an hour.
 - `unschedule` puts a scheduled campaign back to draft; `cancel` stops one that is scheduled or sending.
   Only drafts can be edited.
+
+**Sending slowly (pacing).** Every rule is optional; when several are set the strictest wins. Flags work on
+`create`, `set` (drafts) and `pace <id>` (drafts, scheduled AND sending campaigns):
+
+```bash
+ef campaigns email pace 17                                   # the rules and where the send stands
+ef campaigns email pace 17 --per-hour 500                    # at most 500 an hour, spread evenly
+ef campaigns email pace 17 --spread-hours 24                 # the whole list over 24 sending hours
+ef campaigns email pace 17 --send-days mon-fri --send-hours 09:00-17:00 --timezone America/New_York
+ef campaigns email pace 17 --daily-cap 500 --daily-growth 20 # warm-up: 500, 600, 720... a day
+ef campaigns email pace 17 --send-days off                   # clear one rule, keep the others
+ef campaigns email pace 17 --no-pacing                       # full speed; anyone still waiting goes now
+ef campaigns email pace-default --per-hour 1000              # the pace new campaigns start with
+```
+
+- Days and hours use the campaign's `--timezone`, else the brand timezone. `22:00-06:00` runs overnight.
+- A new campaign gets the brand default unless you pass pacing flags (or `--no-pacing`).
+- The sending account's own per-minute limit still applies on top. While paced, `pace <id>` shows whether it
+  is sending, outside its window or at today's cap, how many are waiting and a rough finish time.
 
 **Who is left out of an email send:** addresses on the suppression list (bounced, complained,
 unsubscribed, added by hand) always; people who said no at opt-in (an unticked box recorded as "no");

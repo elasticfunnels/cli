@@ -97,6 +97,10 @@ export const emailCampaigns = {
     cancel: (api: ApiClient, b: number, id: number) => call(api, 'POST', email(b, `/${id}/cancel`), 'Cancel email campaign'),
     report: (api: ApiClient, b: number, id: number) => call(api, 'GET', email(b, `/${id}/report`), 'Email campaign report'),
     recipients: (api: ApiClient, b: number, id: number, params: Record<string, unknown>) => call(api, 'GET', email(b, `/${id}/recipients`), 'Email campaign recipients', { params }),
+    /** Sending pace; works on drafts, scheduled and sending campaigns (null = full speed). */
+    pacing: (api: ApiClient, b: number, id: number, pacing: Record<string, unknown> | null) => call(api, 'PUT', email(b, `/${id}/pacing`), 'Set email campaign pacing', { data: { pacing } }),
+    settings: (api: ApiClient, b: number) => call(api, 'GET', email(b, '/settings'), 'Email campaign settings'),
+    updateSettings: (api: ApiClient, b: number, data: Record<string, unknown>) => call(api, 'PUT', email(b, '/settings'), 'Update email campaign settings', { data }),
 };
 
 // ── SMS campaigns ───────────────────────────────────────────────────────

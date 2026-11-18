@@ -55,6 +55,12 @@ function startMock(): Promise<Mock> {
                 if (m === 'POST' && /\/email-campaigns\/18\/launch$/.test(url)) return json(422, { code: 'test_required' });
                 if (m === 'GET' && /\/email-campaigns\/18$/.test(url)) return json(200, { id: 18, audience_type: 'all_customers', problems: [] });
 
+                // ── email pacing (campaign 19 is sending and paced)
+                if (m === 'GET' && /\/email-campaigns\/19$/.test(url)) return json(200, { id: 19, status: 'sending', pacing: { per_hour: 500, spread_hours: null, days: [1, 2, 3, 4, 5], start_time: null, end_time: null, timezone: null, daily_cap: null, daily_growth_pct: null }, pacing_status: { state: 'outside_window', next_open_at: '2026-11-18T09:00:00+00:00', per_hour: 500, waiting: 120 } });
+                if (m === 'PUT' && /\/email-campaigns\/19\/pacing$/.test(url)) return json(200, { id: 19, status: 'sending', pacing: body.pacing, pacing_status: null });
+                if (m === 'GET' && url.endsWith('/email-campaigns/settings')) return json(200, { timezone: 'Europe/Bucharest', default_pacing: null });
+                if (m === 'PUT' && url.endsWith('/email-campaigns/settings')) return json(200, { default_pacing: body.default_pacing });
+
                 // ── SMS campaigns
                 if (m === 'POST' && url.endsWith('/sms/campaigns/preview-audience')) return json(200, { total: 12, reachable: 10, skips: { suppressed: 1, no_phone: 1 }, by_place: [] });
                 if (m === 'POST' && url.endsWith('/sms/campaigns')) return json(201, { id: 9, name: body.name, status: 'draft' });
@@ -275,4 +281,55 @@ test('email create --crm-entity --crm-filter sends audience_config.filters; filt
         const malformed = await runEf(root, ['campaigns', 'email', 'create', '--name', 'x', '--crm-entity', '1', '--crm-filter', 'tags']);
         assert.match(malformed.stderr, /field_key=value/);
     } finally { await mock.close(); await fs.promises.rm(root, { recursive: true, force: true }); }
+});
+
+test('email pacing: pace shows and changes a sending campaign, merges over its rules, and clears with --no-pacing', async () => {
+    await withMock(async (mock, root) => {
+        const show = await runEf(root, ['campaigns', 'email', 'pace', '19']);
+        assert.equal(show.code, 0, show.stderr);
+        assert.match(show.stderr, /up to 500\/hour; on Mon, Tue, Wed, Thu, Fri/);
+        assert.match(show.stderr, /outside the sending days\/hours until 2026-11-18T09:00/);
+        assert.equal(hits(mock, 'PUT', /\/pacing$/).length, 0, 'no flags: read only');
+
+        const set = await runEf(root, ['campaigns', 'email', 'pace', '19', '--per-hour', '200', '--send-hours', '9:00-17:30', '--daily-cap', '1000', '--daily-growth', '20', '--timezone', 'America/New_York']);
+        assert.equal(set.code, 0, set.stderr);
+        assert.deepEqual(hits(mock, 'PUT', /\/email-campaigns\/19\/pacing$/)[0].body, { pacing: {
+            per_hour: 200, spread_hours: null, days: [1, 2, 3, 4, 5], start_time: '09:00', end_time: '17:30',
+            timezone: 'America/New_York', daily_cap: 1000, daily_growth_pct: 20,
+        } });
+
+        const offOne = await runEf(root, ['campaigns', 'email', 'pace', '19', '--send-days', 'off']);
+        assert.equal(offOne.code, 0, offOne.stderr);
+        assert.equal((hits(mock, 'PUT', /\/pacing$/)[1].body.pacing as any).days, null);
+        assert.equal((hits(mock, 'PUT', /\/pacing$/)[1].body.pacing as any).per_hour, 500, 'other rules kept');
+
+        const clear = await runEf(root, ['campaigns', 'email', 'pace', '19', '--no-pacing']);
+        assert.equal(clear.code, 0, clear.stderr);
+        assert.deepEqual(hits(mock, 'PUT', /\/pacing$/)[2].body, { pacing: null });
+
+        const bad = await runEf(root, ['campaigns', 'email', 'pace', '19', '--per-hour', 'fast']);
+        assert.equal(bad.code, 2);
+        assert.match(bad.stderr, /--per-hour takes a whole number/);
+        const growth = await runEf(root, ['campaigns', 'email', 'pace', '19', '--per-hour', 'off', '--daily-growth', '10']);
+        assert.equal(growth.code, 2);
+        assert.match(growth.stderr, /--daily-growth needs a daily cap/);
+    });
+});
+
+test('email pacing: create sends pacing only when asked; pace-default sets the brand default', async () => {
+    await withMock(async (mock, root) => {
+        assert.equal((await runEf(root, ['campaigns', 'email', 'create', '--name', 'A', '--json'])).code, 0);
+        assert.equal('pacing' in hits(mock, 'POST', /\/email-campaigns$/)[0].body, false, 'no flags: the brand default applies');
+        assert.equal((await runEf(root, ['campaigns', 'email', 'create', '--name', 'B', '--spread-hours', '24', '--send-days', 'mon-fri', '--json'])).code, 0);
+        const b = hits(mock, 'POST', /\/email-campaigns$/)[1].body.pacing as any;
+        assert.equal(b.spread_hours, 24);
+        assert.equal(b.days, 'mon-fri');
+        assert.equal((await runEf(root, ['campaigns', 'email', 'create', '--name', 'C', '--no-pacing', '--json'])).code, 0);
+        assert.equal(hits(mock, 'POST', /\/email-campaigns$/)[2].body.pacing, null);
+
+        const d = await runEf(root, ['campaigns', 'email', 'pace-default', '--per-hour', '300', '--json']);
+        assert.equal(d.code, 0, d.stderr);
+        assert.equal((hits(mock, 'PUT', /\/email-campaigns\/settings$/)[0].body.default_pacing as any).per_hour, 300);
+        assert.match(d.stdout, /"per_hour": 300/);
+    });
 });

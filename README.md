@@ -333,6 +333,9 @@ Run `ef --help` to see the full tree, and `ef <cmd> --help` for any subcommand.
 | `ef seo set <key> <value>` | Turn a file on/off or set its content. Keys: `sitemap`, `llms`, `robots` (booleans), `site-name`, `site-summary`, `llms-notes`, `robots-extra` (text). |
 | `ef seo get [key]` | Print the SEO settings, or one key (pipeable on stdout). |
 | `ef seo pages` | List the pages that appear in the discovery files, with the exact URL each one publishes. |
+| `ef favicon` | Print the brand favicon URL (Settings -> General) and whether it loads. |
+| `ef favicon set <file>` | Upload the brand favicon: png, jpg or webp, square (e.g. 192x192). Pages use it unless they have their own favicon or their HTML links an icon. |
+| `ef favicon clear` | Remove the brand favicon. |
 | `ef stats` | Headline metrics for a date range: `--metrics revenue,sessions,cpc`, `--range today\|yesterday\|7d\|30d\|mtd\|qtd\|ytd\|<n>d`, or explicit `--from`/`--to`. Scope with `--page`/`--funnel`/`--split-test`/`--aff`. `--raw` prints the server payload unreduced. |
 | `ef stats metrics` | The metric keys **this brand** exposes, grouped. Discovered per request, not hardcoded — the registry is assembled server-side from the brand's plan modules and your role permissions, so it differs between brands on the same release. `--split-tests` for the split-test-valid subset. |
 | `ef stats by <field>` | The same metrics broken down by one dimension — `page`, `product`, `country`, `utm_source`, `day`, `device`, … `--limit`, `--sort <metric>`. Time dimensions come back in time order; everything else biggest-first. |

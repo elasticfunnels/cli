@@ -812,6 +812,7 @@ Most-used, by task:
 | Check my work statically | \`ef lint\` |
 | Brand variables | \`ef variables get\\|set\\|pull\\|push\` |
 | Publish pages to search/AI crawlers | \`ef seo status\` · \`ef seo set sitemap true\` · \`ef pages settings <slug> --sitemap\` |
+| Brand favicon (tab icon) | \`ef favicon\` · \`ef favicon set icon-192.png\` (png/jpg/webp) · \`ef favicon clear\` |
 | Translate a page / component | \`ef pages translate <slug> --lang ro\` · \`ef components translate <code> --lang ro\` · \`ef pages translations <slug>\` |
 | Set or clear a page's language / translation link | \`ef pages settings <slug> --lang <code\\|none> --translation-of <slug\\|none>\` |
 | Missing or stale translations (publish gate) | \`ef i18n check [--lang ro,es]\` (exit 1 if stale) · \`ef i18n synced <slug>\` |

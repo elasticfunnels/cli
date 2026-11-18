@@ -833,6 +833,54 @@ export class ApiClient {
         if (res.status >= 400) throw httpError('Set brand variables', res);
     }
 
+    // ── Brand favicon ────────────────────────────────────────────────
+
+    /**
+     * The brand's name and stored favicon URL. `favicon` is undefined when the
+     * server predates `favicon_link` in the brand JSON (it cannot say), null
+     * when no favicon is uploaded.
+     */
+    async getBrandFavicon(brandId: number): Promise<{ name: string; favicon: string | null | undefined }> {
+        const res = await this.raw('GET', `/api/brands/${brandId}`);
+        if (res.status === 404) throw new CliError(ExitCode.NotFound, `Brand #${brandId} not found, or this key cannot see it.`);
+        if (res.status >= 400) throw httpError('Get brand', res);
+        const body = (res.data ?? {}) as { name?: string; favicon_link?: string | null };
+        return {
+            name: String(body.name ?? ''),
+            favicon: 'favicon_link' in body ? (body.favicon_link || null) : undefined,
+        };
+    }
+
+    /**
+     * Upload the brand favicon (Settings -> General). The brand update endpoint
+     * requires `name`, so the current name is sent back unchanged. Multipart
+     * only works as POST with `_method=PUT`, like the dashboard sends it.
+     */
+    async setBrandFavicon(brandId: number, name: string, file: { name: string; bytes: Uint8Array }): Promise<void> {
+        const boundary = `----ElasticFunnelsCli${Date.now().toString(16)}`;
+        const parts: Buffer[] = [
+            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n${name}\r\n`, 'utf8'),
+            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="favicon"; filename="${file.name.replace(/["\r\n]/g, '_')}"\r\nContent-Type: ${mimeFromAssetPath(file.name)}\r\n\r\n`, 'utf8'),
+            Buffer.from(file.bytes),
+            Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+        ];
+        const res = await this.raw('POST', `/api/brands/${brandId}`, {
+            params: { _method: 'PUT' },
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+            data: Buffer.concat(parts),
+        });
+        if (res.status === 403) throw planOrAuthError('Set favicon', res);
+        if (res.status === 413) throw new CliError(ExitCode.Validation, 'Favicon file is too large for the server.');
+        if (res.status >= 400) throw httpError('Set favicon', res);
+    }
+
+    /** Remove the brand favicon: an explicit `favicon: null` on the brand update. */
+    async clearBrandFavicon(brandId: number, name: string): Promise<void> {
+        const res = await this.raw('PUT', `/api/brands/${brandId}`, { data: { name, favicon: null } });
+        if (res.status === 403) throw planOrAuthError('Clear favicon', res);
+        if (res.status >= 400) throw httpError('Clear favicon', res);
+    }
+
     // ── SEO / discovery files ────────────────────────────────────────
 
     /** Brand-level sitemap.xml / llms.txt / robots.txt settings. */

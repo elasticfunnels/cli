@@ -146,9 +146,44 @@ export function describePacingStatus(s: any): string {
     const when = s.next_open_at ? ` until ${s.next_open_at}` : '';
     if (s.state === 'outside_window') return s.next_open_at ? `waiting: outside the sending days/hours${when}` : 'waiting: the sending days/hours never open';
     if (s.state === 'daily_cap_reached') return `waiting: today's cap of ${s.daily_cap} reached${when}`;
+    if (s.state === 'warmup_limit_reached') return `waiting: the sending account's warm-up limit for today (${s.sender_limit}) is reached${when}`;
+    if (s.state === 'paused') return `paused; ${s.waiting ?? 0} waiting`;
     const rate = s.per_hour ? ` at ~${s.per_hour}/hour` : '';
-    const eta = s.estimated_done_at ? `, last ones around ${s.estimated_done_at}` : '';
+    const eta = s.estimated_done_at ? `, last ones around ${s.estimated_done_at}${s.limited_by === 'warmup' ? ' (held back by the account warm-up)' : ''}` : '';
     return `sending${rate}; ${s.waiting ?? 0} waiting their turn${eta}`;
+}
+
+const PAUSE_REASON: Record<string, string> = {
+    bounce_rate: 'hard-bounce rate of this campaign', complaint_rate: 'spam-complaint rate of this campaign',
+    sender_bounce_rate: 'hard-bounce rate across the sending account', sender_complaint_rate: 'spam-complaint rate across the sending account',
+};
+
+/** Ramp-up lines (T1120-11): paused and why, slowed down, the account warm-up, bounce visibility. */
+export function describeWarmup(w: any): string {
+    if (!w || w.state !== 'warming') return 'warmed (no daily limit)';
+    if (!w.started_on) return `warming: starts at ${w.today_limit}/day the first day it sends, +${w.growth_pct}%/day until ${w.ceiling}/day`;
+    return `warming: day ${w.day}, ${w.used_today ?? 0} of ${w.today_limit} today, +${w.growth_pct}%/day, no limit from ${w.warmed_on ?? '?'}`;
+}
+
+export function describeRampUp(c: any): string[] {
+    const out: string[] = [];
+    const h = c?.health ?? {};
+    if (c?.paused_at) {
+        const r = c.pause_reason ?? 'manual';
+        if (r === 'manual') out.push(`PAUSED by hand at ${c.paused_at}. Resume: ef campaigns email resume ${c.id}`);
+        else {
+            const kind = r.includes('complaint') ? 'complaint' : 'bounce';
+            const scope = r.startsWith('sender_') ? h.sender : h.campaign;
+            const rate = scope ? scope[`${kind}_rate`] : '?';
+            const limit = c.health_rules?.[`${kind}_hard`] ?? '?';
+            out.push(`PAUSED automatically at ${c.paused_at}: ${PAUSE_REASON[r] ?? r} ${rate}% (pause line ${limit}%). Fix the cause, then: ef campaigns email resume ${c.id}`);
+        }
+    }
+    if (h.slowed_at) out.push(`slowed down ${h.slowed_at} (${PAUSE_REASON[h.slowed_reason] ?? h.slowed_reason}): ${h.slowed_from}/h -> ${h.slowed_to}/h`);
+    const w = c?.sender_warmup;
+    if (w?.state === 'warming') out.push(`sending account warming up: day ${w.day ?? 1}, ${w.used_today ?? 0} of ${w.today_limit} today, +${w.growth_pct}%/day, no limit from ${w.warmed_on ?? '?'}`);
+    if (c?.sees_bounces === false && ['draft', 'queued', 'sending'].includes(c?.status)) out.push('auto-pause cannot see bounces or complaints from this sending account (no delivery webhook)');
+    return out;
 }
 
 function emailFieldOptions(cmd: Command): Command {
@@ -231,7 +266,8 @@ async function saveHtml(api: ApiClient, brandId: number, campaign: any, opts: Em
 }
 
 async function emailAudienceSize(api: ApiClient, brandId: number, c: any): Promise<any> {
-    return emailCampaigns.previewAudience(api, brandId, { audience_type: c.audience_type, audience_config: c.audience_config ?? {} });
+    // With campaign_id the server adds the finish date at the campaign's pace and its account's warm-up.
+    return emailCampaigns.previewAudience(api, brandId, { audience_type: c.audience_type, audience_config: c.audience_config ?? {}, ...(c.id ? { campaign_id: c.id } : {}) });
 }
 
 function describeEmailAudience(p: any): string {
@@ -338,6 +374,7 @@ function registerEmail(parent: Command): void {
             else log.info(`#${cid} [${n(c.status)}] pace: ${describePacing(c.pacing)}`);
             const st = describePacingStatus(c.pacing_status);
             if (st) log.detail(st);
+            for (const line of describeRampUp(c)) log.detail(line);
         });
 
     pacingOptions(em.command('pace-default'))
@@ -363,6 +400,13 @@ function registerEmail(parent: Command): void {
             const p = await emailAudienceSize(api, brandId, c);
             if (opts.json) { log.json(p); return; }
             log.success(describeEmailAudience(p));
+            const e = p?.estimate;
+            if (e) {
+                log.info(e.finish_at
+                    ? `At its pace${p?.sender_warmup?.state === 'warming' ? ' and the account warm-up' : ''}: about ${e.days} sending day${e.days === 1 ? '' : 's'}, last ones around ${e.finish_at}${e.limited_by === 'warmup' ? ' (held back by the warm-up)' : ''}.`
+                    : 'No finish date: the sending days/hours never open.');
+            }
+            for (const line of describeRampUp({ ...c, sender_warmup: p?.sender_warmup ?? c.sender_warmup, sees_bounces: p?.sees_bounces ?? c.sees_bounces, paused_at: null, health: null })) log.detail(line);
             printRows(p?.sample ?? []);
         });
 
@@ -428,6 +472,56 @@ function registerEmail(parent: Command): void {
             log.success(`Campaign #${id} canceled.`);
         });
 
+    em.command('pause <id>').description('Pause a sending campaign: nobody else gets it until you resume it.')
+        .action(async (id: string) => {
+            const { api, brandId } = await ctx();
+            await emailCampaigns.pause(api, brandId, numericId(id, 'campaign'));
+            log.success(`Campaign #${id} paused. Resume: ef campaigns email resume ${id}`);
+        });
+
+    em.command('resume <id>').description('Resume a paused campaign (paused by hand or by the bounce/complaint limits). The check counts again from now.')
+        .option('-y, --yes', 'Do not ask for confirmation.')
+        .action(async (id: string, opts: { yes?: boolean }) => {
+            const { api, brandId } = await ctx();
+            const cid = numericId(id, 'campaign');
+            const c: any = await emailCampaigns.get(api, brandId, cid);
+            for (const line of describeRampUp(c)) log.info(line);
+            await confirmSend(opts.yes, `Resume campaign #${cid}?`);
+            await emailCampaigns.resume(api, brandId, cid);
+            log.success(`Campaign #${cid} resumed.`);
+        });
+
+    em.command('warmup [sender]')
+        .description('Sending accounts and their warm-up (a daily limit shared by every campaign on the account). With a sender ("integration:<id>" | "brand_smtp:<id>") and --on/--off, change it.')
+        .option('--on', 'Start (or keep) warming up: a small daily limit that grows each day.')
+        .option('--off', 'Mark as warmed: no daily limit.')
+        .option('--start <n>', 'Limit on the first day (default 200).')
+        .option('--growth <pct>', 'Growth per day in % (default 30).')
+        .option('--ceiling <n>', 'Warm-up ends when the daily limit reaches this (default 50000).')
+        .option('--json', 'Print as JSON.')
+        .action(async (sender: string | undefined, opts: { on?: boolean; off?: boolean; start?: string; growth?: string; ceiling?: string; json?: boolean }) => {
+            const { api, brandId } = await ctx();
+            if (sender && (opts.on || opts.off || opts.start || opts.growth || opts.ceiling)) {
+                if (opts.on && opts.off) throw new CliError(ExitCode.Validation, 'Pass --on or --off, not both.');
+                const data: Record<string, unknown> = { sender, state: opts.off ? 'warmed' : 'warming' };
+                if (opts.start) data.start_daily = posInt(opts.start, '--start', 1_000_000);
+                if (opts.growth) data.growth_pct = posInt(opts.growth, '--growth', 1000);
+                if (opts.ceiling) data.ceiling = posInt(opts.ceiling, '--ceiling', 10_000_000);
+                const res: any = await emailCampaigns.senderWarmup(api, brandId, data);
+                if (opts.json) { log.json(res); return; }
+                log.success(`${sender}: ${describeWarmup(res.warmup)}`);
+                return;
+            }
+            const s: any = await emailCampaigns.settings(api, brandId);
+            const rows = (s.senders ?? []).filter((x: any) => !sender || x.key === sender);
+            if (opts.json) { log.json(rows.map((x: any) => ({ key: x.key, provider: x.provider, name: x.name, warmup: x.warmup, sees_bounces: x.sees_bounces }))); return; }
+            log.raw(renderTable({
+                head: ['sender', 'account', 'warm-up', 'sees bounces'],
+                rows: rows.map((x: any) => [n(x.key), `${n(x.provider)} ${n(x.name)}`, describeWarmup(x.warmup), x.sees_bounces ? 'yes' : 'NO (auto-pause blind)']),
+            }) + '\n');
+            if (s.health) log.detail(`bounce/complaint limits: slow down at ${s.health.bounce_soft}% bounces / ${s.health.complaint_soft}% complaints, pause at ${s.health.bounce_hard}% / ${s.health.complaint_hard}%, after ${s.health.min_sample} sent, over ${s.health.window_hours}h`);
+        });
+
     em.command('stats <id>').alias('report')
         .description('Delivery, opens, clicks, bounces and unsubscribes.')
         .option('--json', 'Print the campaign counts and full report as JSON.')
@@ -438,6 +532,7 @@ function registerEmail(parent: Command): void {
             if (opts.json) { log.json({ campaign: c, report }); return; }
             log.info(`#${cid} ${n(c.name)} [${n(c.status)}]`);
             if (c.pacing) log.detail(`pace: ${describePacing(c.pacing)}${c.pacing_status ? ` · ${describePacingStatus(c.pacing_status)}` : ''}`);
+            for (const line of describeRampUp(c)) log.detail(line);
             log.raw(renderTable({
                 head: ['recipients', 'sent', 'delivered', 'failed', 'bounced', 'opened', 'clicked', 'unsub', 'complaints'],
                 rows: [[n(c.recipients_total), n(c.sent_count), n(c.delivered_count), n(c.failed_count), n(c.bounced_count),

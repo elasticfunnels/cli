@@ -45,7 +45,8 @@ function startMock(): Promise<Mock> {
                 if (m === 'DELETE' && /\/analytics\/segments\/31$/.test(url)) return json(200, { ok: true });
 
                 // ── email campaigns
-                if (m === 'POST' && url.endsWith('/email-campaigns/preview-audience')) return json(200, { total: 50, eligible: 45, count: 45, excluded: { suppressed: 3, no_consent: 2, duplicates: 0 }, sample: [{ email: 'c***@b***.test', name: 'C***' }], exact: true });
+                if (m === 'POST' && url.endsWith('/email-campaigns/preview-audience')) return json(200, { total: 50, eligible: 45, count: 45, excluded: { suppressed: 3, no_consent: 2, duplicates: 0 }, sample: [{ email: 'c***@b***.test', name: 'C***' }], exact: true,
+                    ...(body.campaign_id ? { estimate: { finish_at: '2026-11-23T14:00:00+00:00', days: 4, limited_by: 'warmup', waiting: 45 }, sender_warmup: { state: 'warming', day: 1, today_limit: 200, used_today: 0, growth_pct: 30, warmed_on: '2026-12-12' }, sees_bounces: false } : {}) });
                 if (m === 'POST' && url.endsWith('/email-campaigns')) {
                     // The server saves the brand's account when no sender is named (none for 'Nothing').
                     const account = body.name === 'Nothing' ? null : { type: 'brand_smtp', id: 3, provider: 'smtp', name: 'smtp.acme.test', from_email: 'news@acme.test', from_name: 'Acme', reply_to: 'help@acme.test' };
@@ -59,10 +60,20 @@ function startMock(): Promise<Mock> {
                 if (m === 'POST' && /\/email-campaigns\/18\/launch$/.test(url)) return json(422, { code: 'test_required' });
                 if (m === 'GET' && /\/email-campaigns\/18$/.test(url)) return json(200, { id: 18, audience_type: 'all_customers', problems: [] });
 
+                // ── email ramp-up (campaign 20 is paused by the bounce watch, its account warming)
+                if (m === 'GET' && /\/email-campaigns\/20$/.test(url)) return json(200, { id: 20, status: 'sending', audience_type: 'all_customers', audience_config: {}, paused_at: '2026-11-20T10:00:00+00:00', pause_reason: 'bounce_rate',
+                    health: { campaign: { sent: 400, bounced: 24, complained: 0, bounce_rate: 6, complaint_rate: 0 }, sender: null }, health_rules: { bounce_hard: 5, complaint_hard: 0.1 },
+                    sender_warmup: { state: 'warming', day: 3, today_limit: 338, used_today: 120, growth_pct: 30, warmed_on: '2026-12-10' }, sees_bounces: true, pacing: null, pacing_status: null });
+                if (m === 'POST' && /\/email-campaigns\/20\/resume$/.test(url)) return json(200, { id: 20, paused_at: null });
+                if (m === 'POST' && /\/email-campaigns\/20\/pause$/.test(url)) return json(200, { id: 20 });
+                if (m === 'PUT' && url.endsWith('/email-campaigns/senders/warmup')) return json(200, { sender: body.sender, warmup: body.state === 'warmed' ? { state: 'warmed' } : { state: 'warming', started_on: null, today_limit: body.start_daily ?? 200, growth_pct: body.growth_pct ?? 30, ceiling: body.ceiling ?? 50000 } });
                 // ── email pacing (campaign 19 is sending and paced)
                 if (m === 'GET' && /\/email-campaigns\/19$/.test(url)) return json(200, { id: 19, status: 'sending', pacing: { per_hour: 500, spread_hours: null, days: [1, 2, 3, 4, 5], start_time: null, end_time: null, timezone: null, daily_cap: null, daily_growth_pct: null }, pacing_status: { state: 'outside_window', next_open_at: '2026-11-18T09:00:00+00:00', per_hour: 500, waiting: 120 } });
                 if (m === 'PUT' && /\/email-campaigns\/19\/pacing$/.test(url)) return json(200, { id: 19, status: 'sending', pacing: body.pacing, pacing_status: null });
-                if (m === 'GET' && url.endsWith('/email-campaigns/settings')) return json(200, { timezone: 'Europe/Bucharest', default_pacing: null });
+                if (m === 'GET' && url.endsWith('/email-campaigns/settings')) return json(200, { timezone: 'Europe/Bucharest', default_pacing: null,
+                    health: { bounce_soft: 2, bounce_hard: 5, complaint_soft: 0.05, complaint_hard: 0.1, min_sample: 200, window_hours: 72 },
+                    senders: [{ key: 'brand_smtp:3', provider: 'smtp', name: 'smtp.mailgun.org', warmup: { state: 'warmed' }, sees_bounces: false },
+                        { key: 'integration:9', provider: 'mailgun', name: 'Mailgun', warmup: { state: 'warming', day: 2, today_limit: 260, used_today: 10, growth_pct: 30, started_on: '2026-11-19', warmed_on: '2026-12-10' }, sees_bounces: true }] });
                 if (m === 'PUT' && url.endsWith('/email-campaigns/settings')) return json(200, { default_pacing: body.default_pacing });
 
                 // ── SMS campaigns
@@ -348,5 +359,36 @@ test('email create says which sending account the draft was saved with, or that 
         const none = await runEf(root, ['campaigns', 'email', 'create', '--name', 'Nothing', '--subject', 'Hi']);
         assert.equal(none.code, 0, none.stderr);
         assert.match(none.stderr + none.stdout, /No sending account saved/);
+    });
+});
+
+test('email ramp-up: count shows the finish date with the warm-up, a paused campaign says why, resume and warmup', async () => {
+    await withMock(async (mock, root) => {
+        const count = await runEf(root, ['campaigns', 'email', 'count', '20']);
+        assert.equal(count.code, 0, count.stderr);
+        assert.equal(hits(mock, 'POST', /preview-audience$/)[0].body.campaign_id, 20);
+        assert.match(count.stderr, /about 4 sending days, last ones around 2026-11-23T14:00.*held back by the warm-up/);
+        assert.match(count.stderr, /cannot see bounces/);
+
+        const pace = await runEf(root, ['campaigns', 'email', 'pace', '20']);
+        assert.equal(pace.code, 0, pace.stderr);
+        assert.match(pace.stderr, /PAUSED automatically .*hard-bounce rate of this campaign 6% \(pause line 5%\)/);
+        assert.match(pace.stderr, /warming up: day 3, 120 of 338 today/);
+
+        const resume = await runEf(root, ['campaigns', 'email', 'resume', '20', '--yes']);
+        assert.equal(resume.code, 0, resume.stderr);
+        assert.equal(hits(mock, 'POST', /\/email-campaigns\/20\/resume$/).length, 1);
+
+        const list = await runEf(root, ['campaigns', 'email', 'warmup']);
+        assert.equal(list.code, 0, list.stderr);
+        assert.match(list.stdout + list.stderr, /integration:9[\s\S]*day 2, 10 of 260 today/);
+        assert.match(list.stdout + list.stderr, /auto-pause blind/);
+
+        const on = await runEf(root, ['campaigns', 'email', 'warmup', 'brand_smtp:3', '--on', '--start', '100', '--growth', '25']);
+        assert.equal(on.code, 0, on.stderr);
+        assert.deepEqual(hits(mock, 'PUT', /senders\/warmup$/)[0].body, { sender: 'brand_smtp:3', state: 'warming', start_daily: 100, growth_pct: 25 });
+        const off = await runEf(root, ['campaigns', 'email', 'warmup', 'brand_smtp:3', '--off']);
+        assert.equal(off.code, 0, off.stderr);
+        assert.equal(hits(mock, 'PUT', /senders\/warmup$/)[1].body.state, 'warmed');
     });
 });

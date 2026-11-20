@@ -95,6 +95,10 @@ export const emailCampaigns = {
     launch: (api: ApiClient, b: number, id: number, data: Record<string, unknown>) => call(api, 'POST', email(b, `/${id}/launch`), 'Launch email campaign', { data }),
     unschedule: (api: ApiClient, b: number, id: number) => call(api, 'POST', email(b, `/${id}/unschedule`), 'Unschedule email campaign'),
     cancel: (api: ApiClient, b: number, id: number) => call(api, 'POST', email(b, `/${id}/cancel`), 'Cancel email campaign'),
+    pause: (api: ApiClient, b: number, id: number) => call(api, 'POST', email(b, `/${id}/pause`), 'Pause email campaign'),
+    resume: (api: ApiClient, b: number, id: number) => call(api, 'POST', email(b, `/${id}/resume`), 'Resume email campaign'),
+    /** Warm-up of one sending account ("integration:<id>" | "brand_smtp:<id>"). */
+    senderWarmup: (api: ApiClient, b: number, data: Record<string, unknown>) => call(api, 'PUT', email(b, '/senders/warmup'), 'Set sending account warm-up', { data }),
     report: (api: ApiClient, b: number, id: number) => call(api, 'GET', email(b, `/${id}/report`), 'Email campaign report'),
     recipients: (api: ApiClient, b: number, id: number, params: Record<string, unknown>) => call(api, 'GET', email(b, `/${id}/recipients`), 'Email campaign recipients', { params }),
     /** Sending pace; works on drafts, scheduled and sending campaigns (null = full speed). */

@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { ApiClient } from '../api/client';
 import { Page, TAGGABLE } from '../api/types';
 import { CliError, ExitCode } from '../utils/exit';
+import { addPostSettingsOptions, buildPostSettings, hasPostFlags, describePostSettings, PostSettingsOpts } from './postSettings';
 import { log } from '../utils/log';
 import { EfRuntime, loadRuntime } from '../utils/store';
 import { fetchPagePreviewBundle, printPreviewBundle, readJsonPayloadFile, removeLocalEntity, resolvePageBySlug, parseAffiliateFlag } from './shared';
@@ -172,7 +173,7 @@ language switcher then connect the two):
             if (tagged) log.success(summarizeAttach(tagged, target));
         });
 
-    cmd.command('settings <slug>')
+    addPostSettingsOptions(cmd.command('settings <slug>')
         .description('Update page settings — assign a domain, make it that domain\'s homepage, mark it a checkout/upsell page, change slug/folder/status/SEO. Separate from the editor HTML.')
         .addHelpText('after', `
 Examples:
@@ -215,6 +216,16 @@ Only a checkout page can be a funnel's checkout: after marking it, run
 "ef funnels settings <funnel> --checkout-page order-form". A brand without
 checkouts enabled is refused with exit code 2 and the server's message.
 
+  # Blog post: the date and card details the site's post lists show (getPosts)
+  $ ef pages settings blog/my-post --post-date 2026-10-21 --post-tags "Growth,Ads" \\
+      --post-cover /img/blog/my-post-cover.webp --post-read "9 min read"
+  $ ef pages settings blog/my-post --post-related "other-post,third-post" --post-pinned-until 2026-12-01
+  $ ef pages settings blog/my-post --post-hidden
+
+A published page at blog/<name> (or <lang>/blog/<name>) shows on every list
+of posts by itself; these only change its card. The date is set on first
+publish; "none" clears a value.
+
   # Multilingual: set the page's language, link it as a translation, or undo either
   $ ef pages settings ro/despre --lang ro --translation-of about
   $ ef pages settings ro/despre --translation-of none
@@ -251,7 +262,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
         .option('--redirect-url <path>', 'Where a visitor without a customer session is sent ("/account/login"); "none" clears it.')
         .option('--affiliate <id|none>', 'Credit every visitor of this page to this affiliate (numeric id), overriding ?aff_id=; "none" clears it. Own-checkout domains only.')
         .option('--lang <code|none>', 'The page\'s language ("ro", "pt-br"); "none" clears it.')
-        .option('--translation-of <slug|none>', 'Link the page as a translation of this source page; "none" unlinks it.')
+        .option('--translation-of <slug|none>', 'Link the page as a translation of this source page; "none" unlinks it.'))
         .option('--file <path>', 'JSON payload file ("-" for stdin). Flags override its fields.')
         .option('--json', 'Print result as JSON.')
         .action(async (slug: string, opts: {
@@ -260,7 +271,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             seoBlurTitle?: string; sitemap?: boolean; checkoutPage?: boolean; upsellPage?: boolean;
             requiresLogin?: string; redirectUrl?: string; file?: string; json?: boolean;
             lang?: string; translationOf?: string; affiliate?: string;
-        }) => {
+        } & PostSettingsOpts) => {
             const rt = await loadRuntime();
             const api = new ApiClient(rt.config.apiUrl, rt.apiKey);
             const page = await resolvePageForSettings(api, rt.config.brandId, slug);
@@ -314,6 +325,15 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             if (opts.translationOf !== undefined) {
                 translationOfLabel = parseTranslationOfFlag(opts.translationOf);
                 flags.translation_source_id = translationOfLabel ? await pageIndex(api, rt.config.brandId).idOf(translationOfLabel) : null;
+            }
+
+            // Blog post settings merge onto the page's current card details, so one flag
+            // never wipes the others (the list endpoint does not carry post_meta).
+            let postSent: ReturnType<typeof buildPostSettings> = {};
+            if (hasPostFlags(opts)) {
+                const details = await api.getPageDetails(rt.config.brandId, page.id);
+                postSent = buildPostSettings(opts, details.post_meta as Record<string, unknown> | null);
+                Object.assign(flags, postSent);
             }
 
             const payload: Record<string, unknown> = { ...base, ...flags };
@@ -373,6 +393,7 @@ prints the DNS records, "ef domains validate <domain>" triggers the check.`)
             }
             if (flags.language !== undefined) log.detail(flags.language ? `  Language → ${String(flags.language)}` : '  Language cleared.');
             if (translationOfLabel !== undefined) log.detail(translationOfLabel ? `  Translation of ${translationOfLabel}.` : '  No longer a translation.');
+            for (const line of describePostSettings(postSent)) log.detail(line);
             if (renamed) log.detail(`Renamed local file ${renamed.from} → ${renamed.to}`);
         });
 

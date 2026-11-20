@@ -287,6 +287,7 @@ function registerEmail(parent: Command): void {
             if (await saveHtml(api, brandId, campaign, opts)) campaign = await emailCampaigns.get(api, brandId, campaign.id);
             if (opts.json) { log.json(campaign); return; }
             log.success(`Created draft email campaign #${campaign.id}.`);
+            printSender(campaign);
             printProblems(campaign.problems);
         });
 
@@ -317,6 +318,7 @@ function registerEmail(parent: Command): void {
             if (wroteHtml) campaign = await emailCampaigns.get(api, brandId, cid);
             if (opts.json) { log.json(campaign); return; }
             log.success(`Updated email campaign #${cid}.`);
+            if (['sender', 'integration_id', 'reply_to_email'].some((k) => k in data)) printSender(campaign);
             printProblems(campaign.problems);
         });
     setCmd('set', 'Change subject, sender, audience, pace or content of a draft (pace of a sending campaign: ef campaigns email pace).');
@@ -463,6 +465,25 @@ function registerEmail(parent: Command): void {
             await emailCampaigns.remove(api, brandId, numericId(id, 'campaign'));
             log.success(`Deleted campaign #${id}.`);
         });
+}
+
+/** Which sending account a campaign goes out through, as the server saved it. */
+export function describeSender(c: any): string | null {
+    const a = c?.sending_account;
+    if (a) {
+        const from = a.from_email ? ` <${a.from_email}>` : '';
+        const reply = c.reply_to_email || a.reply_to;
+        return `${a.provider === 'smtp' ? 'brand SMTP' : a.provider} · ${a.name}${from}${reply ? `, reply-to ${reply}` : ''}`;
+    }
+    if (c?.sender === 'brand_smtp') return 'brand SMTP';
+    if (c?.integration_id) return `integration #${c.integration_id}`;
+    return null;
+}
+
+function printSender(c: any): void {
+    const s = describeSender(c);
+    if (s) log.info(`Sending through ${s}.`);
+    else log.warn('No sending account saved: pass --sender/--integration, or connect one under Campaigns -> Settings.');
 }
 
 function printProblems(problems: unknown): void {

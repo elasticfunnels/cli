@@ -39,6 +39,9 @@ ef campaigns email stats 17                           # sent, delivered, opens, 
 ef campaigns email pace 17 --per-hour 500             # send slowly (see below)
 ```
 
+- Sender: without `--sender`, the draft is saved with the brand's default sending account (else its first active
+  one, else its SMTP server) and `create` prints which one ("Sending through ..."). Pick another with
+  `--sender brand_smtp` or `--sender integration --integration <id>`; `--reply-to` overrides the account's reply-to.
 - Audiences: `--audience <segment id>`, `--all-customers`, `--emails a@x.com,b@y.com` or
   `--emails-file list.txt`, `--crm-entity <id>` (add `--crm-filter key=value`, repeatable, to send to only
   the matching entries; a tag list matches any of its items). Live (real-time) segments cannot be used.

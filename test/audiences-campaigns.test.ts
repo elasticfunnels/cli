@@ -46,7 +46,11 @@ function startMock(): Promise<Mock> {
 
                 // ── email campaigns
                 if (m === 'POST' && url.endsWith('/email-campaigns/preview-audience')) return json(200, { total: 50, eligible: 45, count: 45, excluded: { suppressed: 3, no_consent: 2, duplicates: 0 }, sample: [{ email: 'c***@b***.test', name: 'C***' }], exact: true });
-                if (m === 'POST' && url.endsWith('/email-campaigns')) return json(200, { id: 17, campaign: { id: 17, email_id: 900, problems: ['no_content'] } });
+                if (m === 'POST' && url.endsWith('/email-campaigns')) {
+                    // The server saves the brand's account when no sender is named (none for 'Nothing').
+                    const account = body.name === 'Nothing' ? null : { type: 'brand_smtp', id: 3, provider: 'smtp', name: 'smtp.acme.test', from_email: 'news@acme.test', from_name: 'Acme', reply_to: 'help@acme.test' };
+                    return json(200, { id: 17, campaign: { id: 17, email_id: 900, sender: account ? 'brand_smtp' : 'integration', integration_id: null, sending_account: account, problems: account ? ['no_content'] : ['no_content', 'no_sending_account'] } });
+                }
                 if (m === 'GET' && /\/email-campaigns\/17$/.test(url)) return json(200, { id: 17, name: 'Oct', email_id: 900, audience_type: 'analytics_segment', audience_config: { segment_id: 31 }, problems: [] });
                 if (m === 'PUT' && /\/email-campaigns\/17$/.test(url)) return json(200, { id: 17, problems: [] });
                 if (m === 'POST' && /\/emails\/900\/builder$/.test(url)) return json(200, { ok: true });
@@ -331,5 +335,18 @@ test('email pacing: create sends pacing only when asked; pace-default sets the b
         assert.equal(d.code, 0, d.stderr);
         assert.equal((hits(mock, 'PUT', /\/email-campaigns\/settings$/)[0].body.default_pacing as any).per_hour, 300);
         assert.match(d.stdout, /"per_hour": 300/);
+    });
+});
+
+test('email create says which sending account the draft was saved with, or that none was', async () => {
+    await withMock(async (mock, root) => {
+        const r = await runEf(root, ['campaigns', 'email', 'create', '--name', 'Oct', '--subject', 'Hi']);
+        assert.equal(r.code, 0, r.stderr);
+        assert.equal(hits(mock, 'POST', /\/email-campaigns$/)[0].body.sender, undefined);
+        assert.match(r.stderr + r.stdout, /Sending through brand SMTP · smtp\.acme\.test <news@acme\.test>, reply-to help@acme\.test\./);
+
+        const none = await runEf(root, ['campaigns', 'email', 'create', '--name', 'Nothing', '--subject', 'Hi']);
+        assert.equal(none.code, 0, none.stderr);
+        assert.match(none.stderr + none.stdout, /No sending account saved/);
     });
 });

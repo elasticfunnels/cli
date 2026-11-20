@@ -36,6 +36,12 @@ test('flags, extra fields and a whole-card replace', () => {
         { cover: '/img/a.webp', tags: ['Growth'], read: '9 min read', extra: { cover_style: 'banner' }, featured: true });
     assert.deepEqual(buildPostSettings({ postMeta: '{"tags":["X"]}', postRead: '3 min read' }, current).post_meta, { tags: ['X'], read: '3 min read' });
     assert.throws(() => buildPostSettings({ postMeta: '[1]' }, null), CliError);
+    // --post-set: a site's card writer sets its fields and keeps what the editor set (hidden, related, extra keys)
+    assert.deepEqual(
+        buildPostSettings({ postSet: '{"title":"T","tags":["Light, heat and power"],"extra":{"cover_w":"800"}}' },
+            { hidden: true, related: ['a'], title: 'old', extra: { color: 'sky', cover_w: '600' } }).post_meta,
+        { hidden: true, related: ['a'], title: 'T', tags: ['Light, heat and power'], extra: { color: 'sky', cover_w: '800' } });
+    assert.throws(() => buildPostSettings({ postSet: '"x"' }, null), CliError);
     assert.throws(() => buildPostSettings({ postExtra: ['Bad Key=x'] }, null), CliError);
 });
 

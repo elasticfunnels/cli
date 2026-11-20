@@ -19,6 +19,7 @@ export interface PostSettingsOpts {
     postHidden?: boolean;
     postExtra?: string[];
     postMeta?: string;
+    postSet?: string;
 }
 
 export function addPostSettingsOptions(cmd: Command): Command {
@@ -36,7 +37,8 @@ export function addPostSettingsOptions(cmd: Command): Command {
         .option('--post-hidden', 'Blog post: keep it off every list (the page stays live).')
         .option('--no-post-hidden', 'Blog post: list it again.')
         .option('--post-extra <key=value>', 'Blog post: a site\'s own card field (repeatable; "key=" removes it).', (v: string, prev: string[] = []) => [...prev, v])
-        .option('--post-meta <json|none>', 'Blog post: replace all card details with this JSON object.');
+        .option('--post-meta <json|none>', 'Blog post: replace all card details with this JSON object.')
+        .option('--post-set <json>', 'Blog post: set these card details (JSON object; "extra" merged key by key), keep the rest (hidden, featured, related...).');
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -74,6 +76,22 @@ export function buildPostSettings(opts: PostSettingsOpts, current: Record<string
         }
     } else {
         meta = current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+    }
+
+    if (opts.postSet !== undefined) {
+        touched = true;
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(opts.postSet);
+        } catch {
+            throw new CliError(ExitCode.Validation, '--post-set must be a JSON object.');
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CliError(ExitCode.Validation, '--post-set must be a JSON object.');
+        const set = parsed as Record<string, unknown>;
+        const had = meta.extra && typeof meta.extra === 'object' && !Array.isArray(meta.extra) ? meta.extra as Record<string, unknown> : {};
+        const add = set.extra && typeof set.extra === 'object' && !Array.isArray(set.extra) ? set.extra as Record<string, unknown> : null;
+        meta = { ...meta, ...set };
+        if (add) meta.extra = { ...had, ...add };
     }
 
     const text = (key: string, value: string | undefined) => {
@@ -132,7 +150,7 @@ export function buildPostSettings(opts: PostSettingsOpts, current: Record<string
 
 export function hasPostFlags(opts: PostSettingsOpts): boolean {
     return [opts.postDate, opts.postCover, opts.postTags, opts.postRead, opts.postTitle, opts.postExcerpt, opts.postRelated,
-        opts.postFeatured, opts.postPinnedUntil, opts.postHidden, opts.postMeta].some(v => v !== undefined)
+        opts.postFeatured, opts.postPinnedUntil, opts.postHidden, opts.postMeta, opts.postSet].some(v => v !== undefined)
         || Boolean(opts.postExtra && opts.postExtra.length);
 }
 
